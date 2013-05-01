@@ -1604,6 +1604,10 @@ static int do_test(const char *alg, u32 type, u32 mask, int m)
 		ret += tcrypt_test("ghash");
 		break;
 
+	case 47:
+		ret += tcrypt_test("crct10dif");
+		break;
+
 	case 48:
 		ret += tcrypt_test("sha3-224");
 		break;
@@ -2002,6 +2006,10 @@ static int do_test(const char *alg, u32 type, u32 mask, int m)
 
 	case 319:
 		test_hash_speed("crc32c", sec, generic_hash_speed_template);
+		if (mode > 300 && mode < 400) break;
+
+	case 320:
+		test_hash_speed("crct10dif", sec, generic_hash_speed_template);
 		if (mode > 300 && mode < 400) break;
 
 	case 321:
