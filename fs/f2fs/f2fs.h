@@ -2992,7 +2992,8 @@ bool should_update_outplace(struct inode *inode, struct f2fs_io_info *fio);
 int __f2fs_write_data_pages(struct address_space *mapping,
 						struct writeback_control *wbc,
 						enum iostat_type io_type);
-void f2fs_invalidate_page(struct page *page, unsigned long int offset);
+void f2fs_invalidate_page(struct page *page, unsigned int offset,
+						unsigned int length);
 int f2fs_release_page(struct page *page, gfp_t wait);
 #ifdef CONFIG_MIGRATION
 int f2fs_migrate_page(struct address_space *mapping, struct page *newpage,
