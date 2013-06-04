@@ -196,8 +196,7 @@ struct mpage_da_data {
  * Flags for ext4_io_end->flags
  */
 #define	EXT4_IO_END_UNWRITTEN	0x0001
-#define EXT4_IO_END_ERROR	0x0002
-#define EXT4_IO_END_DIRECT	0x0004
+#define EXT4_IO_END_DIRECT	0x0002
 
 /*
  * For converting uninitialized extents on a work queue.
@@ -205,6 +204,8 @@ struct mpage_da_data {
 typedef struct ext4_io_end {
 	struct list_head	list;		/* per-file finished IO list */
 	struct inode		*inode;		/* file being written to */
+	struct bio		*bio;		/* Linked list of completed
+						 * bios covering the extent */
 	unsigned int		flag;		/* unwritten or not */
 	loff_t			offset;		/* offset in the file */
 	ssize_t			size;		/* size of the extent */
