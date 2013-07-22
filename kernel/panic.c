@@ -28,6 +28,7 @@
 #include <linux/init.h>
 #include <linux/nmi.h>
 #include <linux/crash_notes.h>
+#include <linux/console.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/exception.h>
@@ -142,6 +143,9 @@ void panic(const char *fmt, ...)
 	smp_send_stop();
 
 	kmsg_dump(KMSG_DUMP_PANIC);
+
+	if (is_console_locked())
+		console_unlock();
 
 	atomic_notifier_call_chain(&panic_notifier_list, 0, buf);
 
