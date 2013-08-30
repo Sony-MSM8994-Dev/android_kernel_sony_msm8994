@@ -101,6 +101,7 @@ struct netconsole_target {
 	struct config_item	item;
 #endif
 	int			enabled;
+	struct mutex		mutex;
 	struct netpoll		np;
 };
 
@@ -180,6 +181,7 @@ static struct netconsole_target *alloc_param_target(char *target_config)
 	strlcpy(nt->np.dev_name, "eth0", IFNAMSIZ);
 	nt->np.local_port = 6665;
 	nt->np.remote_port = 6666;
+	mutex_init(&nt->mutex);
 	memset(nt->np.remote_mac, 0xff, ETH_ALEN);
 
 	/* Parse parameters and setup netpoll */
@@ -321,6 +323,7 @@ static ssize_t store_enabled(struct netconsole_target *nt,
 		return -EINVAL;
 	}
 
+	mutex_lock(&nt->mutex);
 	if (enabled) {	/* 1 */
 
 		/*
@@ -330,8 +333,10 @@ static ssize_t store_enabled(struct netconsole_target *nt,
 		netpoll_print_options(&nt->np);
 
 		err = netpoll_setup(&nt->np);
-		if (err)
+		if (err) {
+			mutex_unlock(&nt->mutex);
 			return err;
+		}
 
 		printk(KERN_INFO "netconsole: network logging started\n");
 
@@ -340,6 +345,7 @@ static ssize_t store_enabled(struct netconsole_target *nt,
 	}
 
 	nt->enabled = enabled;
+	mutex_unlock(&nt->mutex);
 
 	return strnlen(buf, count);
 }
@@ -596,6 +602,7 @@ static struct config_item *make_netconsole_target(struct config_group *group,
 	strlcpy(nt->np.dev_name, "eth0", IFNAMSIZ);
 	nt->np.local_port = 6665;
 	nt->np.remote_port = 6666;
+	mutex_init(&nt->mutex);
 	memset(nt->np.remote_mac, 0xff, ETH_ALEN);
 
 	/* Initialize the config_item member */
@@ -682,7 +689,11 @@ restart:
 				 * we might sleep in __netpoll_cleanup()
 				 */
 				spin_unlock_irqrestore(&target_list_lock, flags);
+
+				mutex_lock(&nt->mutex);
 				__netpoll_cleanup(&nt->np);
+				mutex_unlock(&nt->mutex);
+
 				spin_lock_irqsave(&target_list_lock, flags);
 				dev_put(nt->np.dev);
 				nt->np.dev = NULL;
