@@ -1280,6 +1280,9 @@ void compact_pgdat(pg_data_t *pgdat, int order)
 		.sync = false,
 	};
 
+	if (!order)
+		return;
+
 	__compact_pgdat(pgdat, &cc);
 }
 
