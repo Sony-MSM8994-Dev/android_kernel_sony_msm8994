@@ -360,3 +360,51 @@ int mac_pton(const char *s, u8 *mac)
 	return 1;
 }
 EXPORT_SYMBOL(mac_pton);
+
+struct __net_random_once_work {
+	struct work_struct work;
+	struct static_key *key;
+};
+
+static void __net_random_once_deferred(struct work_struct *w)
+{
+	struct __net_random_once_work *work =
+		container_of(w, struct __net_random_once_work, work);
+	if (!static_key_enabled(work->key))
+		static_key_slow_inc(work->key);
+	kfree(work);
+}
+
+static void __net_random_once_disable_jump(struct static_key *key)
+{
+	struct __net_random_once_work *w;
+
+	w = kmalloc(sizeof(*w), GFP_ATOMIC);
+	if (!w)
+		return;
+
+	INIT_WORK(&w->work, __net_random_once_deferred);
+	w->key = key;
+	schedule_work(&w->work);
+}
+
+bool __net_get_random_once(void *buf, int nbytes, bool *done,
+			   struct static_key *done_key)
+{
+	static DEFINE_SPINLOCK(lock);
+
+	spin_lock_bh(&lock);
+	if (*done) {
+		spin_unlock_bh(&lock);
+		return false;
+	}
+
+	get_random_bytes(buf, nbytes);
+	*done = true;
+	spin_unlock_bh(&lock);
+
+	__net_random_once_disable_jump(done_key);
+
+	return true;
+}
+EXPORT_SYMBOL(__net_get_random_once);
