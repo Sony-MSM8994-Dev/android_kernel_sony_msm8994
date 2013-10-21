@@ -424,7 +424,7 @@ const char * const *v4l2_ctrl_get_menu(u32 id)
 		"Advanced Simple",
 		"Core",
 		"Simple Scalable",
-		"Advanced Coding Efficency",
+		"Advanced Coding Efficiency",
 		NULL,
 	};
 	static const char * const mpeg_mpeg2_level[] = {

@@ -1452,7 +1452,7 @@ static int s5c73m3_oif_registered(struct v4l2_subdev *sd)
 	mutex_unlock(&state->lock);
 
 	v4l2_dbg(1, s5c73m3_dbg, sd, "%s: Booting %s (%d)\n",
-		 __func__, ret ? "failed" : "succeded", ret);
+		 __func__, ret ? "failed" : "succeeded", ret);
 
 	return ret;
 }
