@@ -22,6 +22,7 @@ config PUBLIC_KEY_ALGO_RSA
 	tristate "RSA public-key algorithm"
 	depends on ASYMMETRIC_PUBLIC_KEY_SUBTYPE
 	select MPILIB_EXTRA
+	select MPILIB
 	help
 	  This option enables support for the RSA algorithm (PKCS#1, RFC3447).
 
