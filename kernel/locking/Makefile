@@ -1,4 +1,3 @@
-
 obj-y += mutex.o semaphore.o rwsem.o lglock.o
 
 ifdef CONFIG_FUNCTION_TRACER
@@ -22,3 +21,4 @@ obj-$(CONFIG_DEBUG_SPINLOCK) += spinlock.o
 obj-$(CONFIG_DEBUG_SPINLOCK) += spinlock_debug.o
 obj-$(CONFIG_RWSEM_GENERIC_SPINLOCK) += rwsem-spinlock.o
 obj-$(CONFIG_RWSEM_XCHGADD_ALGORITHM) += rwsem-xadd.o
+obj-$(CONFIG_PERCPU_RWSEM) += percpu-rwsem.o
