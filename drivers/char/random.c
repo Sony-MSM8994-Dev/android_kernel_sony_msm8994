@@ -366,7 +366,7 @@ static struct poolinfo {
  * (See M. Matsumoto & Y. Kurita, 1992.  Twisted GFSR generators.  ACM
  * Transactions on Modeling and Computer Simulation 2(3):179-194.
  * Also see M. Matsumoto & Y. Kurita, 1994.  Twisted GFSR generators
- * II.  ACM Transactions on Mdeling and Computer Simulation 4:254-266)
+ * II.  ACM Transactions on Modeling and Computer Simulation 4:254-266)
  *
  * Thanks to Colin Plumb for suggesting this.
  *
@@ -995,7 +995,7 @@ static void extract_buf(struct entropy_store *r, __u8 *out)
 	hash.w[2] ^= rol32(hash.w[2], 16);
 
 	/*
-	 * If we have a architectural hardware random number
+	 * If we have an architectural hardware random number
 	 * generator, mix that in, too.
 	 */
 	for (i = 0; i < LONGS(EXTRACT_SIZE); i++) {
