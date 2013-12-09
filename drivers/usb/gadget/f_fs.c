@@ -762,17 +762,16 @@ static void ffs_epfile_io_complete(struct usb_ep *_ep, struct usb_request *req)
 	}
 }
 
-#define MAX_BUF_LEN	4096
 static ssize_t ffs_epfile_io(struct file *file,
 			     char __user *buf, size_t len, int read)
 {
 	struct ffs_epfile *epfile = file->private_data;
+	struct usb_gadget *gadget = epfile->ffs->gadget;
 	struct ffs_ep *ep;
 	struct ffs_data *ffs = epfile->ffs;
 	char *data = NULL;
-	ssize_t ret;
+	ssize_t ret, data_len;
 	int halt;
-	int buffer_len = 0;
 
 	pr_debug("%s: len %zu, read %d\n", __func__, len, read);
 
@@ -809,7 +808,13 @@ static ssize_t ffs_epfile_io(struct file *file,
 
 	/* Allocate & copy */
 	if (!halt) {
-		data = kmalloc(len, GFP_KERNEL);
+		/*
+		 * Controller may require buffer size to be aligned to
+		 * maxpacketsize of an out endpoint.
+		 */
+		data_len = read ? usb_ep_align_maybe(gadget, ep->ep, len) : len;
+
+		data = kmalloc(data_len, GFP_KERNEL);
 		if (unlikely(!data))
 			return -ENOMEM;
 
@@ -843,7 +848,7 @@ static ssize_t ffs_epfile_io(struct file *file,
 		struct usb_request *req = ep->req;
 		req->complete = ffs_epfile_io_complete;
 		req->buf      = data;
-		req->length   = buffer_len;
+		req->length   = data_len;
 
 		if (read) {
 			INIT_COMPLETION(ffs->epout_completion);
@@ -869,31 +874,18 @@ static ssize_t ffs_epfile_io(struct file *file,
 			spin_unlock_irq(&epfile->ffs->eps_lock);
 			ret = -EINTR;
 		} else {
-			spin_lock_irq(&epfile->ffs->eps_lock);
 			/*
-			 * While we were acquiring lock endpoint got disabled
-			 * (disconnect) or changed (composition switch) ?
+			 * XXX We may end up silently droping data here.
+			 * Since data_len (i.e. req->length) may be bigger
+			 * than len (after being rounded up to maxpacketsize),
+			 * we may end up with more data then user space has
+			 * space for.
 			 */
-			if (epfile->ep == ep)
-				ret = ep->status;
-			else
-				ret = -ENODEV;
-			spin_unlock_irq(&epfile->ffs->eps_lock);
-			if (read && ret > 0) {
-				if (len != MAX_BUF_LEN && ret < len)
-					pr_err("less data(%zd) recieved than intended length(%zu)\n",
-								ret, len);
-				if (ret > len) {
-					ret = -EOVERFLOW;
-					pr_err("More data(%zd) recieved than intended length(%zu)\n",
-								ret, len);
-				} else if (unlikely(copy_to_user(
-							buf, data, ret))) {
-					pr_err("Fail to copy to user len:%zd\n",
-									ret);
-					ret = -EFAULT;
-				}
-			}
+			ret = ep->status;
+			if (read && ret > 0 &&
+			    unlikely(copy_to_user(buf, data,
+						  min_t(size_t, ret, len))))
+				ret = -EFAULT;
 		}
 	}
 
