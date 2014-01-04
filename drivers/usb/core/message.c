@@ -513,7 +513,7 @@ void usb_sg_wait(struct usb_sg_request *io)
 		io->urbs[i]->dev = io->dev;
 		retval = usb_submit_urb(io->urbs[i], GFP_ATOMIC);
 
-		/* after we submit, let completions or cancelations fire;
+		/* after we submit, let completions or cancellations fire;
 		 * we handshake using io->status.
 		 */
 		spin_unlock_irq(&io->lock);

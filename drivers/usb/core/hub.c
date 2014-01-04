@@ -2649,7 +2649,7 @@ static unsigned hub_is_wusb(struct usb_hub *hub)
 static int hub_port_reset(struct usb_hub *hub, int port1,
 			struct usb_device *udev, unsigned int delay, bool warm);
 
-/* Is a USB 3.0 port in the Inactive or Complinance Mode state?
+/* Is a USB 3.0 port in the Inactive or Compliance Mode state?
  * Port worm reset is required to recover
  */
 static bool hub_port_warm_reset_required(struct usb_hub *hub, u16 portstatus)
@@ -3551,7 +3551,8 @@ static int hub_suspend(struct usb_interface *intf, pm_message_t msg)
 
 		udev = hub->ports[port1 - 1]->child;
 		if (udev && udev->can_submit) {
-			dev_warn(&intf->dev, "port %d nyet suspended\n", port1);
+			dev_warn(&intf->dev, "port %d not suspended yet\n",
+					port1);
 			if (PMSG_IS_AUTO(msg))
 				return -EBUSY;
 		}
@@ -5128,7 +5129,7 @@ static void hub_events(void)
 
 static int hub_thread(void *__unused)
 {
-	/* khubd needs to be freezable to avoid intefering with USB-PERSIST
+	/* khubd needs to be freezable to avoid interfering with USB-PERSIST
 	 * port handover.  Otherwise it might see that a full-speed device
 	 * was gone before the EHCI controller had handed its port over to
 	 * the companion full-speed controller.
