@@ -860,7 +860,6 @@ retry_journal:
 	handle = ext4_journal_start(inode, EXT4_HT_INODE, 1);
 	if (IS_ERR(handle)) {
 		ret = PTR_ERR(handle);
-		handle = NULL;
 		goto out;
 	}
 
@@ -870,7 +869,7 @@ retry_journal:
 	if (inline_size >= pos + len) {
 		ret = ext4_prepare_inline_data(handle, inode, pos + len);
 		if (ret && ret != -ENOSPC)
-			goto out;
+			goto out_journal;
 	}
 
 	if (ret == -ENOSPC) {
@@ -879,7 +878,6 @@ retry_journal:
 							    flags,
 							    fsdata);
 		ext4_journal_stop(handle);
-		handle = NULL;
 		if (ret == -ENOSPC &&
 		    ext4_should_retry_alloc(inode->i_sb, &retries))
 			goto retry_journal;
@@ -895,7 +893,7 @@ retry_journal:
 	page = grab_cache_page_write_begin(mapping, 0, flags);
 	if (!page) {
 		ret = -ENOMEM;
-		goto out;
+		goto out_journal;
 	}
 
 	down_read(&EXT4_I(inode)->xattr_sem);
@@ -912,16 +910,15 @@ retry_journal:
 
 	up_read(&EXT4_I(inode)->xattr_sem);
 	*pagep = page;
-	handle = NULL;
 	brelse(iloc.bh);
 	return 1;
 out_release_page:
 	up_read(&EXT4_I(inode)->xattr_sem);
 	unlock_page(page);
 	page_cache_release(page);
+out_journal:
+	ext4_journal_stop(handle);
 out:
-	if (handle)
-		ext4_journal_stop(handle);
 	brelse(iloc.bh);
 	return ret;
 }
