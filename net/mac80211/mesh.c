@@ -790,7 +790,7 @@ void ieee80211_stop_mesh(struct ieee80211_sub_if_data *sdata)
 	mutex_lock(&ifmsh->mtx);
 	bcn = rcu_dereference_protected(ifmsh->beacon,
 					lockdep_is_held(&ifmsh->mtx));
-	rcu_assign_pointer(ifmsh->beacon, NULL);
+	RCU_INIT_POINTER(ifmsh->beacon, NULL);
 	kfree_rcu(bcn, rcu_head);
 	mutex_unlock(&ifmsh->mtx);
 
