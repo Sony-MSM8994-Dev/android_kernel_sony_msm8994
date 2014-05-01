@@ -1036,10 +1036,8 @@ rw_common:
 		       req->ki_opcode == IOCB_CMD_PWRITEV)
 			? aio_setup_vectored_rw(rw, req, compat)
 			: aio_setup_single_vector(rw, req);
-		if (ret)
-			return ret;
-
-		ret = rw_verify_area(rw, file, &req->ki_pos, req->ki_nbytes);
+		if (!ret)
+			ret = rw_verify_area(rw, file, &req->ki_pos, req->ki_nbytes);
 		if (ret < 0)
 			return ret;
 
