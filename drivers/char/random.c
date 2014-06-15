@@ -578,25 +578,29 @@ struct fast_pool {
  * collector.  It's hardcoded for an 128 bit pool and assumes that any
  * locks that might be needed are taken by the caller.
  */
-static void fast_mix(struct fast_pool *f, __u32 input[4])
+static void fast_mix(struct fast_pool *f)
 {
-	__u32		w;
-	unsigned	input_rotate = f->rotate;
+	__u32 a = f->pool[0],	b = f->pool[1];
+	__u32 c = f->pool[2],	d = f->pool[3];
 
-	w = rol32(input[0], input_rotate) ^ f->pool[0] ^ f->pool[3];
-	f->pool[0] = (w >> 3) ^ twist_table[w & 7];
-	input_rotate = (input_rotate + 14) & 31;
-	w = rol32(input[1], input_rotate) ^ f->pool[1] ^ f->pool[0];
-	f->pool[1] = (w >> 3) ^ twist_table[w & 7];
-	input_rotate = (input_rotate + 7) & 31;
-	w = rol32(input[2], input_rotate) ^ f->pool[2] ^ f->pool[1];
-	f->pool[2] = (w >> 3) ^ twist_table[w & 7];
-	input_rotate = (input_rotate + 7) & 31;
-	w = rol32(input[3], input_rotate) ^ f->pool[3] ^ f->pool[2];
-	f->pool[3] = (w >> 3) ^ twist_table[w & 7];
-	input_rotate = (input_rotate + 7) & 31;
+	a += b;			c += d;
+	b = rol32(a, 6);	d = rol32(c, 27);
+	d ^= a;			b ^= c;
 
-	f->rotate = input_rotate;
+	a += b;			c += d;
+	b = rol32(a, 16);	d = rol32(c, 14);
+	d ^= a;			b ^= c;
+
+	a += b;			c += d;
+	b = rol32(a, 6);	d = rol32(c, 27);
+	d ^= a;			b ^= c;
+
+	a += b;			c += d;
+	b = rol32(a, 16);	d = rol32(c, 14);
+	d ^= a;			b ^= c;
+
+	f->pool[0] = a;  f->pool[1] = b;
+	f->pool[2] = c;  f->pool[3] = d;
 	f->count++;
 }
 
@@ -789,18 +793,18 @@ void add_interrupt_randomness(int irq, int irq_flags)
 	struct pt_regs		*regs = get_irq_regs();
 	unsigned long		now = jiffies;
 	cycles_t		cycles = get_cycles();
-	__u32			input[4], c_high, j_high;
+	__u32			c_high, j_high;
 	__u64			ip;
 
 	c_high = (sizeof(cycles) > 4) ? cycles >> 32 : 0;
 	j_high = (sizeof(now) > 4) ? now >> 32 : 0;
-	input[0] = cycles ^ j_high ^ irq;
-	input[1] = now ^ c_high;
+	fast_pool->pool[0] ^= cycles ^ j_high ^ irq;
+	fast_pool->pool[1] ^= now ^ c_high;
 	ip = regs ? instruction_pointer(regs) : _RET_IP_;
-	input[2] = ip;
-	input[3] = ip >> 32;
+	fast_pool->pool[2] ^= ip;
+	fast_pool->pool[3] ^= ip >> 32;
 
-	fast_mix(fast_pool, input);
+	fast_mix(fast_pool);
 
 	if ((fast_pool->count & 63) && !time_after(now, fast_pool->last + HZ))
 		return;
