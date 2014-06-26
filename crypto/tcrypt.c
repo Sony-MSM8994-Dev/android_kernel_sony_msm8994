@@ -48,6 +48,11 @@
 #define DECRYPT 0
 
 /*
+ * return a string with the driver name
+ */
+#define get_driver_name(tfm_type, tfm) crypto_tfm_alg_driver_name(tfm_type ## _tfm(tfm))
+
+/*
  * Used by test_cipher_speed()
  */
 static unsigned int sec;
@@ -306,9 +311,6 @@ static void test_aead_speed(const char *algo, int enc, unsigned int sec,
 	asg = &sg[8];
 	sgout = &asg[8];
 
-
-	printk(KERN_INFO "\ntesting speed of %s %s\n", algo, e);
-
 	tfm = crypto_alloc_aead(algo, 0, 0);
 
 	if (IS_ERR(tfm)) {
@@ -316,6 +318,9 @@ static void test_aead_speed(const char *algo, int enc, unsigned int sec,
 		       PTR_ERR(tfm));
 		goto out_notfm;
 	}
+
+	printk(KERN_INFO "\ntesting speed of %s (%s) %s\n", algo,
+			get_driver_name(crypto_aead, tfm), e);
 
 	req = aead_request_alloc(tfm, GFP_KERNEL);
 	if (!req) {
@@ -423,8 +428,6 @@ static void test_cipher_speed(const char *algo, int enc, unsigned int sec,
 	else
 		e = "decryption";
 
-	printk("\ntesting speed of %s %s\n", algo, e);
-
 	tfm = crypto_alloc_blkcipher(algo, 0, CRYPTO_ALG_ASYNC);
 
 	if (IS_ERR(tfm)) {
@@ -434,6 +437,9 @@ static void test_cipher_speed(const char *algo, int enc, unsigned int sec,
 	}
 	desc.tfm = tfm;
 	desc.flags = 0;
+
+	printk(KERN_INFO "\ntesting speed of %s (%s) %s\n", algo,
+			get_driver_name(crypto_blkcipher, tfm), e);
 
 	i = 0;
 	do {
@@ -684,8 +690,6 @@ static void test_hash_speed(const char *algo, unsigned int sec,
 	int i;
 	int ret;
 
-	printk(KERN_INFO "\ntesting speed of %s\n", algo);
-
 	tfm = crypto_alloc_hash(algo, 0, CRYPTO_ALG_ASYNC);
 
 	if (IS_ERR(tfm)) {
@@ -693,6 +697,9 @@ static void test_hash_speed(const char *algo, unsigned int sec,
 		       PTR_ERR(tfm));
 		return;
 	}
+
+	printk(KERN_INFO "\ntesting speed of %s (%s)\n", algo,
+			get_driver_name(crypto_hash, tfm));
 
 	desc.tfm = tfm;
 	desc.flags = 0;
@@ -922,14 +929,15 @@ static void test_ahash_speed(const char *algo, unsigned int sec,
 	static char output[1024];
 	int i, ret;
 
-	printk(KERN_INFO "\ntesting speed of async %s\n", algo);
-
 	tfm = crypto_alloc_ahash(algo, 0, 0);
 	if (IS_ERR(tfm)) {
 		pr_err("failed to load transform for %s: %ld\n",
 		       algo, PTR_ERR(tfm));
 		return;
 	}
+
+	printk(KERN_INFO "\ntesting speed of async %s (%s)\n", algo,
+			get_driver_name(crypto_ahash, tfm));
 
 	if (crypto_ahash_digestsize(tfm) > sizeof(output)) {
 		pr_err("digestsize(%u) > outputbuffer(%zu)\n",
@@ -1084,8 +1092,6 @@ static void test_acipher_speed(const char *algo, int enc, unsigned int sec,
 	else
 		e = "decryption";
 
-	pr_info("\ntesting speed of async %s %s\n", algo, e);
-
 	init_completion(&tresult.completion);
 
 	tfm = crypto_alloc_ablkcipher(algo, 0, 0);
@@ -1095,6 +1101,9 @@ static void test_acipher_speed(const char *algo, int enc, unsigned int sec,
 		       PTR_ERR(tfm));
 		return;
 	}
+
+	pr_info("\ntesting speed of async %s (%s) %s\n", algo,
+			get_driver_name(crypto_ablkcipher, tfm), e);
 
 	req = ablkcipher_request_alloc(tfm, GFP_KERNEL);
 	if (!req) {
