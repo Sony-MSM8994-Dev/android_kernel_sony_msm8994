@@ -543,6 +543,7 @@ static void dpm_wd_clear(struct dpm_watchdog *wd)
  * device_resume_noirq - Execute an "early resume" callback for given device.
  * @dev: Device to handle.
  * @state: PM transition of the system being carried out.
+ * @async: If true, the device is being resumed asynchronously.
  *
  * The driver of @dev will not receive interrupts while this function is being
  * executed.
@@ -670,6 +671,7 @@ static void dpm_resume_noirq(pm_message_t state)
  * device_resume_early - Execute an "early resume" callback for given device.
  * @dev: Device to handle.
  * @state: PM transition of the system being carried out.
+ * @async: If true, the device is being resumed asynchronously.
  *
  * Runtime PM is disabled for @dev while this function is being executed.
  */
@@ -1086,6 +1088,7 @@ static pm_message_t resume_event(pm_message_t sleep_state)
  * device_suspend_noirq - Execute a "late suspend" callback for given device.
  * @dev: Device to handle.
  * @state: PM transition of the system being carried out.
+ * @async: If true, the device is being suspended asynchronously.
  *
  * The driver of @dev will not receive interrupts while this function is being
  * executed.
@@ -1232,6 +1235,7 @@ static int dpm_suspend_noirq(pm_message_t state)
  * device_suspend_late - Execute a "late suspend" callback for given device.
  * @dev: Device to handle.
  * @state: PM transition of the system being carried out.
+ * @async: If true, the device is being suspended asynchronously.
  *
  * Runtime PM is disabled for @dev while this function is being executed.
  */
@@ -1405,6 +1409,7 @@ EXPORT_SYMBOL_GPL(dpm_suspend_end);
  * @dev: Device to suspend.
  * @state: PM transition of the system being carried out.
  * @cb: Suspend callback to execute.
+ * @info: string description of caller.
  */
 static int legacy_suspend(struct device *dev, pm_message_t state,
 			  int (*cb)(struct device *dev, pm_message_t state))
