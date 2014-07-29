@@ -1649,7 +1649,7 @@ static int drbg_cavs_test(struct drbg_testvec *test, int pr,
 
 	drng = crypto_alloc_rng(driver, type, mask);
 	if (IS_ERR(drng)) {
-		printk(KERN_ERR "alg: drbg: could not allocate DRNG handle for"
+		printk(KERN_ERR "alg: drbg: could not allocate DRNG handle for "
 		       "%s\n", driver);
 		kzfree(buf);
 		return -ENOMEM;
@@ -1674,7 +1674,7 @@ static int drbg_cavs_test(struct drbg_testvec *test, int pr,
 			buf, test->expectedlen, &addtl);
 	}
 	if (ret <= 0) {
-		printk(KERN_ERR "alg: drbg: could not obtain random data for"
+		printk(KERN_ERR "alg: drbg: could not obtain random data for "
 		       "driver %s\n", driver);
 		goto outbuf;
 	}
@@ -1689,7 +1689,7 @@ static int drbg_cavs_test(struct drbg_testvec *test, int pr,
 			buf, test->expectedlen, &addtl);
 	}
 	if (ret <= 0) {
-		printk(KERN_ERR "alg: drbg: could not obtain random data for"
+		printk(KERN_ERR "alg: drbg: could not obtain random data for "
 		       "driver %s\n", driver);
 		goto outbuf;
 	}
