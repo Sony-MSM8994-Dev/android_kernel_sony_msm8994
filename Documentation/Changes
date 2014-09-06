@@ -361,7 +361,7 @@ o  <http://sourceforge.net/projects/linuxquota/>
 
 DocBook Stylesheets
 -------------------
-o  <http://nwalsh.com/docbook/dsssl/>
+o  <http://sourceforge.net/projects/docbook/files/docbook-dsssl/>
 
 XMLTO XSLT Frontend
 -------------------
@@ -369,7 +369,7 @@ o  <http://cyberelk.net/tim/xmlto/>
 
 Intel P6 microcode
 ------------------
-o  <http://www.urbanmyth.org/microcode/>
+o  <https://downloadcenter.intel.com/>
 
 Powertweak
 ----------
@@ -377,7 +377,7 @@ o  <http://powertweak.sourceforge.net/>
 
 udev
 ----
-o <http://www.kernel.org/pub/linux/utils/kernel/hotplug/udev.html>
+o <http://www.freedesktop.org/software/systemd/man/udev.html>
 
 FUSE
 ----
@@ -385,7 +385,7 @@ o <http://sourceforge.net/projects/fuse>
 
 mcelog
 ------
-o <ftp://ftp.kernel.org/pub/linux/utils/cpu/mce/>
+o <http://www.mcelog.org/>
 
 Networking
 **********
