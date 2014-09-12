@@ -235,6 +235,7 @@ struct rw_semaphore __sched *rwsem_down_read_failed(struct rw_semaphore *sem)
 
 	return sem;
 }
+EXPORT_SYMBOL(rwsem_down_read_failed);
 
 /*
  * wait until we successfully acquire the write lock
@@ -296,6 +297,7 @@ struct rw_semaphore __sched *rwsem_down_write_failed(struct rw_semaphore *sem)
 
 	return sem;
 }
+EXPORT_SYMBOL(rwsem_down_write_failed);
 
 /*
  * handle waking up a waiter on the semaphore
@@ -315,6 +317,7 @@ struct rw_semaphore *rwsem_wake(struct rw_semaphore *sem)
 
 	return sem;
 }
+EXPORT_SYMBOL(rwsem_wake);
 
 /*
  * downgrade a write lock into a read lock
@@ -335,8 +338,4 @@ struct rw_semaphore *rwsem_downgrade_wake(struct rw_semaphore *sem)
 
 	return sem;
 }
-
-EXPORT_SYMBOL(rwsem_down_read_failed);
-EXPORT_SYMBOL(rwsem_down_write_failed);
-EXPORT_SYMBOL(rwsem_wake);
 EXPORT_SYMBOL(rwsem_downgrade_wake);
