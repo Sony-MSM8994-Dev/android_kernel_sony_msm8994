@@ -605,10 +605,6 @@ static int gaudio_open_snd_dev(struct gaudio *card)
 	struct gaudio_snd_dev *snd;
 	int res = 0;
 
-	if (!card) {
-		pr_err("%s: Card is NULL", __func__);
-		return -ENODEV;
-	}
 	/* Open control device */
 	snd = &card->control;
 	snd->filp = filp_open(fn_cntl, O_RDWR, 0);
