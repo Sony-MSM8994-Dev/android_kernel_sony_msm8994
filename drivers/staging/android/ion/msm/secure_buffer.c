@@ -37,6 +37,19 @@ struct cp2_lock_req {
 	u32 lock;
 } __attribute__ ((__packed__));
 
+
+struct mem_prot_info {
+	phys_addr_t addr;
+	u64 size;
+};
+
+struct info_list {
+	struct mem_prot_info *list_head;
+	u64 list_size;
+};
+
+
+#define MEM_PROT_ASSIGN_ID		0x16
 #define MEM_PROTECT_LOCK_ID2		0x0A
 #define MEM_PROTECT_LOCK_ID2_FLAT	0x11
 #define V2_CHUNK_SIZE		SZ_1M
@@ -207,8 +220,8 @@ static void destroy_info_list(struct info_list *info_list)
 }
 
 int msm_ion_hyp_assign_call(struct sg_table *table,
-			u32 *source_vm_list, u32 source_list_size,
-			u32 *dest_vm_list, u32 dest_list_size)
+			u64 *source_vm_list, u32 source_list_size,
+			u64 *dest_vm_list, u32 dest_list_size)
 {
 	struct info_list *info_list = NULL;
 	int ret;
