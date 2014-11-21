@@ -48,13 +48,13 @@ MODULE_DESCRIPTION("AES-ECB/CBC/CTR/XTS using ARMv8 Crypto Extensions");
 #define aes_xts_decrypt		neon_aes_xts_decrypt
 #define aes_mac_update		neon_aes_mac_update
 MODULE_DESCRIPTION("AES-ECB/CBC/CTR/XTS using ARMv8 NEON");
-MODULE_ALIAS("ecb(aes)");
-MODULE_ALIAS("cbc(aes)");
-MODULE_ALIAS("ctr(aes)");
-MODULE_ALIAS("xts(aes)");
-MODULE_ALIAS("cmac(aes)");
-MODULE_ALIAS("xcbc(aes)");
-MODULE_ALIAS("cbcmac(aes)");
+MODULE_ALIAS_CRYPTO("ecb(aes)");
+MODULE_ALIAS_CRYPTO("cbc(aes)");
+MODULE_ALIAS_CRYPTO("ctr(aes)");
+MODULE_ALIAS_CRYPTO("xts(aes)");
+MODULE_ALIAS_CRYPTO("cmac(aes)");
+MODULE_ALIAS_CRYPTO("xcbc(aes)");
+MODULE_ALIAS_CRYPTO("cbcmac(aes)");
 #endif
 
 MODULE_AUTHOR("Ard Biesheuvel <ard.biesheuvel@linaro.org>");
