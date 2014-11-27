@@ -628,6 +628,7 @@ config ARMV7_COMPAT_CPUINFO
 	 If you want to execute ARMv7 applications, say Y
 
 source "mm/Kconfig"
+source "arch/arm64/mm/Kconfig"
 
 config XEN_DOM0
 	def_bool y
@@ -820,5 +821,3 @@ source "arch/arm64/crypto/Kconfig"
 endif
 
 source "lib/Kconfig"
-
-source "arch/arm64/mm/Kconfig"
