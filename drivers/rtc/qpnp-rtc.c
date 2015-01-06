@@ -47,9 +47,10 @@
 							(arr[3] << 24))
 
 /* Module parameter to control power-on-alarm */
-static bool poweron_alarm;
+bool poweron_alarm;
 module_param(poweron_alarm, bool, 0644);
 MODULE_PARM_DESC(poweron_alarm, "Enable/Disable power-on alarm");
+EXPORT_SYMBOL(poweron_alarm);
 
 /* rtc driver internal structure */
 struct qpnp_rtc {
