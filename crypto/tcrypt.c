@@ -281,16 +281,20 @@ static void test_aead_speed(const char *algo, int enc, unsigned int sec,
 	struct scatterlist *sgout;
 	const char *e;
 	void *assoc;
-	char iv[MAX_IVLEN];
+	char *iv;
 	char *xbuf[XBUFSIZE];
 	char *xoutbuf[XBUFSIZE];
 	char *axbuf[XBUFSIZE];
 	unsigned int *b_size;
 	unsigned int iv_len;
 
+	iv = kzalloc(MAX_IVLEN, GFP_KERNEL);
+	if (!iv)
+		return;
+
 	if (aad_size >= PAGE_SIZE) {
 		pr_err("associate data length (%u) too big\n", aad_size);
-		return;
+		goto out_noxbuf;
 	}
 
 	if (enc == ENCRYPT)
@@ -356,7 +360,7 @@ static void test_aead_speed(const char *algo, int enc, unsigned int sec,
 
 			iv_len = crypto_aead_ivsize(tfm);
 			if (iv_len)
-				memset(&iv, 0xff, iv_len);
+				memset(iv, 0xff, iv_len);
 
 			crypto_aead_clear_flags(tfm, ~0);
 			printk(KERN_INFO "test %u (%d bit key, %d byte blocks): ",
@@ -408,6 +412,7 @@ out_nooutbuf:
 out_noaxbuf:
 	testmgr_free_buf(xbuf);
 out_noxbuf:
+	kfree(iv);
 	return;
 }
 
