@@ -1946,6 +1946,22 @@ enum scan_balance {
 	SCAN_FILE,
 };
 
+bool enough_file_pages(struct zone *zone)
+{
+	bool ret = true;
+	unsigned long zonefile;
+	unsigned long zonefree;
+
+	zonefree = zone_page_state(zone, NR_FREE_PAGES);
+	zonefile = zone_page_state(zone, NR_ACTIVE_FILE) +
+		   zone_page_state(zone, NR_INACTIVE_FILE);
+
+	if (unlikely(zonefile + zonefree <= high_wmark_pages(zone)))
+		ret = false;
+
+	return ret;
+}
+
 /*
  * Determine how aggressively the anon and file LRU lists should be
  * scanned.  The relative value of each set of LRU lists is determined
@@ -2018,18 +2034,9 @@ static void get_scan_count(struct lruvec *lruvec, struct scan_control *sc,
 	 * to swap.  Better start now and leave the - probably heavily
 	 * thrashing - remaining file pages alone.
 	 */
-	if (global_reclaim(sc)) {
-		unsigned long zonefile;
-		unsigned long zonefree;
-
-		zonefree = zone_page_state(zone, NR_FREE_PAGES);
-		zonefile = zone_page_state(zone, NR_ACTIVE_FILE) +
-			   zone_page_state(zone, NR_INACTIVE_FILE);
-
-		if (unlikely(zonefile + zonefree <= high_wmark_pages(zone))) {
-			scan_balance = SCAN_ANON;
-			goto out;
-		}
+	if (global_reclaim(sc) && !enough_file_pages(zone)) {
+		scan_balance = SCAN_ANON;
+		goto out;
 	}
 
 	/*
@@ -2118,6 +2125,17 @@ out:
 			scan = div64_u64(scan * fraction[file], denominator);
 			break;
 		case SCAN_FILE:
+				/*
+				 * If there isn't enough page cache to prevent
+				 * cache thrashing, OOM is better than long time
+				 * unresponsible system.
+				 */
+				if (global_reclaim(sc) && file &&
+						!enough_file_pages(zone)) {
+					size = 0;
+					scan = 0;
+					break;
+				}
 		case SCAN_ANON:
 			/* Scan one type exclusively */
 			if ((scan_balance == SCAN_FILE) != file)
