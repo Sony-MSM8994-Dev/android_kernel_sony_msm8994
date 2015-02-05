@@ -700,6 +700,13 @@ config STATE_NOTIFIER
 	bool "State Notifier"
 	default y
 
+config TRACER_PKT
+	bool "Tracer Packet"
+	help
+	  Tracer Packet helps in profiling the performance of inter-
+	  processor communication protocols. The profiling information
+	  can be logged into the tracer packet itself.
+
 source "drivers/soc/qcom/memshare/Kconfig"
 
 endif # ARCH_MSM
