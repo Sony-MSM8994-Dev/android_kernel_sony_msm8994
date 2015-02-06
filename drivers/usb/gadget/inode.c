@@ -570,7 +570,6 @@ static ssize_t ep_copy_to_user(struct kiocb_priv *priv)
 		if (total == 0)
 			break;
 	}
-
 	return len;
 }
 
@@ -589,6 +588,7 @@ static void ep_user_copy_worker(struct work_struct *work)
 	aio_complete(iocb, ret, ret);
 
 	kfree(priv->buf);
+	kfree(priv->iv);
 	kfree(priv);
 }
 
@@ -609,6 +609,7 @@ static void ep_aio_complete(struct usb_ep *ep, struct usb_request *req)
 	 */
 	if (priv->iv == NULL || unlikely(req->actual == 0)) {
 		kfree(req->buf);
+		kfree(priv->iv);
 		kfree(priv);
 		iocb->private = NULL;
 		/* aio_complete() reports bytes-transferred _and_ faults */
@@ -644,7 +645,7 @@ ep_aio_rwtail(
 	struct usb_request	*req;
 	ssize_t			value;
 
-	priv = kmalloc(sizeof *priv, GFP_KERNEL);
+	priv = kzalloc(sizeof *priv, GFP_KERNEL);
 	if (!priv) {
 		value = -ENOMEM;
 fail:
@@ -653,7 +654,14 @@ fail:
 	}
 	iocb->private = priv;
 	priv->iocb = iocb;
-	priv->iv = iv;
+	if (iv) {
+		priv->iv = kmemdup(iv, nr_segs * sizeof(struct iovec),
+				   GFP_KERNEL);
+		if (!priv->iv) {
+			kfree(priv);
+			goto fail;
+		}
+	}
 	priv->nr_segs = nr_segs;
 	INIT_WORK(&priv->work, ep_user_copy_worker);
 
@@ -693,6 +701,7 @@ fail:
 	mutex_unlock(&epdata->lock);
 
 	if (unlikely(value)) {
+		kfree(priv->iv);
 		kfree(priv);
 		put_ep(epdata);
 	} else
