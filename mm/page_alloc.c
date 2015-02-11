@@ -1181,29 +1181,30 @@ int find_suitable_fallback(struct free_area *area, unsigned int order,
  * as well.
  */
 static void try_to_steal_freepages(struct zone *zone, struct page *page,
-                                  int start_type, int fallback_type)
+				   int start_type, int fallback_type)
 {
-        int current_order = page_order(page);
+	int current_order = page_order(page);
 
-        /* Take ownership for orders >= pageblock_order */
-        if (current_order >= pageblock_order) {
-                change_pageblock_range(page, current_order, start_type);
-                return;
-        }
+	/* Take ownership for orders >= pageblock_order */
+	if (current_order >= pageblock_order) {
+		change_pageblock_range(page, current_order, start_type);
+		return;
+	}
 
-        if (current_order >= pageblock_order / 2 ||
-            start_type == MIGRATE_RECLAIMABLE ||
-            start_type == MIGRATE_UNMOVABLE ||
-            page_group_by_mobility_disabled) {
-                int pages;
+	if (current_order >= pageblock_order / 2 ||
+	    start_type == MIGRATE_RECLAIMABLE ||
+	    start_type == MIGRATE_UNMOVABLE ||
+	    page_group_by_mobility_disabled) {
 
-                pages = move_freepages_block(zone, page, start_type, 0);
+		int pages;
 
-                /* Claim the whole block if over half of it is free */
-                if (pages >= (1 << (pageblock_order-1)) ||
-                                page_group_by_mobility_disabled)
-                        set_pageblock_migratetype(page, start_type);
-        }
+		pages = move_freepages_block(zone, page, start_type, 0);
+
+		/* Claim the whole block if over half of it is free */
+		if (pages >= (1 << (pageblock_order-1)) ||
+				page_group_by_mobility_disabled)
+			set_pageblock_migratetype(page, start_type);
+	}
 }
 
 /* Remove an element from the buddy allocator from the fallback list */
@@ -1213,13 +1214,15 @@ __rmqueue_fallback(struct zone *zone, int order, int start_migratetype)
 	struct free_area * area;
 	int current_order;
 	struct page *page;
-	int migratetype, i;
 
 	/* Find the largest possible block of pages in the other list */
-	for (current_order = MAX_ORDER-1; current_order >= order;
-						--current_order) {
+	for (current_order = MAX_ORDER-1;
+				current_order >= order && current_order <= MAX_ORDER-1;
+				--current_order) {
+		int i;
 		for (i = 0;; i++) {
-			migratetype = fallbacks[start_migratetype][i];
+			int migratetype = fallbacks[start_migratetype][i];
+			int buddy_type = start_migratetype;
 
 			/* MIGRATE_RESERVE handled later if necessary */
 			if (migratetype == MIGRATE_RESERVE)
@@ -1236,22 +1239,36 @@ __rmqueue_fallback(struct zone *zone, int order, int start_migratetype)
 			if (is_migrate_cma(migratetype))
 				area->nr_free_cma--;
 
-			try_to_steal_freepages(zone, page, start_migratetype,
-								migratetype);
+			if (!is_migrate_cma(migratetype)) {
+				try_to_steal_freepages(zone, page,
+							start_migratetype,
+							migratetype);
+			} else {
+				/*
+				 * When borrowing from MIGRATE_CMA, we need to
+				 * release the excess buddy pages to CMA
+				 * itself, and we do not try to steal extra
+				 * free pages.
+				 */
+				buddy_type = migratetype;
+			}
 
 			/* Remove the page from the freelists */
 			list_del(&page->lru);
 			rmv_page_order(page);
 
-			/* Take ownership for orders >= pageblock_order */
-			if (current_order >= pageblock_order &&
-			    !is_migrate_cma(migratetype))
-				change_pageblock_range(page, current_order,
-							start_migratetype);
-
 			expand(zone, page, order, current_order, area,
-			       is_migrate_cma(migratetype)
-			     ? migratetype : start_migratetype);
+							buddy_type);
+
+			/*
+			 * The freepage_migratetype may differ from pageblock's
+			 * migratetype depending on the decisions in
+			 * try_to_steal_freepages(). This is OK as long as it
+			 * does not differ for MIGRATE_CMA pageblocks. For CMA
+			 * we need to make sure unallocated pages flushed from
+			 * pcp lists are returned to the correct freelist.
+			 */
+			set_freepage_migratetype(page, buddy_type);
 
 			trace_mm_page_alloc_extfrag(page, order, current_order,
 				start_migratetype, migratetype);
