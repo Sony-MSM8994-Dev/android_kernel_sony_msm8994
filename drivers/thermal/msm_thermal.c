@@ -3159,12 +3159,18 @@ static int hotplug_notify(enum thermal_trip_type type, int temp, void *data)
 		return 0;
 	switch (type) {
 	case THERMAL_TRIP_CONFIGURABLE_HI:
-		if (!(cpu_node->offline))
+		if (!(cpu_node->offline)) {
+			pr_info("%s reached HI temp threshold: %d\n",
+					cpu_node->sensor_type, temp);
 			cpu_node->offline = 1;
+		}
 		break;
 	case THERMAL_TRIP_CONFIGURABLE_LOW:
-		if (cpu_node->offline)
+		if (cpu_node->offline) {
+			pr_info("%s reached LOW temp threshold: %d\n",
+					cpu_node->sensor_type, temp);
 			cpu_node->offline = 0;
+		}
 		break;
 	default:
 		break;
@@ -3176,6 +3182,7 @@ static int hotplug_notify(enum thermal_trip_type type, int temp, void *data)
 		pr_err("Hotplug task is not initialized\n");
 	return 0;
 }
+
 /* Adjust cpus offlined bit based on temperature reading. */
 static int hotplug_init_cpu_offlined(void)
 {
