@@ -34,6 +34,7 @@ struct wcnss_wlan_config {
 	int	is_pronto_v4;
 	void __iomem	*msm_wcnss_base;
 	int	iris_id;
+	int	vbatt;
 };
 
 enum {
@@ -51,6 +52,11 @@ enum {
 	WCNSS_WLAN_MAX_GPIO,
 };
 
+#define WCNSS_VBATT_THRESHOLD           3500000
+#define WCNSS_VBATT_GUARD               20000
+#define WCNSS_VBATT_HIGH                3700000
+#define WCNSS_VBATT_LOW                 3300000
+#define WCNSS_VBATT_INITIAL             3000000
 #define WCNSS_WLAN_IRQ_INVALID -1
 #define HAVE_WCNSS_SUSPEND_RESUME_NOTIFY 1
 #define HAVE_WCNSS_RESET_INTR 1
