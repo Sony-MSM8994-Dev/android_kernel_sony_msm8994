@@ -258,7 +258,9 @@ static void lmh_read_and_update(struct lmh_driver_data *lmh_dat)
 	list_for_each_entry(lmh_sensor, &lmh_sensor_list, list_ptr)
 		lmh_sensor->last_read_value = 0;
 	payload.count = 0;
-	desc_arg.args[0] = cmd_buf.addr = SCM_BUFFER_PHYS(&payload);
+	cmd_buf.addr = SCM_BUFFER_PHYS(&payload);
+	/* &payload may be a physical address > 4 GB */
+	desc_arg.args[0] = SCM_BUFFER_PHYS(&payload);
 	desc_arg.args[1] = cmd_buf.size
 			= SCM_BUFFER_SIZE(struct lmh_sensor_packet);
 	desc_arg.arginfo = SCM_ARGS(2, SCM_RW, SCM_VAL);
@@ -570,7 +572,9 @@ static int lmh_get_sensor_list(void)
 
 	do {
 		payload->count = next;
-		desc_arg.args[0] = cmd_buf.addr = payload_phys;
+		cmd_buf.addr = payload_phys;
+		/* payload_phys may be a physical address > 4 GB */
+		desc_arg.args[0] = payload_phys;
 		desc_arg.args[1] = cmd_buf.size = SCM_BUFFER_SIZE(struct
 				lmh_sensor_packet);
 		desc_arg.arginfo = SCM_ARGS(2, SCM_RW, SCM_VAL);
@@ -705,7 +709,9 @@ static int lmh_get_dev_info(void)
 	}
 
 	do {
-		desc_arg.args[0] = cmd_buf.list_addr = SCM_BUFFER_PHYS(payload);
+		cmd_buf.list_addr = SCM_BUFFER_PHYS(payload);
+		/* &payload may be a physical address > 4 GB */
+		desc_arg.args[0] = SCM_BUFFER_PHYS(payload);
 		desc_arg.args[1] = cmd_buf.list_size =
 			SCM_BUFFER_SIZE(uint32_t) * LMH_GET_PROFILE_SIZE;
 		desc_arg.args[2] = cmd_buf.list_start = next;
