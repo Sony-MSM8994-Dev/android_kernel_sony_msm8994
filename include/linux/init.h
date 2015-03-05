@@ -254,19 +254,21 @@ struct obs_kernel_param {
  * obs_kernel_param "array" too far apart in .init.setup.
  */
 #define __setup_param(str, unique_id, fn, early)			\
-	static const char __setup_str_##unique_id[] __initconst	\
-		__aligned(1) = str; \
-	static struct obs_kernel_param __setup_##unique_id	\
-		__used __section(.init.setup)			\
-		__attribute__((aligned((sizeof(long)))))	\
+	static const char __setup_str_##unique_id[] __initconst		\
+		__aligned(1) = str;					\
+	static struct obs_kernel_param __setup_##unique_id		\
+		__used __section(.init.setup)				\
+		__attribute__((aligned((sizeof(long)))))		\
 		= { __setup_str_##unique_id, fn, early }
 
-#define __setup(str, fn)					\
+#define __setup(str, fn)						\
 	__setup_param(str, fn, fn, 0)
 
-/* NOTE: fn is as per module_param, not __setup!  Emits warning if fn
- * returns non-zero. */
-#define early_param(str, fn)					\
+/*
+ * NOTE: fn is as per module_param, not __setup!
+ * Emits warning if fn returns non-zero.
+ */
+#define early_param(str, fn)						\
 	__setup_param(str, fn, fn, 1)
 
 /* Relies on boot_command_line being set */
