@@ -3752,6 +3752,11 @@ int msm_venc_ctrl_init(struct msm_vidc_inst *inst)
 			}
 		}
 
+		if (!ctrl) {
+			dprintk(VIDC_ERR, "%s - invalid ctrl\n", __func__);
+			return -EINVAL;
+		}
+
 		ret_val = inst->ctrl_handler.error;
 		if (ret_val) {
 			dprintk(VIDC_ERR,
