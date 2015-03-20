@@ -1552,8 +1552,12 @@ EXPORT_SYMBOL(wcnss_get_wlan_config);
 
 int wcnss_is_hw_pronto_ver3(void)
 {
-	if (penv && penv->pdev)
-		return penv->wlan_config.is_pronto_v3;
+	if (penv && penv->pdev) {
+		if (penv->wlan_config.is_pronto_v3)
+			return penv->wlan_config.is_pronto_v3;
+		else if (penv->wlan_config.is_pronto_v4)
+			return penv->wlan_config.is_pronto_v4;
+	}
 	return 0;
 }
 EXPORT_SYMBOL(wcnss_is_hw_pronto_ver3);
@@ -2642,6 +2646,7 @@ wcnss_trigger_config(struct platform_device *pdev)
 	struct resource *res;
 	int is_pronto_vt;
 	int is_pronto_v3;
+	int is_pronto_v4;
 	int pil_retry = 0;
 	int has_pronto_hw = of_property_read_bool(pdev->dev.of_node,
 							"qcom,has-pronto-hw");
@@ -2651,6 +2656,9 @@ wcnss_trigger_config(struct platform_device *pdev)
 
 	is_pronto_v3 = of_property_read_bool(pdev->dev.of_node,
 							"qcom,is-pronto-v3");
+
+	is_pronto_v4 = of_property_read_bool(pdev->dev.of_node,
+							"qcom,is-pronto-v4");
 
 	if (of_property_read_u32(pdev->dev.of_node,
 			"qcom,wlan-rx-buff-count", &penv->wlan_rx_buff_count)) {
@@ -2676,6 +2684,7 @@ wcnss_trigger_config(struct platform_device *pdev)
 	penv->wlan_config.use_48mhz_xo = has_48mhz_xo;
 	penv->wlan_config.is_pronto_vt = is_pronto_vt;
 	penv->wlan_config.is_pronto_v3 = is_pronto_v3;
+	penv->wlan_config.is_pronto_v4 = is_pronto_v4;
 
 	if (WCNSS_CONFIG_UNSPECIFIED == has_autodetect_xo && has_pronto_hw) {
 		has_autodetect_xo = of_property_read_bool(pdev->dev.of_node,
