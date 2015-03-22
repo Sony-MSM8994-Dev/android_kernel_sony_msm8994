@@ -3340,6 +3340,12 @@ static irqreturn_t hdmi_tx_isr(int irq, void *data)
 			(DSS_REG_R(io, HDMI_HPD_INT_STATUS) & BIT(1)) >> 1;
 		spin_unlock_irqrestore(&hdmi_ctrl->hpd_state_lock, flags);
 
+		if (hdmi_tx_is_hdcp_enabled(hdmi_ctrl)) {
+			hdmi_hdcp_cancel_auth(
+				hdmi_ctrl->feature_data[HDMI_TX_FEAT_HDCP],
+				!hdmi_ctrl->hpd_state);
+		}
+
 		/* Ack the current hpd */
 		if (hdmi_ctrl->hpd_state) {
 			/*
