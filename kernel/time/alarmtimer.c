@@ -88,6 +88,7 @@ void power_on_alarm_init(void)
 
 	rtc = alarmtimer_get_rtcdev();
 
+	/* If we have no rtcdev, just return */
 	if (!rtc)
 		return;
 
