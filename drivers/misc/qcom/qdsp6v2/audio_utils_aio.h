@@ -139,7 +139,7 @@ struct audio_aio_buffer_node {
 	struct list_head list;
 	struct msm_audio_aio_buf buf;
 	unsigned long paddr;
-	unsigned long token;
+	uint32_t token;
 	void            *kvaddr;
 	union meta_data meta_info;
 };
