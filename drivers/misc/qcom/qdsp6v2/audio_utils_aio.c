@@ -1031,7 +1031,7 @@ static int audio_aio_ion_remove(struct q6audio_aio *audio,
 			pr_debug("%s[%pK]:remove region fd %d vaddr %pK\n",
 				__func__, audio, info->fd, info->vaddr);
 			rc = q6asm_memory_unmap(audio->ac,
-						(uint32_t) region->paddr, IN);
+						region->paddr, IN);
 			if (rc < 0)
 				pr_err("%s[%pK]: memory unmap failed\n",
 					__func__, audio);
