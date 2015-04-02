@@ -849,7 +849,7 @@ void __init timekeeping_init(void)
 	raw_spin_unlock_irqrestore(&timekeeper_lock, flags);
 }
 
-/* time in seconds when suspend began */
+/* time in seconds when suspend began for persistent clock */
 static struct timespec timekeeping_suspend_time;
 
 /**
@@ -1017,24 +1017,26 @@ static int timekeeping_suspend(void)
 	timekeeping_forward_now(tk);
 	timekeeping_suspended = 1;
 
-	/*
-	 * To avoid drift caused by repeated suspend/resumes,
-	 * which each can add ~1 second drift error,
-	 * try to compensate so the difference in system time
-	 * and persistent_clock time stays close to constant.
-	 */
-	delta = timespec_sub(tk_xtime(tk), timekeeping_suspend_time);
-	delta_delta = timespec_sub(delta, old_delta);
-	if (abs(delta_delta.tv_sec)  >= 2) {
+	if (has_persistent_clock()) {
 		/*
-		 * if delta_delta is too large, assume time correction
-		 * has occured and set old_delta to the current delta.
+		 * To avoid drift caused by repeated suspend/resumes,
+		 * which each can add ~1 second drift error,
+		 * try to compensate so the difference in system time
+		 * and persistent_clock time stays close to constant.
 		 */
-		old_delta = delta;
-	} else {
-		/* Otherwise try to adjust old_system to compensate */
-		timekeeping_suspend_time =
-			timespec_add(timekeeping_suspend_time, delta_delta);
+		delta = timespec_sub(tk_xtime(tk), timekeeping_suspend_time);
+		delta_delta = timespec_sub(delta, old_delta);
+		if (abs(delta_delta.tv_sec) >= 2) {
+			/*
+			 * if delta_delta is too large, assume time correction
+			 * has occurred and set old_delta to the current delta.
+			 */
+			old_delta = delta;
+		} else {
+			/* Otherwise try to adjust old_system to compensate */
+			timekeeping_suspend_time =
+				timespec_add(timekeeping_suspend_time, delta_delta);
+		}
 	}
 
 	timekeeping_update(tk, false, true);
