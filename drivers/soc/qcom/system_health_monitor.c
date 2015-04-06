@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -9,6 +9,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+
 #include <linux/cdev.h>
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -54,7 +55,7 @@ module_param_named(default_timeout_ms, shm_default_timeout_ms,
 
 #define SHM_ILCTXT_NUM_PAGES 2
 static void *shm_ilctxt;
-#define SHM_INFO(x...) do { \
+#define SHM_INFO_LOG(x...) do { \
 	if ((shm_debug_mask & SHM_INFO_FLAG) && shm_ilctxt) \
 		ipc_log_string(shm_ilctxt, x); \
 } while (0)
@@ -192,11 +193,11 @@ static int restart_notifier_cb(struct notifier_block *this,
 	if (code == SUBSYS_BEFORE_SHUTDOWN) {
 		atomic_set(&tmp_hma_info->is_in_reset, 1);
 		synchronize_srcu(&tmp_hma_info->reset_srcu);
-		SHM_INFO("%s: %s going to shutdown\n",
+		SHM_INFO_LOG("%s: %s going to shutdown\n",
 			 __func__, tmp_hma_info->ssrestart_string);
 	} else if (code == SUBSYS_AFTER_POWERUP) {
 		atomic_set(&tmp_hma_info->is_in_reset, 0);
-		SHM_INFO("%s: %s powered up\n",
+		SHM_INFO_LOG("%s: %s powered up\n",
 			 __func__, tmp_hma_info->ssrestart_string);
 	}
 	return 0;
@@ -222,7 +223,7 @@ static void shm_svc_restart_worker(struct work_struct *work)
 	int rcu_id;
 
 	if (rwp->check_count <= atomic_read(&tmp_hma_info->report_count)) {
-		SHM_INFO("%s: No Action on Health Check Attempt %d to %s\n",
+		SHM_INFO_LOG("%s: No Action on Health Check Attempt %d to %s\n",
 			 __func__, rwp->check_count,
 			 tmp_hma_info->subsys_name);
 		kfree(rwp);
@@ -230,7 +231,8 @@ static void shm_svc_restart_worker(struct work_struct *work)
 	}
 
 	if (!tmp_hma_info->conn_h || rwp->conn_h != tmp_hma_info->conn_h) {
-		SHM_INFO("%s: Connection to %s is reset. No further action\n",
+		SHM_INFO_LOG(
+			"%s: Connection to %s is reset. No further action\n",
 			 __func__, tmp_hma_info->subsys_name);
 		kfree(rwp);
 		return;
@@ -238,7 +240,8 @@ static void shm_svc_restart_worker(struct work_struct *work)
 
 	rcu_id = srcu_read_lock(&tmp_hma_info->reset_srcu);
 	if (atomic_read(&tmp_hma_info->is_in_reset)) {
-		SHM_INFO("%s: %s is going thru restart. No further action\n",
+		SHM_INFO_LOG(
+			"%s: %s is going thru restart. No further action\n",
 			 __func__, tmp_hma_info->subsys_name);
 		srcu_read_unlock(&tmp_hma_info->reset_srcu, rcu_id);
 		kfree(rwp);
@@ -359,7 +362,7 @@ static void shm_svc_disconnect_worker(struct work_struct *work)
 	mutex_lock(&hma_info_list_lock);
 	list_for_each_entry(tmp_hma_info, &hma_info_list, list) {
 		if (dwp->conn_h == tmp_hma_info->conn_h) {
-			SHM_INFO("%s: conn_h %p to HMA in %s exited\n",
+			SHM_INFO_LOG("%s: conn_h %p to HMA in %s exited\n",
 				 __func__, dwp->conn_h,
 				 tmp_hma_info->subsys_name);
 			tmp_hma_info->conn_h = NULL;
@@ -463,7 +466,7 @@ static int handle_health_mon_reg_req(void *conn_h, void *req_h, void *buf)
 			ratelimit_state_init(&tmp_hma_info->rs,
 					     msecs_to_jiffies(DEFAULT_SHM_RATELIMIT_INTERVAL),
 					     DEFAULT_SHM_RATELIMIT_BURST);
-			SHM_INFO("%s: from %s timeout_ms %d\n",
+			SHM_INFO_LOG("%s: from %s timeout_ms %d\n",
 				 __func__, req->name, tmp_hma_info->timeout);
 			hma_info_found = true;
 		} else if (!strcmp(tmp_hma_info->subsys_name, req->name)) {
@@ -522,10 +525,10 @@ static int handle_health_mon_health_check_complete_req(void *conn_h,
 		hma_info_found = true;
 		if (req->result == HEALTH_MONITOR_CHECK_SUCCESS_V01) {
 			atomic_inc(&tmp_hma_info->report_count);
-			SHM_INFO("%s: %s Health Check Success\n",
+			SHM_INFO_LOG("%s: %s Health Check Success\n",
 				 __func__, tmp_hma_info->subsys_name);
 		} else {
-			SHM_INFO("%s: %s Health Check Failure\n",
+			SHM_INFO_LOG("%s: %s Health Check Failure\n",
 				 __func__, tmp_hma_info->subsys_name);
 		}
 	}
@@ -714,7 +717,7 @@ static long system_health_monitor_ioctl(struct file *file, unsigned int cmd,
 
 	switch (cmd) {
 	case CHECK_SYSTEM_HEALTH_IOCTL:
-		SHM_INFO("%s by %s\n", __func__, current->comm);
+		SHM_INFO_LOG("%s by %s\n", __func__, current->comm);
 		rc = kern_check_system_health();
 		break;
 	default:
@@ -849,7 +852,7 @@ static int system_health_monitor_probe(struct platform_device *pdev)
 		}
 
 		list_add_tail(&hma->list, &hma_info_list);
-		SHM_INFO("%s: Added HMA info for %s\n",
+		SHM_INFO_LOG("%s: Added HMA info for %s\n",
 			 __func__, hma->subsys_name);
 	}
 
@@ -946,7 +949,7 @@ static int __init system_health_monitor_init(void)
 		rc = PTR_ERR(system_health_monitor_devp);
 		goto init_error3;
 	}
-	SHM_INFO("%s: Complete\n", __func__);
+	SHM_INFO_LOG("%s: Complete\n", __func__);
 	return 0;
 init_error3:
 	cdev_del(&system_health_monitor_cdev);
