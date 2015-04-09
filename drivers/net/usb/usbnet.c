@@ -1083,7 +1083,7 @@ static void __handle_set_rx_mode(struct usbnet *dev)
  * especially now that control transfers can be queued.
  */
 static void
-kevent (struct work_struct *work)
+usbnet_deferred_kevent (struct work_struct *work)
 {
 	struct usbnet		*dev =
 		container_of(work, struct usbnet, kevent);
@@ -1624,19 +1624,19 @@ usbnet_probe (struct usb_interface *udev, const struct usb_device_id *prod)
 	dev->driver_name = name;
 	dev->msg_enable = netif_msg_init (msg_level, NETIF_MSG_DRV
 				| NETIF_MSG_PROBE | NETIF_MSG_LINK);
-	init_waitqueue_head(&dev->wait);
+	init_waitqueue_head (&dev->wait);
 	skb_queue_head_init (&dev->rxq);
 	skb_queue_head_init (&dev->txq);
 	skb_queue_head_init (&dev->done);
-	skb_queue_head_init(&dev->rxq_pause);
-	INIT_WORK(&dev->bh_w, usbnet_bh_w);
-	INIT_WORK (&dev->kevent, kevent);
+	skb_queue_head_init (&dev->rxq_pause);
+	INIT_WORK (&dev->bh_w, usbnet_bh_w);
+	INIT_WORK (&dev->kevent, usbnet_deferred_kevent);
 	init_usb_anchor(&dev->deferred);
 	dev->delay.function = usbnet_bh;
 	dev->delay.data = (unsigned long) dev;
 	init_timer (&dev->delay);
 	mutex_init (&dev->phy_mutex);
-	mutex_init(&dev->interrupt_mutex);
+	mutex_init (&dev->interrupt_mutex);
 	dev->interrupt_count = 0;
 
 	dev->net = net;
