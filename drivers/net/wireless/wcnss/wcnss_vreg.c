@@ -157,6 +157,18 @@ static struct vregs_info pronto_vregs_pronto_v3[] = {
 		1800000, 0,    NULL},
 };
 
+/* WCNSS regulators for Pronto v4 hardware */
+static struct vregs_info pronto_vregs_pronto_v4[] = {
+	{"qcom,pronto-vddmx",  VREG_NULL_CONFIG, RPM_REGULATOR_LEVEL_TURBO,
+		RPM_REGULATOR_LEVEL_NONE, RPM_REGULATOR_LEVEL_TURBO,
+		0,    NULL},
+	{"qcom,pronto-vddcx",  VREG_NULL_CONFIG, RPM_REGULATOR_LEVEL_NOM,
+		RPM_REGULATOR_LEVEL_NONE, RPM_REGULATOR_LEVEL_TURBO,
+		0,             NULL},
+	{"qcom,pronto-vddpx",  VREG_NULL_CONFIG, 1800000, 0,
+		1800000, 0,    NULL},
+};
+
 
 struct host_driver {
 	char name[20];
@@ -612,7 +624,8 @@ static void wcnss_iris_vregs_off(enum wcnss_hw_type hw_type,
 		wcnss_vregs_off(iris_vregs_riva, ARRAY_SIZE(iris_vregs_riva));
 		break;
 	case WCNSS_PRONTO_HW:
-		if (cfg->is_pronto_vt || cfg->is_pronto_v3) {
+		if (cfg->is_pronto_vt || cfg->is_pronto_v3
+					|| cfg->is_pronto_v4) {
 			wcnss_vregs_off(iris_vregs_pronto_v2,
 				ARRAY_SIZE(iris_vregs_pronto_v2));
 		} else {
@@ -638,7 +651,8 @@ static int wcnss_iris_vregs_on(struct device *dev,
 				ARRAY_SIZE(iris_vregs_riva));
 		break;
 	case WCNSS_PRONTO_HW:
-		if (cfg->is_pronto_vt || cfg->is_pronto_v3) {
+		if (cfg->is_pronto_vt || cfg->is_pronto_v3
+					|| cfg->is_pronto_v4) {
 			ret = wcnss_vregs_on(dev, iris_vregs_pronto_v2,
 					ARRAY_SIZE(iris_vregs_pronto_v2));
 		} else {
@@ -666,6 +680,9 @@ static void wcnss_core_vregs_off(enum wcnss_hw_type hw_type,
 		} else if (cfg->is_pronto_v3) {
 			wcnss_vregs_off(pronto_vregs_pronto_v3,
 				ARRAY_SIZE(pronto_vregs_pronto_v3));
+		} else if (cfg->is_pronto_v4) {
+			wcnss_vregs_off(pronto_vregs_pronto_v4,
+				ARRAY_SIZE(pronto_vregs_pronto_v4));
 		} else {
 			wcnss_vregs_off(pronto_vregs,
 				ARRAY_SIZE(pronto_vregs));
@@ -694,6 +711,9 @@ static int wcnss_core_vregs_on(struct device *dev,
 		} else if (cfg->is_pronto_v3) {
 			ret = wcnss_vregs_on(dev, pronto_vregs_pronto_v3,
 					ARRAY_SIZE(pronto_vregs_pronto_v3));
+		} else if (cfg->is_pronto_v4) {
+			ret = wcnss_vregs_on(dev, pronto_vregs_pronto_v4,
+					ARRAY_SIZE(pronto_vregs_pronto_v4));
 		} else {
 			ret = wcnss_vregs_on(dev, pronto_vregs,
 					ARRAY_SIZE(pronto_vregs));
