@@ -5717,6 +5717,8 @@ static int msm_otg_probe(struct platform_device *pdev)
 	motg->pm_notify.notifier_call = msm_otg_pm_notify;
 	register_pm_notifier(&motg->pm_notify);
 
+	msm_bam_set_usb_dev(&pdev->dev);
+
 	return 0;
 
 remove_cdev:
