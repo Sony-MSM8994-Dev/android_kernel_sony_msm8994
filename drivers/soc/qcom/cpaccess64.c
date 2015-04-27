@@ -133,8 +133,13 @@ static int get_register_params(char *str_tmp)
 	unsigned long op1, op2, crn, crm, op0, write_value;
 	char rw;
 	int cnt = 0;
+	char *p;
 
-	strlcpy(type, strsep(&str_tmp, ":"), TYPE_MAX_CHARACTERS);
+	p = strsep(&str_tmp, ":");
+	if (p == NULL)
+		return -EINVAL;
+
+	strlcpy(type, p, TYPE_MAX_CHARACTERS);
 	if (strncasecmp(type, "S", TYPE_MAX_CHARACTERS) == 0) {
 
 		sscanf(str_tmp, "%lu:%lu:%lu:%lu:%lu:%c:%lx:%d",
