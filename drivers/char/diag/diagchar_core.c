@@ -1596,6 +1596,7 @@ exit:
 				goto end;
 			}
 		}
+		mutex_lock(&driver->diagchar_mutex);
 		for (i = 0; i < NUM_SMD_DCI_CHANNELS; i++) {
 			if (driver->smd_dci[i].ch) {
 				queue_work(driver->diag_dci_wq,
@@ -1613,6 +1614,7 @@ exit:
 				}
 			}
 		}
+		mutex_unlock(&driver->diagchar_mutex);
 		mutex_unlock(&driver->dci_mutex);
 		goto end;
 	}
