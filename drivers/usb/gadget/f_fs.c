@@ -1700,6 +1700,13 @@ static int ffs_func_eps_enable(struct ffs_function *func)
 		if (needs_comp_desc)
 			ep->ep->comp_desc = comp_desc;
 
+		ret = config_ep_by_speed(func->gadget, &func->function, ep->ep);
+		if (ret) {
+			pr_err("%s(): config_ep_by_speed(%d) err for %s\n",
+						__func__, ret, ep->ep->name);
+			break;
+		}
+
 		ret = usb_ep_enable(ep->ep);
 		if (likely(!ret)) {
 			epfile->ep = ep;
