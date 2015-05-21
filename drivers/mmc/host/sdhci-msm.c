@@ -2895,10 +2895,6 @@ static void sdhci_msm_disable_data_xfer(struct sdhci_host *host)
 				mmc_hostname(host->mmc), __func__);
 		BUG();
 	}
-	/* Disable the test bus for device slot */
-	value = readl_relaxed(msm_host->core_mem + CORE_TESTBUS_CONFIG);
-	value &= ~CORE_TESTBUS_ENA;
-	writel_relaxed(value, msm_host->core_mem + CORE_TESTBUS_CONFIG);
 
 	udelay(CORE_AHB_DESC_DELAY_US);
 }
@@ -2954,9 +2950,6 @@ void sdhci_msm_dump_vendor_regs(struct sdhci_host *host)
 		pr_info(" Test bus[%d to %d]: 0x%08x 0x%08x 0x%08x 0x%08x\n",
 				i, i + 3, debug_reg[i], debug_reg[i+1],
 				debug_reg[i+2], debug_reg[i+3]);
-	/* Disable test bus */
-	writel_relaxed(~CORE_TESTBUS_ENA, msm_host->core_mem +
-			CORE_TESTBUS_CONFIG);
 	if (host->is_crypto_en) {
 		sdhci_msm_ice_get_status(host, &sts);
 		pr_info("%s: ICE status %x\n", mmc_hostname(host->mmc), sts);
@@ -3015,6 +3008,22 @@ void sdhci_msm_reset_enter(struct sdhci_host *host, u8 mask)
 		writel_relaxed(1, host->ioaddr + CORE_VENDOR_SPEC_ICE_CTRL);
 }
 
+static void sdhci_msm_clear_set_dumpregs(struct sdhci_host *host, bool set)
+{
+	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
+	struct sdhci_msm_host *msm_host = pltfm_host->priv;
+
+	if (set) {
+		writel_relaxed(CORE_TESTBUS_ENA,
+			       msm_host->core_mem + CORE_TESTBUS_CONFIG);
+	} else {
+		u32 value;
+		value = readl_relaxed(msm_host->core_mem + CORE_TESTBUS_CONFIG);
+		value &= ~CORE_TESTBUS_ENA;
+		writel_relaxed(value, msm_host->core_mem + CORE_TESTBUS_CONFIG);
+	}
+}
+
 static struct sdhci_ops sdhci_msm_ops = {
 	.crypto_engine_cfg = sdhci_msm_ice_cfg,
 	.crypto_engine_reset = sdhci_msm_ice_reset,
@@ -3032,6 +3041,7 @@ static struct sdhci_ops sdhci_msm_ops = {
 	.config_auto_tuning_cmd = sdhci_msm_config_auto_tuning_cmd,
 	.enable_controller_clock = sdhci_msm_enable_controller_clock,
 	.reset_workaround = sdhci_msm_reset_workaround,
+	.clear_set_dumpregs = sdhci_msm_clear_set_dumpregs,
 };
 
 static int sdhci_msm_cfg_mpm_pin_wakeup(struct sdhci_host *host, unsigned mode)
