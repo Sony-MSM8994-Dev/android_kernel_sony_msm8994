@@ -318,6 +318,7 @@ struct msm_otg_platform_data {
 	bool emulation;
 	bool enable_epprime_fix;
 	struct clk *system_clk;
+	struct clk *pclk;
 };
 
 /* phy related flags */
@@ -594,6 +595,7 @@ struct ci13xxx_platform_data {
 	bool enable_ahb2ahb_bypass;
 	bool enable_epprime_fix;
 	struct clk *system_clk;
+	struct clk *pclk;
 };
 
 /**
