@@ -59,8 +59,6 @@
 /* If the device is not responding */
 #define MMC_CORE_TIMEOUT_MS	(10 * 60 * 1000) /* 10 minute timeout */
 
-static void mmc_clk_scaling(struct mmc_host *host, bool from_wq);
-
 /*
  * Background operations can take a long time, depending on the housekeeping
  * operations the card has to perform.
@@ -203,15 +201,39 @@ mmc_clk_scaling_update_state(struct mmc_host *host, struct mmc_request *mrq)
 	return;
 }
 
-static inline void mmc_update_clk_scaling(struct mmc_host *host)
+void mmc_update_clk_scaling(struct mmc_host *host,
+					  bool is_cmdq_dcmd)
 {
-	if (host->clk_scaling.enable && !host->clk_scaling.invalid_state) {
-		host->clk_scaling.busy_time_us +=
-			ktime_to_us(ktime_sub(ktime_get(),
-					host->clk_scaling.start_busy));
+	bool cmdq_mode = !!mmc_card_cmdq(host->card);
+
+	if (!host->clk_scaling.enable || host->clk_scaling.invalid_state)
+		return;
+
+	/*
+	 *  For CQ mode: In completion of DCMD request, start busy time in
+	 *  case of pending data requests
+	 */
+	if (is_cmdq_dcmd) {
+		if (host->cmdq_ctx.data_active_reqs) {
+			host->clk_scaling.cq_is_busy_started = true;
+			host->clk_scaling.start_busy = ktime_get();
+		}
+		return;
+	}
+
+	host->clk_scaling.busy_time_us +=
+		ktime_to_us(ktime_sub(ktime_get(),
+			host->clk_scaling.start_busy));
+
+	if ((!cmdq_mode) || (cmdq_mode && host->cmdq_ctx.data_active_reqs)) {
+		host->clk_scaling.cq_is_busy_started = true;
 		host->clk_scaling.start_busy = ktime_get();
+	} else {
+		host->clk_scaling.cq_is_busy_started = false;
 	}
 }
+EXPORT_SYMBOL(mmc_update_clk_scaling);
+
 /**
  *	mmc_request_done - finish processing an MMC request
  *	@host: MMC host which completed request
@@ -228,7 +250,7 @@ void mmc_request_done(struct mmc_host *host, struct mmc_request *mrq)
 	ktime_t diff;
 #endif
 	if (host->card)
-		mmc_update_clk_scaling(host);
+		mmc_update_clk_scaling(host, false);
 
 	if (err && cmd->retries && mmc_host_is_spi(host)) {
 		if (cmd->resp[0] & R1_SPI_ILLEGAL_COMMAND)
@@ -847,7 +869,7 @@ static int mmc_wait_for_data_req_done(struct mmc_host *host,
 				 * Update stuff that we ought to do when the
 				 * request actually completes.
 				 */
-				mmc_update_clk_scaling(host);
+				mmc_update_clk_scaling(host, false);
 				err = mmc_stop_request(host);
 				if (err == MMC_BLK_NO_REQ_TO_STOP) {
 					pending_is_urgent = true;
@@ -3264,6 +3286,7 @@ void mmc_reset_clk_scale_stats(struct mmc_host *host)
 {
 	host->clk_scaling.busy_time_us = 0;
 	host->clk_scaling.window_time = jiffies;
+	host->clk_scaling.cq_is_busy_started = false;
 }
 EXPORT_SYMBOL_GPL(mmc_reset_clk_scale_stats);
 
@@ -3445,6 +3468,8 @@ static int mmc_clk_update_freq(struct mmc_host *host,
 	if (freq != host->clk_scaling.curr_freq) {
 		if (!mmc_is_vaild_state_for_clk_scaling(host, state)) {
 			err = -EAGAIN;
+			pr_debug("%s: %s: invalid state_for_clk_scaling\n",
+				 mmc_hostname(host), __func__);
 			goto error;
 		}
 
@@ -3465,6 +3490,28 @@ out:
 	return err;
 }
 
+static int mmc_cmdq_halt_on_empty_queue(struct mmc_host *host)
+{
+	int err = 0;
+
+	while (host->cmdq_ctx.active_reqs) {
+		err = wait_io_event_interruptible(host->cmdq_ctx.queue_empty_wq,
+				(!host->cmdq_ctx.active_reqs));
+		if (host->cmdq_ctx.active_reqs)
+			continue;
+	}
+
+	err = mmc_cmdq_halt(host, true);
+	if (err) {
+		pr_err("%s: %s: mmc_cmdq_halt failed (%d)\n",
+		       mmc_hostname(host), __func__, err);
+		goto out;
+	}
+
+out:
+	return err;
+}
+
 /**
  * mmc_clk_scaling() - clock scaling decision algorithm
  * @host:	pointer to mmc host structure
@@ -3480,7 +3527,7 @@ out:
  * frequency to minimum supported by the host. Otherwise,
  * retain current frequency and do nothing.
  */
-static void mmc_clk_scaling(struct mmc_host *host, bool from_wq)
+void mmc_clk_scaling(struct mmc_host *host, bool from_wq)
 {
 	int err = 0;
 	struct mmc_card *card = host->card;
@@ -3491,11 +3538,20 @@ static void mmc_clk_scaling(struct mmc_host *host, bool from_wq)
 	unsigned int down_threshold = host->clk_scaling.down_threshold;
 	bool queue_scale_down_work = false;
 	enum mmc_load state;
+	bool cmdq_mode;
 
+	if (!host) {
+		pr_err("%s: invalid host\n", __func__);
+		goto out;
+	}
+
+	card = host->card;
 	if (!card || !host->bus_ops || !host->bus_ops->change_bus_speed) {
 		pr_err("%s: %s: invalid entry\n", mmc_hostname(host), __func__);
 		goto out;
 	}
+
+	cmdq_mode = !!mmc_card_cmdq(card);
 
 	/* Check if the clocks are already gated. */
 	if (!host->ios.clock)
@@ -3505,17 +3561,31 @@ static void mmc_clk_scaling(struct mmc_host *host, bool from_wq)
 			msecs_to_jiffies(host->clk_scaling.polling_delay_ms)))
 		goto out;
 
+	if (cmdq_mode)
+		spin_lock_bh(&host->clk_scaling.lock);
+	if (host->clk_scaling.busy_time_us == 0) {
+		if (cmdq_mode)
+			spin_unlock_bh(&host->clk_scaling.lock);
+		goto out;
+	}
+
 	/* handle time wrap */
 	total_time_ms = jiffies_to_msecs((long)jiffies -
 			(long)host->clk_scaling.window_time);
 
 	/* Check if we re-enter during clock switching */
-	if (unlikely(host->clk_scaling.in_progress))
+	if (unlikely(host->clk_scaling.in_progress)) {
+		if (cmdq_mode)
+			spin_unlock_bh(&host->clk_scaling.lock);
 		goto out;
+	}
 
 	host->clk_scaling.in_progress = true;
 
 	busy_time_ms = host->clk_scaling.busy_time_us / USEC_PER_MSEC;
+
+	if (cmdq_mode)
+		spin_unlock_bh(&host->clk_scaling.lock);
 
 	freq = host->clk_scaling.curr_freq;
 	state = host->clk_scaling.state;
@@ -3529,7 +3599,7 @@ static void mmc_clk_scaling(struct mmc_host *host, bool from_wq)
 		freq = mmc_get_max_frequency(host);
 		state = MMC_LOAD_HIGH;
 	} else if ((busy_time_ms * 100 < total_time_ms * down_threshold)) {
-		if (!from_wq)
+		if (!from_wq && !cmdq_mode)
 			queue_scale_down_work = true;
 		freq = mmc_get_min_frequency(host);
 		state = MMC_LOAD_LOW;
@@ -3540,7 +3610,23 @@ static void mmc_clk_scaling(struct mmc_host *host, bool from_wq)
 			if (!from_wq)
 				cancel_delayed_work_sync(
 						&host->clk_scaling.work);
+
+			if (cmdq_mode) {
+				err = mmc_cmdq_halt_on_empty_queue(host);
+				if (err)
+					goto out;
+			}
+
+			pr_debug("%s: %s: scale, freq %ld, busy_time_ms=%ld\n",
+				 mmc_hostname(host), __func__, freq,
+				 busy_time_ms);
 			err = mmc_clk_update_freq(host, freq, state);
+
+			if (cmdq_mode) {
+				if (mmc_cmdq_halt(host, false))
+					pr_err("%s: %s: cmdq unhalt failed\n",
+					       mmc_hostname(host), __func__);
+			}
 			if (!err)
 				host->clk_scaling.state = state;
 			else if (err == -EAGAIN)
@@ -3563,6 +3649,7 @@ no_reset_stats:
 out:
 	return;
 }
+EXPORT_SYMBOL(mmc_clk_scaling);
 
 /**
  * mmc_disable_clk_scaling() - Disable clock scaling
@@ -3613,6 +3700,7 @@ void mmc_init_clk_scaling(struct mmc_host *host)
 	mmc_reset_clk_scale_stats(host);
 	host->clk_scaling.enable = true;
 	host->clk_scaling.initialized = true;
+	spin_lock_init(&host->clk_scaling.lock);
 	pr_debug("%s: clk scaling enabled\n", mmc_hostname(host));
 }
 EXPORT_SYMBOL_GPL(mmc_init_clk_scaling);
