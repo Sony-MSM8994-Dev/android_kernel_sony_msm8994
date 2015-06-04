@@ -2447,6 +2447,10 @@ static int __to_user_mdp_overlay(struct mdp_overlay32 __user *ov32,
 	if (ret)
 		return -EFAULT;
 
+	ret = put_user(ov->frame_rate, &ov32->frame_rate);
+	if (ret)
+		return -EFAULT;
+
 	return 0;
 }
 
@@ -2505,6 +2509,10 @@ static int __from_user_mdp_overlay(struct mdp_overlay *ov,
 
 	if (get_user(data, &ov32->color_space) ||
 	    put_user(data, &ov->color_space))
+		return -EFAULT;
+
+	if (get_user(data, &ov32->frame_rate) ||
+	    put_user(data, &ov->frame_rate))
 		return -EFAULT;
 
 	return 0;
