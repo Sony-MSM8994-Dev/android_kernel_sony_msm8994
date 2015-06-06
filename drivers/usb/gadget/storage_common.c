@@ -152,9 +152,7 @@ struct fsg_lun {
 	atomic_t	eject_cdrom_timer_required;
 #endif
 #ifdef CONFIG_USB_MSC_PROFILING
-	spinlock_t	lock;
 	struct {
-
 		unsigned long rbytes;
 		unsigned long wbytes;
 		ktime_t rtime;
@@ -642,12 +640,10 @@ static ssize_t fsg_show_perf(struct device *dev, struct device_attribute *attr,
 	unsigned long rbytes, wbytes;
 	int64_t rtime, wtime;
 
-	spin_lock(&curlun->lock);
 	rbytes = curlun->perf.rbytes;
 	wbytes = curlun->perf.wbytes;
 	rtime = ktime_to_us(curlun->perf.rtime);
 	wtime = ktime_to_us(curlun->perf.wtime);
-	spin_unlock(&curlun->lock);
 
 	return snprintf(buf, PAGE_SIZE, "Write performance :"
 					"%lu bytes in %lld microseconds\n"
@@ -662,11 +658,8 @@ static ssize_t fsg_store_perf(struct device *dev, struct device_attribute *attr,
 	int value;
 
 	sscanf(buf, "%d", &value);
-	if (!value) {
-		spin_lock(&curlun->lock);
+	if (!value)
 		memset(&curlun->perf, 0, sizeof(curlun->perf));
-		spin_unlock(&curlun->lock);
-	}
 
 	return count;
 }
