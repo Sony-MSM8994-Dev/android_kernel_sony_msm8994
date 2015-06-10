@@ -203,6 +203,14 @@ struct socinfo_v10 {
 	uint32_t serial_number;
 };
 
+struct socinfo_v11 {
+	struct socinfo_v10 v10;
+
+	/* only valid when format==11*/
+	uint32_t num_pmics;
+	uint32_t pmic_array_offset;
+};
+
 static union {
 	struct socinfo_v1 v1;
 	struct socinfo_v2 v2;
@@ -214,6 +222,7 @@ static union {
 	struct socinfo_v8 v8;
 	struct socinfo_v9 v9;
 	struct socinfo_v10 v10;
+	struct socinfo_v11 v11;
 } *socinfo;
 
 static int msm8994v1;
@@ -1255,6 +1264,24 @@ static void socinfo_print(void)
 			socinfo->v7.pmic_die_revision,
 			socinfo->v9.foundry_id,
 			socinfo->v10.serial_number);
+		break;
+	case 11:
+		pr_info("v%u, id=%u, ver=%u.%u, raw_id=%u, raw_ver=%u, hw_plat=%u, hw_plat_ver=%u\n"
+			 " accessory_chip=%u, hw_plat_subtype=%u, pmic_model=%u, pmic_die_revision=%u foundry_id=%u"
+			 " serial_number=%u num_pmics=%u\n",
+			socinfo->v1.format,
+			socinfo->v1.id,
+			SOCINFO_VERSION_MAJOR(socinfo->v1.version),
+			SOCINFO_VERSION_MINOR(socinfo->v1.version),
+			socinfo->v2.raw_id, socinfo->v2.raw_version,
+			socinfo->v3.hw_platform, socinfo->v4.platform_version,
+			socinfo->v5.accessory_chip,
+			socinfo->v6.hw_platform_subtype,
+			socinfo->v7.pmic_model,
+			socinfo->v7.pmic_die_revision,
+			socinfo->v9.foundry_id,
+			socinfo->v10.serial_number,
+			socinfo->v11.num_pmics);
 		break;
 
 	default:
