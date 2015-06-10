@@ -3182,6 +3182,7 @@ static void msm_otg_sm_work(struct work_struct *w)
 	switch (otg->phy->state) {
 	case OTG_STATE_UNDEFINED:
 		msm_otg_reset(otg->phy);
+		msm_bam_set_usb_dev(otg->phy->dev);
 		msm_otg_init_sm(motg);
 		if (!psy && legacy_power_supply) {
 			psy = power_supply_get_by_name("usb");
@@ -5716,8 +5717,6 @@ static int msm_otg_probe(struct platform_device *pdev)
 	init_waitqueue_head(&motg->host_suspend_wait);
 	motg->pm_notify.notifier_call = msm_otg_pm_notify;
 	register_pm_notifier(&motg->pm_notify);
-
-	msm_bam_set_usb_dev(&pdev->dev);
 
 	return 0;
 
