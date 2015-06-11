@@ -1527,12 +1527,14 @@ config CRYPTO_DRBG_HMAC
 	bool "Enable HMAC DRBG"
 	default y
 	select CRYPTO_HMAC
+	select CRYPTO_SHA256
 	help
 	  Enable the HMAC DRBG variant as defined in NIST SP800-90A.
 
 config CRYPTO_DRBG_HASH
 	bool "Enable Hash DRBG"
 	select CRYPTO_HASH
+	select CRYPTO_SHA256
 	help
 	  Enable the Hash DRBG variant as defined in NIST SP800-90A.
 
