@@ -581,6 +581,7 @@ static void __init rcu_organize_nocb_kthreads(struct rcu_state *rsp);
 #endif /* #ifdef CONFIG_RCU_NOCB_CPU */
 static void __maybe_unused rcu_kick_nohz_cpu(int cpu);
 static bool init_nocb_callback_list(struct rcu_data *rdp);
+static void rcu_bind_gp_kthread(void);
 #endif /* #ifndef RCU_TREE_NONCORE */
 
 #ifdef CONFIG_RCU_TRACE
