@@ -624,6 +624,16 @@ config USB_HSIC_SMSC_HUB
 	  This adds support for connecting devices like mouse in HSIC
 	  Host mode.
 
+config USB_EXT_TYPE_C_PERICOM
+	tristate "USB Type-C charger detection support using Pericom chip"
+	depends on I2C && POWER_SUPPLY
+	help
+	  Enables support for the USB Type-C chargers using external
+	  pericom chip connected using I2C.
+
+	  This adds support for detecting USB Type-C chargers that
+	  can supply upto 3A Vbus current for charging.
+
 config TI_DRV2667
 	tristate "TI's DRV2667 haptic controller support"
 	depends on I2C
