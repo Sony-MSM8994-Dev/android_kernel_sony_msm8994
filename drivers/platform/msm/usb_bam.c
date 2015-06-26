@@ -1895,9 +1895,9 @@ static void usb_bam_finish_resume(struct work_struct *w)
 	pr_debug("%s: enter bam=%s\n", __func__, bam_enable_strings[cur_bam]);
 	mutex_lock(&info[cur_bam].suspend_resume_mutex);
 
-	/* Suspend happened in the meantime */
+	/* Suspend or disconnect happened in the meantime */
 	spin_lock(&usb_bam_ipa_handshake_info_lock);
-	if (info[cur_bam].bus_suspend) {
+	if (info[cur_bam].bus_suspend || info[cur_bam].disconnected) {
 		spin_unlock(&usb_bam_ipa_handshake_info_lock);
 		pr_debug("%s: Bus suspended, not resuming", __func__);
 		mutex_unlock(&info[cur_bam].suspend_resume_mutex);
