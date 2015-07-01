@@ -1335,6 +1335,8 @@ static void gbam2bam_connect_work(struct work_struct *w)
 				__func__, ret);
 			return;
 		}
+		gadget->bam2bam_func_enabled = true;
+
 		ret = usb_bam_connect(d->dst_connection_idx, &d->dst_pipe_idx);
 		if (ret) {
 			pr_err("%s: usb_bam_connect (dst) failed: err:%d\n",
@@ -1400,6 +1402,7 @@ static void gbam2bam_connect_work(struct work_struct *w)
 				__func__, ret);
 			return;
 		}
+		gadget->bam2bam_func_enabled = true;
 
 		if (gadget_is_dwc3(gadget)) {
 			if (!port) {
