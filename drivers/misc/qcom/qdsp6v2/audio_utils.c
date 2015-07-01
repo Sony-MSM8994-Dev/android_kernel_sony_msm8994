@@ -665,6 +665,9 @@ ssize_t audio_in_read(struct file *file,
 	memset(&meta, 0, sizeof(meta));
 	pr_debug("%s:session id %d: read - %zd\n", __func__, audio->ac->session,
 			count);
+	if (audio->reset_event)
+		return -ENETRESET;
+
 	if (!audio->enabled)
 		return -EFAULT;
 	mutex_lock(&audio->read_lock);
@@ -802,6 +805,9 @@ ssize_t audio_in_write(struct file *file,
 
 	pr_debug("%s:session id %d: to write[%zd]\n", __func__,
 			audio->ac->session, count);
+	if (audio->reset_event)
+		return -ENETRESET;
+
 	if (!audio->enabled)
 		return -EFAULT;
 	mutex_lock(&audio->write_lock);
