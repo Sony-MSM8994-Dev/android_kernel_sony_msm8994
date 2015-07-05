@@ -215,6 +215,7 @@ static struct cpe_info *cpe_default_handle;
 static void (*cpe_irq_control_callback)(u32 enable);
 static u32 cpe_msg_buffer;
 static struct mutex cpe_api_mutex;
+static struct mutex cpe_svc_lock;
 static struct cpe_svc_boot_event cpe_debug_vector;
 
 static enum cpe_svc_result
@@ -419,11 +420,13 @@ static void cpe_broadcast_notification(const struct cpe_info *t_info,
 		 __func__, payload->event);
 	payload->private_data = cdc_priv;
 
+	CPE_SVC_GRAB_LOCK(&cpe_svc_lock, "cpe_svc");
 	list_for_each_entry(n, &t_info->client_list, list) {
 		if (!(n->mask & CPE_SVC_CMI_MSG)) {
 			cpe_notify_client(n, payload);
 		}
 	}
+	CPE_SVC_REL_LOCK(&cpe_svc_lock, "cpe_svc");
 }
 
 static void *cpe_register_generic(struct cpe_info *t_info,
@@ -493,7 +496,7 @@ static void cpe_notify_cmi_client(struct cpe_info *t_info, u8 *payload,
 		enum cpe_svc_result result)
 {
 	struct cpe_notif_node *n = NULL;
-	struct cpe_svc_notification notif;
+	struct cmi_api_notification notif;
 	struct cmi_hdr *hdr;
 	u8 service = 0;
 
@@ -508,12 +511,18 @@ static void cpe_notify_cmi_client(struct cpe_info *t_info, u8 *payload,
 
 	notif.event = CPE_SVC_CMI_MSG;
 	notif.result = result;
-	notif.payload = payload;
+	notif.message = payload;
 
+	CPE_SVC_GRAB_LOCK(&cpe_svc_lock, "cpe_svc");
 	list_for_each_entry(n, &t_info->client_list, list) {
-		if ((n->mask & CPE_SVC_CMI_MSG) && n->service == service)
-			cpe_notify_client(n, &notif);
+		if ((n->mask & CPE_SVC_CMI_MSG) &&
+		    n->service == service &&
+		    n->notif.cmi_notification) {
+			n->notif.cmi_notification(&notif);
+			break;
+		}
 	}
+	CPE_SVC_REL_LOCK(&cpe_svc_lock, "cpe_svc");
 }
 
 static void cpe_toggle_irq_notification(struct cpe_info *t_info, u32 value)
@@ -1099,6 +1108,7 @@ void *cpe_svc_initialize(
 	t_info->cpe_cmd_validate = cpe_mt_validate_cmd;
 	t_info->cpe_start_notification = broadcast_boot_event;
 	mutex_init(&cpe_api_mutex);
+	mutex_init(&cpe_svc_lock);
 	pr_debug("%s: cpe services initialized\n", __func__);
 	t_info->state = CPE_STATE_INITIALIZED;
 	t_info->initialized = true;
@@ -1139,6 +1149,7 @@ enum cpe_svc_result cpe_svc_deinitialize(void *cpe_handle)
 	kfree(t_info->tgt);
 	kfree(t_info);
 	mutex_destroy(&cpe_api_mutex);
+	mutex_destroy(&cpe_svc_lock);
 
 	return rc;
 }
