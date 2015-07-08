@@ -423,7 +423,6 @@ struct msm_otg_platform_data {
  *               very slow plug in of wall charger.
  * @bc1p2_current_max: Max charging current allowed as per bc1.2 chg detection
  * @typec_current_max: Max charging current allowed as per type-c chg detection
- * @ui_enabled: USB Intterupt is enabled or disabled.
  * @is_ext_chg_dcp: To indicate whether charger detected by external entity
 		SMB hardware is DCP charger or not.
  * @pm_done: It is used to increment the pm counter using pm_runtime_get_sync.
@@ -573,7 +572,6 @@ struct msm_otg {
 	enum usb_ext_chg_status ext_chg_active;
 	struct completion ext_chg_wait;
 	struct pinctrl *phy_pinctrl;
-	int ui_enabled;
 	bool is_ext_chg_dcp;
 	bool pm_done;
 	struct qpnp_vadc_chip	*vadc_dev;
