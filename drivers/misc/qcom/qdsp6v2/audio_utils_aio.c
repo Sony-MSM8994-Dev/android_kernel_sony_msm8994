@@ -1027,7 +1027,7 @@ static int audio_aio_ion_remove(struct q6audio_aio *audio,
 	return rc;
 }
 
-static void audio_aio_async_write(struct q6audio_aio *audio,
+static int audio_aio_async_write(struct q6audio_aio *audio,
 				struct audio_aio_buffer_node *buf_node)
 {
 	int rc;
@@ -1037,7 +1037,7 @@ static void audio_aio_async_write(struct q6audio_aio *audio,
 	if (!audio || !buf_node) {
 		pr_err("%s NULL pointer audio=[0x%pK], buf_node=[0x%pK]\n",
 			__func__, audio, buf_node);
-		return;
+		return -EINVAL;
 	}
 	pr_debug("%s[%pK]: Send write buff %pK phy %pK len %d meta_enable = %d\n",
 		__func__, audio, buf_node, &buf_node->paddr,
@@ -1073,6 +1073,7 @@ static void audio_aio_async_write(struct q6audio_aio *audio,
 	rc = q6asm_async_write(ac, &param);
 	if (rc < 0)
 		pr_err("%s[%pK]:failed\n", __func__, audio);
+	return rc;
 }
 
 void audio_aio_post_event(struct q6audio_aio *audio, int type,
@@ -1103,7 +1104,7 @@ void audio_aio_post_event(struct q6audio_aio *audio, int type,
 	wake_up(&audio->event_wait);
 }
 
-static void audio_aio_async_read(struct q6audio_aio *audio,
+static int audio_aio_async_read(struct q6audio_aio *audio,
 				struct audio_aio_buffer_node *buf_node)
 {
 	struct audio_client *ac;
@@ -1125,12 +1126,14 @@ static void audio_aio_async_read(struct q6audio_aio *audio,
 	rc = q6asm_async_read(ac, &param);
 	if (rc < 0)
 		pr_err("%s[%pK]:failed\n", __func__, audio);
+	return rc;
 }
 
 static int audio_aio_buf_add_shared(struct q6audio_aio *audio, u32 dir,
 				struct audio_aio_buffer_node *buf_node)
 {
 	unsigned long flags;
+	int ret = 0;
 	pr_debug("%s[%pK]:node %pK dir %x buf_addr %pK buf_len %d data_len %d\n",
 		 __func__, audio, buf_node, dir, buf_node->buf.buf_addr,
 		buf_node->buf.buf_len, buf_node->buf.data_len);
@@ -1149,7 +1152,7 @@ static int audio_aio_buf_add_shared(struct q6audio_aio *audio, u32 dir,
 		/* Not a EOS buffer */
 		if (!(buf_node->meta_info.meta_in.nflags & AUDIO_DEC_EOS_SET)) {
 			spin_lock_irqsave(&audio->dsp_lock, flags);
-			audio_aio_async_write(audio, buf_node);
+			ret = audio_aio_async_write(audio, buf_node);
 			/* EOS buffer handled in driver */
 			list_add_tail(&buf_node->list, &audio->out_queue);
 			spin_unlock_irqrestore(&audio->dsp_lock, flags);
@@ -1189,7 +1192,7 @@ static int audio_aio_buf_add_shared(struct q6audio_aio *audio, u32 dir,
 		/* No EOS reached */
 		if (!audio->eos_rsp) {
 			spin_lock_irqsave(&audio->dsp_lock, flags);
-			audio_aio_async_read(audio, buf_node);
+			ret = audio_aio_async_read(audio, buf_node);
 			/* EOS buffer handled in driver */
 			list_add_tail(&buf_node->list, &audio->in_queue);
 			spin_unlock_irqrestore(&audio->dsp_lock, flags);
@@ -1209,7 +1212,7 @@ static int audio_aio_buf_add_shared(struct q6audio_aio *audio, u32 dir,
 			kfree(buf_node);
 		}
 	}
-	return 0;
+	return ret;
 }
 #ifdef CONFIG_COMPAT
 static int audio_aio_buf_add_compat(struct q6audio_aio *audio, u32 dir,
