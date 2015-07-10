@@ -54,9 +54,13 @@ static int mmc_host_runtime_suspend(struct device *dev)
 	struct mmc_host *host = cls_dev_to_mmc_host(dev);
 	int ret = 0;
 	ktime_t start = ktime_get();
+	enum dev_state status = 0;
 
 	if (!mmc_use_core_runtime_pm(host))
 		return 0;
+
+	if (host->ops->notify_pm_status)
+		host->ops->notify_pm_status(host, DEV_SUSPENDING);
 
 	if (host->card && mmc_card_cmdq(host->card)) {
 		BUG_ON(host->cmdq_ctx.active_reqs);
@@ -66,7 +70,7 @@ static int mmc_host_runtime_suspend(struct device *dev)
 		if (ret) {
 			mmc_card_clr_suspended(host->card);
 			pr_err("%s: halt: failed: %d\n", __func__, ret);
-			return ret;
+			goto out;
 		}
 		mmc_host_clk_hold(host);
 		host->cmdq_ops->disable(host, true);
@@ -96,6 +100,10 @@ static int mmc_host_runtime_suspend(struct device *dev)
 	 */
 	if (ret == -ENOMEDIUM)
 		ret = 0;
+out:
+	status = !ret ? DEV_SUSPENDED : DEV_ERROR;
+	if (host->ops->notify_pm_status)
+		host->ops->notify_pm_status(host, status);
 
 	trace_mmc_host_runtime_suspend(mmc_hostname(host), ret,
 			ktime_to_us(ktime_sub(ktime_get(), start)));
@@ -107,9 +115,13 @@ static int mmc_host_runtime_resume(struct device *dev)
 	struct mmc_host *host = cls_dev_to_mmc_host(dev);
 	int ret = 0;
 	ktime_t start = ktime_get();
+	enum dev_state status = 0;
 
 	if (!mmc_use_core_runtime_pm(host))
 		return 0;
+
+	if (host->ops->notify_pm_status)
+		host->ops->notify_pm_status(host, DEV_RESUMING);
 
 	ret = mmc_resume_host(host);
 	if (ret < 0) {
@@ -126,6 +138,11 @@ static int mmc_host_runtime_resume(struct device *dev)
 		else
 			mmc_card_clr_suspended(host->card);
 	}
+
+	status = !ret ? DEV_RESUMED : DEV_ERROR;
+	if (host->ops->notify_pm_status)
+		host->ops->notify_pm_status(host, status);
+
 	trace_mmc_host_runtime_resume(mmc_hostname(host), ret,
 			ktime_to_us(ktime_sub(ktime_get(), start)));
 	return ret;
@@ -138,9 +155,14 @@ static int mmc_host_suspend(struct device *dev)
 	struct mmc_host *host = cls_dev_to_mmc_host(dev);
 	int ret = 0;
 	unsigned long flags;
+	enum dev_state status = 0;
 
 	if (!mmc_use_core_pm(host))
 		return 0;
+
+	if (host->ops->notify_pm_status)
+		host->ops->notify_pm_status(host, DEV_SUSPENDING);
+
 	spin_lock_irqsave(&host->clk_lock, flags);
 	/*
 	 * let the driver know that suspend is in progress and must
@@ -157,7 +179,7 @@ static int mmc_host_suspend(struct device *dev)
 			if (ret) {
 				mmc_card_clr_suspended(host->card);
 				pr_err("%s: halt: failed: %d\n", __func__, ret);
-				return ret;
+				goto out;
 			}
 			mmc_host_clk_hold(host);
 			host->cmdq_ops->disable(host, true);
@@ -184,6 +206,10 @@ static int mmc_host_suspend(struct device *dev)
 	spin_lock_irqsave(&host->clk_lock, flags);
 	host->dev_status = DEV_SUSPENDED;
 	spin_unlock_irqrestore(&host->clk_lock, flags);
+out:
+	status = !ret ? DEV_SUSPENDED : DEV_ERROR;
+	if (host->ops->notify_pm_status)
+		host->ops->notify_pm_status(host, status);
 	return ret;
 }
 
@@ -191,10 +217,13 @@ static int mmc_host_resume(struct device *dev)
 {
 	struct mmc_host *host = cls_dev_to_mmc_host(dev);
 	int ret = 0;
+	enum dev_state status = 0;
 
 	if (!mmc_use_core_pm(host))
 		return 0;
 
+	if (host->ops->notify_pm_status)
+		host->ops->notify_pm_status(host, DEV_RESUMING);
 	if (!pm_runtime_suspended(dev)) {
 		ret = mmc_resume_host(host);
 		if (ret < 0) {
@@ -210,6 +239,10 @@ static int mmc_host_resume(struct device *dev)
 		}
 	}
 	host->dev_status = DEV_RESUMED;
+	status = !ret ? DEV_RESUMED : DEV_ERROR;
+	if (host->ops->notify_pm_status)
+		host->ops->notify_pm_status(host, status);
+
 	return ret;
 }
 #endif
