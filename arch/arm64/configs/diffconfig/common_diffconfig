@@ -359,3 +359,6 @@ CONFIG_PANIC_ON_DATA_CORRUPTION=y
 
 # Disable MMC CMD debug feature
 # CONFIG_MMC_CMD_DEBUG is not set
+
+# Print scheduling debugging info from sysrq-trigger
+# CONFIG_SYSRQ_SCHED_DEBUG is not set
