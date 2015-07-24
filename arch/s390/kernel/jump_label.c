@@ -28,7 +28,7 @@ static void __jump_label_transform(struct jump_entry *entry,
 	struct insn insn;
 	int rc;
 
-	if (type == JUMP_LABEL_ENABLE) {
+	if (type == JUMP_LABEL_JMP) {
 		/* brcl 15,offset */
 		insn.opcode = 0xc0f4;
 		insn.offset = (entry->target - entry->code) >> 1;

@@ -33,7 +33,7 @@ void arch_jump_label_transform(struct jump_entry *e,
 	/* Target must have 4 byte alignment. */
 	BUG_ON((e->target & 3) != 0);
 
-	if (type == JUMP_LABEL_ENABLE) {
+	if (type == JUMP_LABEL_JMP) {
 		insn.j_format.opcode = j_op;
 		insn.j_format.target = (e->target & J_RANGE_MASK) >> 2;
 	} else {
