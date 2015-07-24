@@ -889,7 +889,7 @@ extern void sk_stream_kill_queues(struct sock *sk);
 extern void sk_set_memalloc(struct sock *sk);
 extern void sk_clear_memalloc(struct sock *sk);
 
-extern int sk_wait_data(struct sock *sk, long *timeo);
+int sk_wait_data(struct sock *sk, long *timeo, const struct sk_buff *skb);
 
 struct request_sock_ops;
 struct timewait_sock_ops;
