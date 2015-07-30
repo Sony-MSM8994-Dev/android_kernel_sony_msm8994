@@ -233,6 +233,7 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(force_tlim),
 	POWER_SUPPLY_ATTR(allow_detection),
 	POWER_SUPPLY_ATTR(cycle_count_id),
+	POWER_SUPPLY_ATTR(safety_timer_expired),
 	POWER_SUPPLY_ATTR(usbin_det),
 	POWER_SUPPLY_ATTR(wireless_det),
 	POWER_SUPPLY_ATTR(invalid_charger),
