@@ -333,6 +333,7 @@ struct ffs_epfile {
 	unsigned char			isoc;	/* P: ffs->eps_lock */
 
 	unsigned char			_pad;
+	atomic_t			opened;
 };
 
 static int  __must_check ffs_epfiles_create(struct ffs_data *ffs);
@@ -988,6 +989,13 @@ ffs_epfile_open(struct inode *inode, struct file *file)
 	if (WARN_ON(epfile->ffs->state != FFS_ACTIVE))
 		return -ENODEV;
 
+	if (atomic_read(&epfile->opened)) {
+		pr_err("%s(): ep(%s) is already opened.\n",
+					__func__, epfile->name);
+		return -EBUSY;
+	}
+
+	atomic_set(&epfile->opened, 1);
 	file->private_data = epfile;
 	ffs_data_opened(epfile->ffs);
 	atomic_set(&epfile->error, 0);
@@ -1002,6 +1010,7 @@ ffs_epfile_release(struct inode *inode, struct file *file)
 
 	ENTER();
 
+	atomic_set(&epfile->opened, 0);
 	atomic_set(&epfile->error, 1);
 	ffs_data_closed(epfile->ffs);
 	file->private_data = NULL;
@@ -1551,6 +1560,7 @@ static int ffs_epfiles_create(struct ffs_data *ffs)
 		epfile->ffs = ffs;
 		mutex_init(&epfile->mutex);
 		init_waitqueue_head(&epfile->wait);
+		atomic_set(&epfile->opened, 0);
 		sprintf(epfiles->name, "ep%u",  i);
 		if (!unlikely(ffs_sb_create_file(ffs->sb, epfiles->name, epfile,
 						 &ffs_epfile_operations,
