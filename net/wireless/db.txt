@@ -724,6 +724,9 @@ country JP:
 	(5170 - 5250 @ 80), (N/A, 20), NO-OUTDOOR
 	(5250 - 5330 @ 80), (N/A, 20), NO-OUTDOOR, DFS
 	(5490 - 5710 @ 80), (N/A, 20), DFS
+	# 60 gHz band channels 2-4 at 10mW,
+	# ref: http://www.arib.or.jp/english/html/overview/doc/1-STD-T74v1_1.pdf
+	(57240 - 65880 @ 2160), (N/A, 40)
 
 country KE:
 	(2402 - 2482 @ 40), (N/A, 20)
