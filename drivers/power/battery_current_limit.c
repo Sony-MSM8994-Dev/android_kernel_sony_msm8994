@@ -879,6 +879,7 @@ show_bcl(ibat_state, bcl_ibat_state, "%d\n")
 show_bcl(hotplug_mask, bcl_hotplug_mask, "%d\n")
 show_bcl(hotplug_soc_mask, bcl_soc_hotplug_mask, "%d\n")
 show_bcl(hotplug_status, bcl_hotplug_request, "%d\n")
+show_bcl(soc_low_thresh, soc_low_threshold, "%d\n")
 #ifdef CONFIG_MSM_BCL_SOMC_CTL
 show_bcl(soc_threshold, soc_low_threshold, "%d\n")
 show_bcl(soc_state, bcl_soc_state, "%d\n")
@@ -1265,6 +1266,23 @@ error:
 	return ret;
 }
 #endif /* CONFIG_MSM_BCL_SOMC_CTL */
+
+static ssize_t soc_low_thresh_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int val = 0;
+	int ret = 0;
+
+	ret = convert_to_int(buf, &val);
+	if (ret)
+		return ret;
+
+	soc_low_threshold = val;
+	pr_info("bcl soc low threshold updated to %d\n", soc_low_threshold);
+
+	return count;
+}
+
 /*
  * BCL device attributes
  */
@@ -1307,6 +1325,7 @@ static struct device_attribute btm_dev_attr[] = {
 	__ATTR(hotplug_mask, 0644, hotplug_mask_show, hotplug_mask_store),
 	__ATTR(hotplug_soc_mask, 0644, hotplug_soc_mask_show,
 		hotplug_soc_mask_store),
+	__ATTR(soc_low_thresh, 0644, soc_low_thresh_show, soc_low_thresh_store),
 #ifdef CONFIG_MSM_BCL_SOMC_CTL
 	__ATTR(soc_threshold, 0644, soc_threshold_show,
 		soc_threshold_store),
