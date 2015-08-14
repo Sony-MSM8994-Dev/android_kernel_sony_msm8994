@@ -32,7 +32,7 @@
 #include <linux/qpnp/power-on.h>
 #endif /* CONFIG_SOMC_LCD_OCP_ENABLED */
 
-#define QPNP_LABIBB_REGULATOR_DIRVER_NAME	"qcom,qpnp-labibb-regulator"
+#define QPNP_LABIBB_REGULATOR_DRIVER_NAME	"qcom,qpnp-labibb-regulator"
 
 #define REG_PERPH_TYPE			0x04
 
@@ -3178,13 +3178,13 @@ static int qpnp_labibb_regulator_remove(struct spmi_device *spmi)
 }
 
 static struct of_device_id spmi_match_table[] = {
-	{ .compatible = QPNP_LABIBB_REGULATOR_DIRVER_NAME, },
+	{ .compatible = QPNP_LABIBB_REGULATOR_DRIVER_NAME, },
 	{ },
 };
 
 static struct spmi_driver qpnp_labibb_regulator_driver = {
 	.driver		= {
-		.name	= QPNP_LABIBB_REGULATOR_DIRVER_NAME,
+		.name	= QPNP_LABIBB_REGULATOR_DRIVER_NAME,
 		.of_match_table = spmi_match_table,
 	},
 	.probe		= qpnp_labibb_regulator_probe,
