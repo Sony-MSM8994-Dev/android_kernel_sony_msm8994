@@ -490,6 +490,7 @@ static int pp_ad_calc_bl(struct msm_fb_data_type *mfd, int bl_in, int *bl_out,
 		bool *bl_out_notify);
 static int pp_ad_work_setup(struct msm_fb_data_type *mfd);
 static int pp_ad_shutdown_cleanup(struct msm_fb_data_type *mfd);
+static bool pp_ad_is_valid_display(struct msm_fb_data_type *mfd);
 static int pp_num_to_side(struct mdss_mdp_ctl *ctl, u32 num);
 static inline bool pp_sts_is_enabled(u32 sts, int side);
 static inline void pp_sts_set_split_bits(u32 *sts, u32 bits);
@@ -1938,10 +1939,7 @@ int mdss_mdp_pp_setup_locked(struct mdss_mdp_ctl *ctl)
 		if (mixer_id[i] >= mdata->nad_cfgs)
 			valid_mixers = false;
 	}
-	valid_ad_panel = (ctl->mfd->panel_info->type != DTV_PANEL) &&
-		(((mdata->mdp_rev < MDSS_MDP_HW_REV_103) &&
-			(ctl->mfd->panel_info->type == WRITEBACK_PANEL)) ||
-		(ctl->mfd->panel_info->type != WRITEBACK_PANEL));
+	valid_ad_panel = pp_ad_is_valid_display(ctl->mfd);
 
 	if (valid_mixers && (mixer_cnt <= mdata->nmax_concurrent_ad_hw) &&
 		valid_ad_panel) {
@@ -2018,6 +2016,11 @@ int mdss_mdp_pp_resume(struct mdss_mdp_ctl *ctl, u32 dspp_num)
 		pr_err("invalid input: ctl = 0x%pK, mdata = 0x%pK, mfd = 0x%pK\n",
 			ctl, (!ctl) ? NULL : ctl->mdata,
 			(!ctl) ? NULL : ctl->mfd);
+		return -EPERM;
+	}
+
+	if (!pp_ad_is_valid_display(ctl->mfd)) {
+		pr_info("skipping postproc for wb or hdmi panel\n");
 		return -EPERM;
 	}
 
@@ -2243,7 +2246,7 @@ int mdss_mdp_pp_overlay_init(struct msm_fb_data_type *mfd)
 		return -EPERM;
 	}
 
-	if (mdata->nad_cfgs) {
+	if ((mdata->nad_cfgs) && pp_ad_is_valid_display(mfd)) {
 		mfd->mdp.ad_calc_bl = pp_ad_calc_bl;
 		mfd->mdp.ad_work_setup = pp_ad_work_setup;
 		mfd->mdp.ad_shutdown_cleanup = pp_ad_shutdown_cleanup;
@@ -2396,6 +2399,24 @@ static int pp_ad_shutdown_cleanup(struct msm_fb_data_type *mfd)
 	}
 
 	return 0;
+}
+
+static bool pp_ad_is_valid_display(struct msm_fb_data_type *mfd)
+{
+	struct mdss_panel_info *pinfo = mfd->panel_info;
+	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
+
+	if ((!pinfo) || (!mdata))
+		return false;
+
+	if ((mdata->mdp_rev < MDSS_MDP_HW_REV_103) &&
+			(pinfo->type == WRITEBACK_PANEL))
+		return true;
+
+	if (!pinfo->is_pluggable && (pinfo->type != WRITEBACK_PANEL))
+		return true;
+
+	return false;
 }
 
 static int pp_get_dspp_num(u32 disp_num, u32 *dspp_num)
@@ -4518,8 +4539,8 @@ static int mdss_ad_init_checks(struct msm_fb_data_type *mfd)
 		return -ENODEV;
 	}
 
-	if (ad_mfd->panel_info->type == DTV_PANEL) {
-		pr_debug("AD not supported on external display\n");
+	if (!pp_ad_is_valid_display(ad_mfd)) {
+		pr_debug("AD not supported on wb or hdmi panel\n");
 		return ret;
 	}
 
