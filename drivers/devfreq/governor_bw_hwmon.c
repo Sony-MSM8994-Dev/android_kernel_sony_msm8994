@@ -231,9 +231,6 @@ int bw_hwmon_sample_end(struct bw_hwmon *hwmon)
 	node->wake = wake;
 	spin_unlock_irqrestore(&irq_lock, flags);
 
-	dev_dbg(df->dev.parent, "MB/s: %5lu, us:%6d, wake: %d\n",
-		mbps, us, wake);
-
 	return wake;
 }
 
