@@ -147,12 +147,13 @@
 #define PMI8994_V2P0_SUBTYPE	0x0A
 
 struct pmic_revid_data {
-	u8	rev1;
-	u8	rev2;
-	u8	rev3;
-	u8	rev4;
-	u8	pmic_type;
-	u8	pmic_subtype;
+	u8		rev1;
+	u8		rev2;
+	u8		rev3;
+	u8		rev4;
+	u8		pmic_type;
+	u8		pmic_subtype;
+	const char	*pmic_name;
 };
 
 #ifdef CONFIG_QPNP_REVID
