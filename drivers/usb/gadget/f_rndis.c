@@ -855,7 +855,7 @@ rndis_bind(struct usb_configuration *c, struct usb_function *f)
 	rndis->port.open = rndis_open;
 	rndis->port.close = rndis_close;
 
-	status = rndis_register(rndis_response_available, rndis);
+	status = rndis_register(rndis_response_available, rndis, NULL);
 	if (status < 0)
 		goto fail;
 	rndis->config = status;
