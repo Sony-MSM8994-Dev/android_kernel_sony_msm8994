@@ -110,6 +110,13 @@ config IOSCHED_SIOPLUS
 	  basic merging, trying to keep a minimum overhead. It is aimed
 	  mainly for aleatory access devices (eg: flash devices).
 
+config IOSCHED_ZEN
+	tristate "Zen I/O scheduler"
+	default y
+	---help---
+	  FCFS, dispatches are back-inserted, deadlines ensure fairness.
+	  Should work best with devices where there is no travel delay.
+
 config IOSCHED_MAPLE
 	tristate "Maple I/O scheduler"
 	default y
@@ -180,6 +187,9 @@ choice
 	config DEFAULT_SIOPLUS
 		bool "Sioplus" if IOSCHED_SIOPLUS=y
 
+	config DEFAULT_ZEN
+		bool "ZEN" if IOSCHED_ZEN=y
+
 	config DEFAULT_MAPLE
 		bool "Maple" if IOSCHED_MAPLE=y
 
@@ -197,6 +207,7 @@ config DEFAULT_IOSCHED
 	default "sio" if DEFAULT_SIO
 	default "sioplus" if DEFAULT_SIOPLUS
 	default "maple" if DEFAULT_MAPLE
+	default "zen" if DEFAULT_ZEN
 
 endmenu
 
