@@ -136,8 +136,6 @@ static void mmc_bus_shutdown(struct device *dev)
 {
 	struct mmc_driver *drv = to_mmc_driver(dev->driver);
 	struct mmc_card *card = mmc_dev_to_card(dev);
-	struct mmc_host *host = card->host;
-	int ret;
 
 	if (!drv) {
 		pr_debug("%s: %s: drv is NULL\n", dev_name(dev), __func__);
@@ -151,13 +149,6 @@ static void mmc_bus_shutdown(struct device *dev)
 
 	if (dev->driver && drv->shutdown)
 		drv->shutdown(card);
-
-	if (host->bus_ops->shutdown) {
-		ret = host->bus_ops->shutdown(host);
-		if (ret)
-			pr_warn("%s: error %d during shutdown\n",
-				mmc_hostname(host), ret);
-	}
 }
 
 #ifdef CONFIG_PM_SLEEP
