@@ -1533,8 +1533,11 @@ clear_dcmd:
 out:
 	blk_end_request(req, err, blk_rq_bytes(req));
 
-	if (test_and_clear_bit(0, &ctx_info->req_starved))
+	if (test_and_clear_bit(0, &ctx_info->req_starved)) {
 		blk_run_queue(mq->queue);
+		if (blk_queue_stopped(mq->queue))
+			wake_up_process(mq->thread);
+	}
 	mmc_release_host(host);
 	mmc_rpm_release(host, &card->dev);
 	return err ? 1 : 0;
@@ -1665,8 +1668,11 @@ clear_dcmd:
 out:
 	blk_end_request(req, err, blk_rq_bytes(req));
 
-	if (test_and_clear_bit(0, &ctx_info->req_starved))
+	if (test_and_clear_bit(0, &ctx_info->req_starved)) {
 		blk_run_queue(mq->queue);
+		if (blk_queue_stopped(mq->queue))
+			wake_up_process(mq->thread);
+	}
 	mmc_release_host(host);
 	mmc_rpm_release(host, &card->dev);
 	return err ? 1 : 0;
@@ -3223,8 +3229,11 @@ out:
 	host->err_mrq = NULL;
 	mmc_rpm_release(host, &card->dev);
 
-	if (test_and_clear_bit(0, &ctx_info->req_starved))
+	if (test_and_clear_bit(0, &ctx_info->req_starved)) {
 		blk_run_queue(q);
+		if (blk_queue_stopped(mq->queue))
+			wake_up_process(mq->thread);
+	}
 }
 
 /* invoked by block layer in softirq context */
@@ -3284,8 +3293,11 @@ out:
 	}
 
 	if (!test_bit(CMDQ_STATE_ERR, &ctx_info->curr_state) &&
-			test_and_clear_bit(0, &ctx_info->req_starved))
+			test_and_clear_bit(0, &ctx_info->req_starved)) {
 		blk_run_queue(mq->queue);
+		if (blk_queue_stopped(mq->queue))
+			wake_up_process(mq->thread);
+	}
 	mmc_release_host(host);
 	mmc_rpm_release(host, &host->card->dev);
 
