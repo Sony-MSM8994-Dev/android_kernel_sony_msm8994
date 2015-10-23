@@ -112,6 +112,7 @@ struct msm_session {
 	 * session struct msm_stream */
 	struct msm_queue_head stream_q;
 	struct mutex lock;
+	struct mutex close_lock;
 	rwlock_t stream_rwlock;
 };
 
