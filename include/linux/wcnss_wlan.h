@@ -35,6 +35,7 @@ struct wcnss_wlan_config {
 	void __iomem	*msm_wcnss_base;
 	int	iris_id;
 	int	vbatt;
+	int	pc_disable_latency;
 };
 
 enum {
