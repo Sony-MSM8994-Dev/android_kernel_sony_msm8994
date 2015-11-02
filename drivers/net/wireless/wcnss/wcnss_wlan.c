@@ -1261,7 +1261,8 @@ void wcnss_disable_pc_add_req(void)
 	if (!penv->pc_disabled) {
 		wcnss_pm_qos_add_request();
 		wcnss_prevent_suspend();
-		wcnss_pm_qos_update_request(WCNSS_DISABLE_PC_LATENCY);
+		wcnss_pm_qos_update_request(penv->wlan_config.
+					    pc_disable_latency);
 		penv->pc_disabled = 1;
 	}
 	mutex_unlock(&penv->pm_qos_mutex);
@@ -2746,6 +2747,12 @@ wcnss_trigger_config(struct platform_device *pdev)
 	if (of_property_read_u32(pdev->dev.of_node,
 			"qcom,wlan-rx-buff-count", &penv->wlan_rx_buff_count)) {
 		penv->wlan_rx_buff_count = WCNSS_DEF_WLAN_RX_BUFF_COUNT;
+	}
+
+	if (of_property_read_u32(pdev->dev.of_node,
+				 "qcom,pc-disable-latency",
+				 &penv->wlan_config.pc_disable_latency)) {
+		penv->wlan_config.pc_disable_latency = WCNSS_DISABLE_PC_LATENCY;
 	}
 
 	/* make sure we are only triggered once */

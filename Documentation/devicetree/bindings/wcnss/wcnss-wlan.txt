@@ -59,6 +59,8 @@ in TX data path.
 will be turned on/off when WLAN is enabled/disabled respectively.
 - qcom,has-vsys-adc-channel: boolean flag to determine which ADC HW channel need
 to use for VBATT feature.
+- qcom,pc-disable-latency: is a configurable value to configure
+pc disable latency value.
 
 Example:
 
