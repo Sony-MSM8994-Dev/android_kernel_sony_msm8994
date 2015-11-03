@@ -809,10 +809,10 @@ static void bam2bam_data_disconnect_work(struct work_struct *w)
 
 	if (d->trans == USB_GADGET_XPORT_BAM2BAM_IPA) {
 		/* Perform IPA functions' disconnect */
-		bam_data_ipa_disconnect(d);
 		ret = usb_bam_disconnect_ipa(&d->ipa_params);
 		if (ret)
 			pr_err("usb_bam_disconnect_ipa failed: err:%d\n", ret);
+		bam_data_ipa_disconnect(d);
 	}
 
 	spin_lock_irqsave(&port->port_lock, flags);
