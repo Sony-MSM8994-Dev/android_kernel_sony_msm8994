@@ -377,8 +377,6 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 	}
 
 	err = mmc_send_ext_csd(card, ext_csd);
-	mmc_release_host(card->host);
-	mmc_rpm_release(card->host, &card->dev);
 	if (err)
 		goto out_free;
 
@@ -395,6 +393,8 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 			       mmc_hostname(card->host), __func__);
 	}
 
+	mmc_release_host(card->host);
+	mmc_rpm_release(card->host, &card->dev);
 	kfree(ext_csd);
 	return 0;
 
@@ -403,6 +403,8 @@ out_free_halt:
 out_free:
 	kfree(buf);
 	kfree(ext_csd);
+	mmc_release_host(card->host);
+	mmc_rpm_release(card->host, &card->dev);
 	return err;
 }
 
