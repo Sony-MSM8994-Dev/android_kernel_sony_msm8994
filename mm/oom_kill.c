@@ -521,6 +521,12 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 
 	/* mm cannot safely be dereferenced after task_unlock(victim) */
 	mm = victim->mm;
+	/*
+	 * We should send SIGKILL before setting TIF_MEMDIE in order to prevent
+	 * the OOM victim from depleting the memory reserves from the user
+	 * space under its control.
+	 */
+	do_send_sig_info(SIGKILL, SEND_SIG_FORCED, victim, true);
 	set_tsk_thread_flag(victim, TIF_MEMDIE);
 	last_victim = jiffies;
 	victim_rss = get_mm_rss(victim->mm);
@@ -554,7 +560,6 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 		}
 	rcu_read_unlock();
 
-	do_send_sig_info(SIGKILL, SEND_SIG_FORCED, victim, true);
 	trace_oom_sigkill(victim->pid,  victim->comm,
 			  victim_points,
 			  victim_rss,
