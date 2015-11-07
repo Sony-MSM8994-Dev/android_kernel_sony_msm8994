@@ -732,13 +732,13 @@ static int zram_bvec_write(struct zram *zram, struct bio_vec *bvec, u32 index,
 	}
 
 	alloced_pages = zpool_get_total_size(meta->mem_pool) >> PAGE_SHIFT;
+	update_used_max(zram, alloced_pages);
+
 	if (zram->limit_pages && alloced_pages > zram->limit_pages) {
 		zpool_free(meta->mem_pool, handle);
 		ret = -ENOMEM;
 		goto out;
 	}
-
-	update_used_max(zram, alloced_pages);
 
 	cmem = zpool_map_handle(meta->mem_pool, handle, ZPOOL_MM_WO);
 
