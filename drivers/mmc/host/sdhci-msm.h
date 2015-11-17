@@ -169,5 +169,6 @@ struct sdhci_msm_host {
 	enum dev_state mmc_dev_state;
 	struct sdhci_msm_ice_data ice;
 	u32 ice_clk_rate;
+	bool tuning_in_progress;
 };
 #endif /* __SDHCI_MSM_H__ */
