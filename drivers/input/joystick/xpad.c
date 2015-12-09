@@ -82,6 +82,8 @@
 
 #include <linux/kernel.h>
 #include <linux/init.h>
+#include <linux/input.h>
+#include <linux/rcupdate.h>
 #include <linux/slab.h>
 #include <linux/stat.h>
 #include <linux/module.h>
@@ -325,10 +327,12 @@ MODULE_DEVICE_TABLE(usb, xpad_table);
 
 struct usb_xpad {
 	struct input_dev *dev;		/* input device interface */
+	struct input_dev __rcu *x360w_dev;
 	struct usb_device *udev;	/* usb device */
 	struct usb_interface *intf;	/* usb interface */
 
-	int pad_present;
+	bool pad_present;
+	bool input_created;
 
 	int interface_number;
 
@@ -351,7 +355,11 @@ struct usb_xpad {
 	int xtype;			/* type of xbox device */
 	int pad_nr;			/* the order x360 pads were attached */
 	const char *name;		/* name of the device */
+	struct work_struct work;	/* init/remove device from callback */
 };
+
+static int xpad_init_input(struct usb_xpad *xpad);
+static void xpad_deinit_input(struct usb_xpad *xpad);
 
 /*
  *	xpad_process_packet
@@ -432,11 +440,9 @@ static void xpad_process_packet(struct usb_xpad *xpad, u16 cmd, unsigned char *d
  *		http://www.free60.org/wiki/Gamepad
  */
 
-static void xpad360_process_packet(struct usb_xpad *xpad,
+static void xpad360_process_packet(struct usb_xpad *xpad, struct input_dev *dev,
 				   u16 cmd, unsigned char *data)
 {
-	struct input_dev *dev = xpad->dev;
-
 	/*
 	 * Xbox 360 wireless controller will send many key events at
 	 * the same time when pairing is done. Ignore them since they
@@ -511,7 +517,30 @@ static void xpad360_process_packet(struct usb_xpad *xpad,
 	input_sync(dev);
 }
 
-static void xpad_identify_controller(struct usb_xpad *xpad);
+static void xpad_presence_work(struct work_struct *work)
+{
+	struct usb_xpad *xpad = container_of(work, struct usb_xpad, work);
+	int error;
+
+	if (xpad->pad_present) {
+		error = xpad_init_input(xpad);
+		if (error) {
+			/* complain only, not much else we can do here */
+			dev_err(&xpad->dev->dev,
+				"unable to init device: %d\n", error);
+		} else {
+			rcu_assign_pointer(xpad->x360w_dev, xpad->dev);
+		}
+	} else {
+		RCU_INIT_POINTER(xpad->x360w_dev, NULL);
+		synchronize_rcu();
+		/*
+		 * Now that we are sure xpad360w_process_packet is not
+		 * using input device we can get rid of it.
+		 */
+		xpad_deinit_input(xpad);
+	}
+}
 
 /*
  * xpad360w_process_packet
@@ -529,24 +558,28 @@ static void xpad_identify_controller(struct usb_xpad *xpad);
  */
 static void xpad360w_process_packet(struct usb_xpad *xpad, u16 cmd, unsigned char *data)
 {
+	struct input_dev *dev;
+	bool present;
+
 	/* Presence change */
 	if (data[0] & 0x08) {
-		if (data[1] & 0x80) {
-			xpad->pad_present = 1;
-			/*
-			 * Light up the segment corresponding to
-			 * controller number.
-			 */
-			xpad_identify_controller(xpad);
-		} else
-			xpad->pad_present = 0;
+		present = (data[1] & 0x80) != 0;
+
+		if (xpad->pad_present != present) {
+			xpad->pad_present = present;
+			schedule_work(&xpad->work);
+		}
 	}
 
 	/* Valid pad data */
 	if (data[1] != 0x1)
 		return;
 
-	xpad360_process_packet(xpad, cmd, &data[4]);
+	rcu_read_lock();
+	dev = rcu_dereference(xpad->x360w_dev);
+	if (dev)
+		xpad360_process_packet(xpad, dev, cmd, &data[4]);
+	rcu_read_unlock();
 }
 
 /*
@@ -679,7 +712,7 @@ static void xpad_irq_in(struct urb *urb)
 
 	switch (xpad->xtype) {
 	case XTYPE_XBOX360:
-		xpad360_process_packet(xpad, 0, xpad->idata);
+		xpad360_process_packet(xpad, xpad->dev, 0, xpad->idata);
 		break;
 	case XTYPE_XBOX360W:
 		xpad360w_process_packet(xpad, 0, xpad->idata);
@@ -943,7 +976,6 @@ static void xpad_send_led_command(struct usb_xpad *xpad, int command)
 {
 	command %= 16;
 
-
 	mutex_lock(&xpad->odata_mutex);
 
 	switch (xpad->xtype) {
@@ -1022,14 +1054,7 @@ static int xpad_led_probe(struct usb_xpad *xpad)
 	if (error)
 		goto err_free_id;
 
-	if (xpad->xtype == XTYPE_XBOX360) {
-		/*
-		 * Light up the segment corresponding to controller
-		 * number on wired devices. On wireless we'll do that
-		 * when they respond to "presence" packet.
-		 */
-		xpad_identify_controller(xpad);
-	}
+	xpad_identify_controller(xpad);
 
 	return 0;
 
@@ -1118,8 +1143,11 @@ static void xpad_set_up_abs(struct input_dev *input_dev, signed short abs)
 
 static void xpad_deinit_input(struct usb_xpad *xpad)
 {
-	xpad_led_disconnect(xpad);
-	input_unregister_device(xpad->dev);
+	if (xpad->input_created) {
+		xpad->input_created = false;
+		xpad_led_disconnect(xpad);
+		input_unregister_device(xpad->dev);
+	}
 }
 
 static int xpad_init_input(struct usb_xpad *xpad)
@@ -1202,6 +1230,7 @@ static int xpad_init_input(struct usb_xpad *xpad)
 	if (error)
 		goto err_disconnect_led;
 
+	xpad->input_created = true;
 	return 0;
 
 err_disconnect_led:
@@ -1255,6 +1284,7 @@ static int xpad_probe(struct usb_interface *intf, const struct usb_device_id *id
 	xpad->mapping = xpad_device[i].mapping;
 	xpad->xtype = xpad_device[i].xtype;
 	xpad->name = xpad_device[i].name;
+	INIT_WORK(&xpad->work, xpad_presence_work);
 
 	if (xpad->xtype == XTYPE_UNKNOWN) {
 		if (intf->cur_altsetting->desc.bInterfaceClass == USB_CLASS_VENDOR_SPEC) {
@@ -1304,10 +1334,6 @@ static int xpad_probe(struct usb_interface *intf, const struct usb_device_id *id
 
 	usb_set_intfdata(intf, xpad);
 
-	error = xpad_init_input(xpad);
-	if (error)
-		goto err_deinit_output;
-
 	if (xpad->xtype == XTYPE_XBOX360W) {
 		/*
 		 * Submit the int URB immediately rather than waiting for open
@@ -1319,7 +1345,7 @@ static int xpad_probe(struct usb_interface *intf, const struct usb_device_id *id
 		xpad->irq_in->dev = xpad->udev;
 		error = usb_submit_urb(xpad->irq_in, GFP_KERNEL);
 		if (error)
-			goto err_deinit_input;
+			goto err_deinit_output;
 
 		/*
 		 * Send presence packet.
@@ -1331,13 +1357,15 @@ static int xpad_probe(struct usb_interface *intf, const struct usb_device_id *id
 		error = xpad_inquiry_pad_presence(xpad);
 		if (error)
 			goto err_kill_in_urb;
+	} else {
+		error = xpad_init_input(xpad);
+		if (error)
+			goto err_deinit_output;
 	}
 	return 0;
 
 err_kill_in_urb:
 	usb_kill_urb(xpad->irq_in);
-err_deinit_input:
-	xpad_deinit_input(xpad);
 err_deinit_output:
 	xpad_deinit_output(xpad);
 err_free_in_urb:
@@ -1354,16 +1382,18 @@ static void xpad_disconnect(struct usb_interface *intf)
 {
 	struct usb_xpad *xpad = usb_get_intfdata (intf);
 
-	xpad_deinit_input(xpad);
-	xpad_deinit_output(xpad);
-
-	if (xpad->xtype == XTYPE_XBOX360W) {
+	if (xpad->xtype == XTYPE_XBOX360W)
 		usb_kill_urb(xpad->irq_in);
-	}
+
+	cancel_work_sync(&xpad->work);
+
+	xpad_deinit_input(xpad);
 
 	usb_free_urb(xpad->irq_in);
 	usb_free_coherent(xpad->udev, XPAD_PKT_LEN,
 			xpad->idata, xpad->idata_dma);
+
+	xpad_deinit_output(xpad);
 
 	kfree(xpad);
 
