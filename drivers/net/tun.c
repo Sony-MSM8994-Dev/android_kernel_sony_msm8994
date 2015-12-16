@@ -1130,6 +1130,9 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	int err;
 	u32 rxhash;
 
+	if (!(tun->dev->flags & IFF_UP))
+		return -EIO;
+
 	if (!(tun->flags & TUN_NO_PI)) {
 		if (len < sizeof(pi))
 			return -EINVAL;
