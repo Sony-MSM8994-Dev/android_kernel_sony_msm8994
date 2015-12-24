@@ -857,6 +857,11 @@ static void send_file_work(struct work_struct *data)
 		if (hdr_size) {
 			/* prepend MTP data header */
 			header = (struct mtp_data_header *)req->buf;
+			/*
+			 * Set length as 0xffffffff, if it is greater than
+			 * 0xffffffff. Otherwise host will throw error, if file
+			 * size greater than 0xffffffff being transferred.
+			 */
 			if (count >= 0xFFFFFFFF)
 				header->length = __cpu_to_le32(0xFFFFFFFF);
 			else
