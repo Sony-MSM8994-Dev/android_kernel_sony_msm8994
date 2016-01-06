@@ -145,6 +145,7 @@ struct kgsl_memdesc {
 	unsigned int gpuaddr;
 	phys_addr_t physaddr;
 	size_t size;
+	uint64_t mapsize;
 	unsigned int priv; /* Internal flags and settings */
 	struct scatterlist *sg;
 	unsigned int sglen; /* Active entries in the sglist */
