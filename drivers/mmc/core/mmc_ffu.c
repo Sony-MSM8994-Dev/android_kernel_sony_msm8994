@@ -32,6 +32,7 @@
 #include <linux/slab.h>
 #include <linux/swap.h>
 #include <linux/firmware.h>
+#include <linux/reboot.h>
 
 #define RESULT_OK		0
 #define RESULT_FAIL		1
@@ -577,6 +578,25 @@ int mmc_ffu_invoke(struct mmc_card *card, const char *name)
 			fw->size);
 	}
 
+	mmc_rpm_hold(card->host, &card->dev);
+
+	if (mmc_card_cmdq(card)) {
+		/* halt cmdq engine */
+		err = mmc_cmdq_halt_on_empty_queue(card->host);
+		if (err) {
+			pr_err("fail to halt cmdq on host side err=%d\n", err);
+			goto exit;
+		}
+		/* disable cmdq mode */
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+			EXT_CSD_CMDQ, 0,
+			card->ext_csd.generic_cmd6_time);
+		if (err) {
+			pr_err("fail to disable cmdq mode in card=%d\n", err);
+			goto exit;
+		}
+	}
+
 	/* Read the EXT_CSD */
 	err = mmc_send_ext_csd(card, ext_csd);
 	if (err) {
@@ -641,6 +661,14 @@ int mmc_ffu_invoke(struct mmc_card *card, const char *name)
 		goto exit;
 	}
 
+	if (mmc_card_cmdq(card)) {
+		/* Do a power cycle after FW is updated
+		 * TODO: find a more grace way to avoid power cycle.
+		 */
+		pr_info("eMMC firmware updated, reboot now\n");
+		kernel_restart(NULL);
+	}
+
 exit:
 	if (err != 0) {
 		/* host switch back to work in normal MMC
@@ -648,6 +676,7 @@ exit:
 		mmc_ffu_switch_mode(card, MMC_FFU_MODE_NORMAL);
 		err = -EIO;
 	}
+	mmc_rpm_release(card->host, &card->dev);
 	release_firmware(fw);
 
 	return err;
