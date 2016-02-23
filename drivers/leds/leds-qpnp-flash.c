@@ -945,12 +945,16 @@ static void qpnp_flash_led_work(struct work_struct *work)
 		if (led->battery_psy) {
 			rc = led->battery_psy->set_property(led->battery_psy,
 						POWER_SUPPLY_PROP_FLASH_ACTIVE,
-								&psy_prop);
+						&psy_prop);
 			if (rc) {
 				dev_err(&led->spmi_dev->dev,
-				"Failed to setup OTG pulse skip enable\n");
+					"Failed to setup OTG pulse skip enable\n");
 				goto exit_flash_led_work;
 			}
+		} else {
+			dev_err(&led->spmi_dev->dev,
+					"led->battery_psy is NULL\n");
+			goto exit_flash_led_work;
 		}
 
 		if (led->pdata->power_detect_en) {
