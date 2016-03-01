@@ -1,4 +1,5 @@
-/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+/*
+ * Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -588,7 +589,7 @@ static void bam_data_start_endless_rx(struct bam_data_port *port)
 	int status;
 
 	spin_lock_irqsave(&port->port_lock, flags);
-	if (!port->port_usb) {
+	if (!port->port_usb || !d->rx_req) {
 		spin_unlock_irqrestore(&port->port_lock, flags);
 		return;
 	}
@@ -609,7 +610,7 @@ static void bam_data_start_endless_tx(struct bam_data_port *port)
 	int status;
 
 	spin_lock_irqsave(&port->port_lock, flags);
-	if (!port->port_usb) {
+	if (!port->port_usb || !d->tx_req) {
 		spin_unlock_irqrestore(&port->port_lock, flags);
 		return;
 	}
