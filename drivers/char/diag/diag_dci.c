@@ -3010,8 +3010,6 @@ int diag_dci_deinit_client(struct diag_dci_client_tbl *entry)
 	if (!entry)
 		return DIAG_DCI_NOT_SUPPORTED;
 
-	mutex_lock(&driver->dci_mutex);
-
 	token = entry->client_info.token;
 	/*
 	 * Remove the entry from the list before freeing the buffers
