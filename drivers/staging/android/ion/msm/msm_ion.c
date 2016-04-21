@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2014,2016 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -13,6 +13,7 @@
 
 #include <linux/export.h>
 #include <linux/err.h>
+#include <linux/io.h>
 #include <linux/msm_ion.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
@@ -225,12 +226,54 @@ static int ion_no_pages_cache_ops(struct ion_client *client,
 	return 0;
 }
 
+static void __do_cache_ops(struct page *page, unsigned int offset,
+		unsigned int length, void (*op)(const void *, const void *))
+{
+	unsigned int left = length;
+	unsigned long pfn;
+	void *vaddr;
+
+	pfn = page_to_pfn(page) + offset / PAGE_SIZE;
+	page = pfn_to_page(pfn);
+	offset &= ~PAGE_MASK;
+
+	if (!PageHighMem(page)) {
+		vaddr = page_address(page) + offset;
+		op(vaddr, vaddr + length);
+		goto out;
+	}
+
+	do {
+		unsigned int len;
+
+		len = left;
+		if (len + offset > PAGE_SIZE)
+			len = PAGE_SIZE - offset;
+
+		page = pfn_to_page(pfn);
+		vaddr = kmap_atomic(page);
+		op(vaddr + offset, vaddr + offset + len);
+		kunmap_atomic(vaddr);
+
+		offset = 0;
+		pfn++;
+		left -= len;
+	} while (left);
+
+out:
+	return;
+}
+
 static int ion_pages_cache_ops(struct ion_client *client,
 			struct ion_handle *handle,
 			void *vaddr, unsigned int offset, unsigned int length,
 			unsigned int cmd)
 {
 	struct sg_table *table = NULL;
+	struct scatterlist *sg;
+	int i;
+	unsigned int len = 0;
+	void (*op)(const void *, const void *);
 
 	table = ion_sg_table(client, handle);
 	if (IS_ERR_OR_NULL(table))
@@ -238,30 +281,28 @@ static int ion_pages_cache_ops(struct ion_client *client,
 
 	switch (cmd) {
 	case ION_IOC_CLEAN_CACHES:
-		if (!vaddr)
-			dma_sync_sg_for_device(NULL, table->sgl,
-				table->nents, DMA_TO_DEVICE);
-		else
-			dmac_clean_range(vaddr, vaddr + length);
+		op = dmac_clean_range;
 		break;
 	case ION_IOC_INV_CACHES:
-		dma_sync_sg_for_cpu(NULL, table->sgl,
-			table->nents, DMA_FROM_DEVICE);
+		op = dmac_inv_range;
 		break;
 	case ION_IOC_CLEAN_INV_CACHES:
-		if (!vaddr) {
-			dma_sync_sg_for_device(NULL, table->sgl,
-				table->nents, DMA_TO_DEVICE);
-			dma_sync_sg_for_cpu(NULL, table->sgl,
-				table->nents, DMA_FROM_DEVICE);
-		} else {
-			dmac_flush_range(vaddr, vaddr + length);
-		}
+		op = dmac_flush_range;
 		break;
 	default:
 		return -EINVAL;
 	}
 
+	for_each_sg(table->sgl, sg, table->nents, i) {
+		len += sg->length;
+		if (len < offset)
+			continue;
+
+		__do_cache_ops(sg_page(sg), sg->offset, sg->length, op);
+
+		if (len > length + offset)
+			break;
+	}
 	return 0;
 }
 
