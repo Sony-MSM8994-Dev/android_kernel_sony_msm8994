@@ -1109,6 +1109,7 @@ int neigh_update(struct neighbour *neigh, const u8 *lladdr, u8 new,
 		goto out;
 	}
 
+	/* arp_project */
 	/* Compare new lladdr with cached one */
 	if (!dev->addr_len) {
 		/* First case: device needs no address. */
