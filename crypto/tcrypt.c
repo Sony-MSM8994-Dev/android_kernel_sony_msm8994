@@ -64,7 +64,8 @@ static char *check[] = {
 	"cast6", "arc4", "michael_mic", "deflate", "crc32c", "tea", "xtea",
 	"khazad", "wp512", "wp384", "wp256", "tnepres", "xeta",  "fcrypt",
 	"camellia", "seed", "salsa20", "rmd128", "rmd160", "rmd256", "rmd320",
-	"lzo", "cts", "zlib", NULL
+	"lzo", "cts", "zlib", "sha3-224", "sha3-256", "sha3-384", "sha3-512",
+	NULL
 };
 
 static int test_cipher_jiffies(struct blkcipher_desc *desc, int enc,
@@ -1174,6 +1175,22 @@ static int do_test(int m)
 		ret += tcrypt_test("ghash");
 		break;
 
+	case 48:
+		ret += tcrypt_test("sha3-224");
+		break;
+
+	case 49:
+		ret += tcrypt_test("sha3-256");
+		break;
+
+	case 50:
+		ret += tcrypt_test("sha3-384");
+		break;
+
+	case 51:
+		ret += tcrypt_test("sha3-512");
+		break;
+
 	case 100:
 		ret += tcrypt_test("hmac(md5)");
 		break;
@@ -1498,6 +1515,22 @@ static int do_test(int m)
 		test_hash_speed("crc32c", sec, generic_hash_speed_template);
 		if (mode > 300 && mode < 400) break;
 
+	case 322:
+		test_hash_speed("sha3-224", sec, generic_hash_speed_template);
+		if (mode > 300 && mode < 400) break;
+
+	case 323:
+		test_hash_speed("sha3-256", sec, generic_hash_speed_template);
+		if (mode > 300 && mode < 400) break;
+
+	case 324:
+		test_hash_speed("sha3-384", sec, generic_hash_speed_template);
+		if (mode > 300 && mode < 400) break;
+
+	case 325:
+		test_hash_speed("sha3-512", sec, generic_hash_speed_template);
+		if (mode > 300 && mode < 400) break;
+
 	case 399:
 		break;
 
@@ -1571,6 +1604,24 @@ static int do_test(int m)
 	case 417:
 		test_ahash_speed("rmd320", sec, generic_hash_speed_template);
 		if (mode > 400 && mode < 500) break;
+
+	case 418:
+		test_ahash_speed("sha3-224", sec, generic_hash_speed_template);
+		if (mode > 400 && mode < 500) break;
+
+	case 419:
+		test_ahash_speed("sha3-256", sec, generic_hash_speed_template);
+		if (mode > 400 && mode < 500) break;
+
+	case 420:
+		test_ahash_speed("sha3-384", sec, generic_hash_speed_template);
+		if (mode > 400 && mode < 500) break;
+
+
+	case 421:
+		test_ahash_speed("sha3-512", sec, generic_hash_speed_template);
+		if (mode > 400 && mode < 500) break;
+
 
 	case 499:
 		break;
