@@ -91,6 +91,12 @@ config CPU_FREQ_DEFAULT_GOV_BIOSHOCK
 	help
 	  Default governor of BioShock kernel
 
+config CPU_FREQ_DEFAULT_GOV_SMARTMAX_EPS
+	bool "smartmax_eps"
+	select CPU_FREQ_GOV_SMARTMAX_EPS
+	help
+	  Use the CPUFreq governor 'smartmax eps' as default
+
 config CPU_FREQ_DEFAULT_GOV_ONDEMAND
 	bool "ondemand"
 	select CPU_FREQ_GOV_ONDEMAND
@@ -175,6 +181,12 @@ config CPU_FREQ_GOV_BIOSHOCK
 	depends on CPU_FREQ
 	help
 	  'bioshock' - More aggressive version of conservative
+
+config CPU_FREQ_GOV_SMARTMAX_EPS
+	tristate "'smartmax EPS' cpufreq policy governor"
+	select CPU_FREQ_TABLE
+	help
+	  'smartmax EPS' is the extreme powersaving version of smartmax
 
 config CPU_FREQ_GOV_ONDEMAND
 	tristate "'ondemand' cpufreq policy governor"
