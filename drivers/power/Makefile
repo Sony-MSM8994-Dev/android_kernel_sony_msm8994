@@ -68,6 +68,7 @@ obj-$(CONFIG_QPNP_CHARGER)	+= qpnp-charger.o
 obj-$(CONFIG_QPNP_LINEAR_CHARGER)	+= qpnp-linear-charger.o
 obj-$(CONFIG_QPNP_SMBCHARGER_EXTENSION)	+= qpnp-smbcharger_extension.o
 obj-$(CONFIG_QPNP_SMBCHARGER)	+= qpnp-smbcharger.o
+obj-$(CONFIG_QNS_SYSTEM)	+= qns_system.o
 obj-$(CONFIG_IDTP9028)		+= idtp9028.o
 obj-$(CONFIG_CHARGER_SMB347)	+= smb347-charger.o
 obj-$(CONFIG_CHARGER_TPS65090)	+= tps65090-charger.o
