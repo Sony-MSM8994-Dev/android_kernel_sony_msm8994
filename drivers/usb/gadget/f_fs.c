@@ -933,7 +933,7 @@ first_try:
 error:
 	kfree(data);
 	if (ret < 0)
-		pr_err_ratelimited("%s(): Error: returning %zd value\n",
+		pr_debug_ratelimited("%s(): Error: returning %zd value\n",
 							__func__, ret);
 	return ret;
 }
