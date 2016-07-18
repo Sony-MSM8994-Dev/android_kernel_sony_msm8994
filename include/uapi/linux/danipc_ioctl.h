@@ -29,6 +29,14 @@
 #define DANIPC_IOCG_ADDR2NAME	(SIOCDEVPRIVATE + 1)
 #define DANIPC_IOCG_NAME2ADDR	(SIOCDEVPRIVATE + 2)
 #define DANIPC_IOCS_MMSGSEND	(SIOCDEVPRIVATE + 3)
+#define DANIPC_IOCS_MMSGRECV	(SIOCDEVPRIVATE + 4)
+#define DANIPC_IOCG_RECV	(SIOCDEVPRIVATE + 5)
+#define DANIPC_IOCS_RECVACK		(SIOCDEVPRIVATE + 6)
+#define DANIPC_IOCS_RECVACK_RECV	(SIOCDEVPRIVATE + 7)
+#define DANIPC_IOCS_SEND		(SIOCDEVPRIVATE + 8)
+#define DANIPC_IOCG_GET_SENDBUF		(SIOCDEVPRIVATE + 9)
+#define DANIPC_IOCG_SEND_GET_SENDBUF	(SIOCDEVPRIVATE + 10)
+#define DANIPC_IOCS_RET_SENDBUF		(SIOCDEVPRIVATE + 11)
 
 #define MAX_AGENTS		256
 #define MAX_AGENT_NAME		32
@@ -60,8 +68,17 @@ struct danipc_name {
 	danipc_addr_t		addr;
 };
 
+#define DANIPC_MMAP_AID_SHIFT		24
+#define DANIPC_MMAP_LID_SHIFT		16
+#define DANIPC_MMAP_AID_OFFSET(aid) (((aid) & 0xFF) << DANIPC_MMAP_AID_SHIFT)
+#define DANIPC_MMAP_LID_OFFSET(lid) (((lid) & 0xFF) << DANIPC_MMAP_LID_SHIFT)
+#define DANIPC_MMAP_OFFSET(aid, lid) \
+	(DANIPC_MMAP_AID_OFFSET(aid) | DANIPC_MMAP_LID_OFFSET(lid))
+
+
 #define DANIPC_MAX_BUF 1600
 #define DANIPC_BUFS_MAX_NUM_BUF 8
+#define DANIPC_MMAP_TX_BUF_HEADROOM 0
 
 struct danipc_cdev_msghdr {
 	uint8_t		dst;
@@ -76,7 +93,7 @@ struct danipc_buf_entry {
 
 struct danipc_bufs {
 	unsigned		num_entry;
-	struct danipc_buf_entry entry[DANIPC_BUFS_MAX_NUM_BUF];
+	struct danipc_buf_entry	entry[DANIPC_BUFS_MAX_NUM_BUF];
 };
 
 struct danipc_cdev_mmsg {
