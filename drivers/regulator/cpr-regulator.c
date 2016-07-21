@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -308,6 +308,8 @@ struct cpr_regulator {
 
 	bool		is_cpr_suspended;
 	bool		skip_voltage_change_during_suspend;
+
+	struct notifier_block	panic_notifier;
 };
 
 #define CPR_DEBUG_MASK_IRQ	BIT(0)
@@ -4681,6 +4683,35 @@ static void cpr_debugfs_base_remove(void)
 
 #endif
 
+/**
+ * cpr_panic_callback() - panic notification callback function. This function
+ *		is invoked when a kernel panic occurs.
+ * @nfb:	Notifier block pointer of CPR regulator
+ * @event:	Value passed unmodified to notifier function
+ * @data:	Pointer passed unmodified to notifier function
+ *
+ * Return: NOTIFY_OK
+ */
+static int cpr_panic_callback(struct notifier_block *nfb,
+			unsigned long event, void *data)
+{
+	struct cpr_regulator *cpr_vreg = container_of(nfb,
+				struct cpr_regulator, panic_notifier);
+	int corner, fuse_corner, volt;
+
+	corner = cpr_vreg->corner;
+	fuse_corner = cpr_vreg->corner_map[corner];
+	if (cpr_is_allowed(cpr_vreg))
+		volt = cpr_vreg->last_volt[corner];
+	else
+		volt = cpr_vreg->open_loop_volt[corner];
+
+	cpr_err(cpr_vreg, "[corner:%d, fuse_corner:%d] = %d uV\n",
+		corner, fuse_corner, volt);
+
+	return NOTIFY_OK;
+}
+
 static int cpr_regulator_probe(struct platform_device *pdev)
 {
 	struct regulator_config reg_config = {};
@@ -4834,6 +4865,11 @@ static int cpr_regulator_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, cpr_vreg);
 	cpr_debugfs_init(cpr_vreg);
 
+	/* Register panic notification call back */
+	cpr_vreg->panic_notifier.notifier_call = cpr_panic_callback;
+	atomic_notifier_chain_register(&panic_notifier_list,
+			&cpr_vreg->panic_notifier);
+
 	mutex_lock(&cpr_regulator_list_mutex);
 	list_add(&cpr_vreg->list, &cpr_regulator_list);
 	mutex_unlock(&cpr_regulator_list_mutex);
@@ -4863,6 +4899,9 @@ static int cpr_regulator_remove(struct platform_device *pdev)
 
 		if (cpr_vreg->adj_cpus)
 			unregister_hotcpu_notifier(&cpr_vreg->cpu_notifier);
+
+		atomic_notifier_chain_unregister(&panic_notifier_list,
+			&cpr_vreg->panic_notifier);
 
 		cpr_apc_exit(cpr_vreg);
 		cpr_debugfs_remove(cpr_vreg);
