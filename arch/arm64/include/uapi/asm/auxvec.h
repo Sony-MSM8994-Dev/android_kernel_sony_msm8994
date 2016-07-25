@@ -19,4 +19,7 @@
 /* vDSO location */
 #define AT_SYSINFO_EHDR	33
 
+/* entries in ARCH_DLINFO */
+#define AT_VECTOR_SIZE_ARCH 1
+
 #endif
