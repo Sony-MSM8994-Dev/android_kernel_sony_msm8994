@@ -653,7 +653,7 @@ static int update_filter(struct tap_filter *filter, void __user *arg)
 	for (; n < uf.count; n++) {
 		if (!is_multicast_ether_addr(addr[n].u)) {
 			err = 0; /* no filter */
-			goto done;
+			goto free_addr;
 		}
 		addr_hash_set(filter->mask, addr[n].u);
 	}
@@ -669,8 +669,7 @@ static int update_filter(struct tap_filter *filter, void __user *arg)
 
 	/* Return the number of exact filters */
 	err = nexact;
-
-done:
+free_addr:
 	kfree(addr);
 	return err;
 }
