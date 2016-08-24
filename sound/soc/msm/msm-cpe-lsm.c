@@ -523,6 +523,7 @@ static int msm_cpe_lsm_open(struct snd_pcm_substream *substream)
 	}
 
 	init_waitqueue_head(&lsm_d->event_wait);
+	init_waitqueue_head(&lsm_d->lsm_session->lab.period_wait);
 	atomic_set(&lsm_d->event_avail, 0);
 	atomic_set(&lsm_d->event_stop, 0);
 	runtime->private_data = lsm_d;
