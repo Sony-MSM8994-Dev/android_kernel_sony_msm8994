@@ -249,7 +249,7 @@ static void req_done(unsigned long data)
 			new_req->err = 0;
 			/* start a new request */
 			ret = start_req(pqce, new_req);
-			if (unlikely(new_req && ret)) {
+			if (unlikely(ret)) {
 				new_req->err = ret;
 				complete(&new_req->complete);
 				ret = 0;
