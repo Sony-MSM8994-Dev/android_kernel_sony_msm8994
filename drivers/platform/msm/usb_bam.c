@@ -1071,7 +1071,7 @@ static int usb_bam_disconnect_ipa_cons(
 	u8 idx = 0;
 	struct usb_bam_pipe_connect *pipe_connect;
 	struct sps_pipe *pipe;
-	u32 timeout = 10, pipe_empty;
+	u32 timeout = 50, pipe_empty;
 
 	idx = ipa_params->src_idx;
 	pipe = ctx.usb_bam_sps.sps_pipes[idx];
