@@ -3,7 +3,7 @@
  * MSM 7k High speed uart driver
  *
  * Copyright (c) 2008 Google Inc.
- * Copyright (c) 2007-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2007-2016, The Linux Foundation. All rights reserved.
  * Modified: Nick Pelly <npelly@google.com>
  *
  * All source code in this file is licensed under the following license
@@ -3450,6 +3450,7 @@ static int msm_hs_probe(struct platform_device *pdev)
 	}
 
 	msm_serial_debugfs_init(msm_uport, pdev->id);
+	msm_hs_unconfig_uart_gpios(uport);
 
 	uport->line = pdev->id;
 	if (pdata->userid && pdata->userid <= UARTDM_NR)
