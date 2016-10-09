@@ -31,6 +31,7 @@
 #include <linux/err.h>
 #include <linux/string.h>
 #include <linux/regulator/consumer.h>
+#include <linux/display_state.h>
 
 #include "mdss_mdp.h"
 #include "mdss_dsi.h"
@@ -88,6 +89,11 @@ static bool display_onoff_state;
 static bool gpio_req;
 static int mdss_dsi_panel_pcc_setup(struct mdss_panel_data *pdata);
 static void vsync_handler(struct mdss_mdp_ctl *ctl, ktime_t t);
+
+bool is_display_on()
+{
+	return display_onoff_state;
+}
 
 struct mdss_mdp_vsync_handler vs_handle;
 
