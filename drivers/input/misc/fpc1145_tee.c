@@ -42,6 +42,11 @@
 #include <linux/regulator/consumer.h>
 #include <linux/spi/spi.h>
 #include <soc/qcom/scm.h>
+#include <linux/input.h>
+#include <linux/display_state.h>
+
+/* Unused key value to avoid interfering with active keys */
+#define KEY_FINGERPRINT 0x2ee
 
 #define FPC1145_RESET_LOW_US 1000
 #define FPC1145_RESET_HIGH1_US 100
@@ -92,6 +97,7 @@ struct fpc1145_data {
 	bool prepared;
 	bool clocks_enabled;
 	bool clocks_suspended;
+	struct input_dev *input_dev;
 };
 
 static int vreg_setup(struct fpc1145_data *fpc1145, const char *name,
@@ -597,12 +603,49 @@ static const struct attribute_group attribute_group = {
 	.attrs = attributes,
 };
 
+static int fpc1145_input_init(struct fpc1145_data * fpc1145)
+{
+	int ret;
+
+	fpc1145->input_dev = input_allocate_device();
+	if (!fpc1145->input_dev) {
+		pr_err("fingerprint input boost allocation is fucked - 1 star\n");
+		ret = -ENOMEM;
+		goto exit;
+	}
+
+	fpc1145->input_dev->name = "fpc1145";
+	fpc1145->input_dev->evbit[0] = BIT(EV_KEY);
+
+	set_bit(KEY_FINGERPRINT, fpc1145->input_dev->keybit);
+
+	ret = input_register_device(fpc1145->input_dev);
+	if (ret) {
+		pr_err("fingerprint boost input registration is fucked - fixpls\n");
+		goto err_free_dev;
+	}
+
+	return 0;
+
+err_free_dev:
+	input_free_device(fpc1145->input_dev);
+exit:
+	return ret;
+}
+
 static irqreturn_t fpc1145_irq_handler(int irq, void *handle)
 {
 	struct fpc1145_data *fpc1145 = handle;
 	dev_dbg(fpc1145->dev, "%s\n", __func__);
 
 	sysfs_notify(&fpc1145->dev->kobj, NULL, dev_attr_irq.attr.name);
+
+	if (!is_display_on()) {
+		input_report_key(fpc1145->input_dev, KEY_FINGERPRINT, 1);
+		input_sync(fpc1145->input_dev);
+		input_report_key(fpc1145->input_dev, KEY_FINGERPRINT, 0);
+		input_sync(fpc1145->input_dev);
+	}
 
 	return IRQ_HANDLED;
 }
@@ -740,6 +783,11 @@ static int fpc1145_probe(struct spi_device *spi)
 
 	fpc1145->clocks_enabled = false;
 	fpc1145->clocks_suspended = false;
+
+	rc = fpc1145_input_init(fpc1145);
+	if (rc)
+		goto exit;
+
 	irqf = IRQF_TRIGGER_RISING | IRQF_ONESHOT;
 	mutex_init(&fpc1145->lock);
 	rc = devm_request_threaded_irq(dev, gpio_to_irq(fpc1145->irq_gpio),
@@ -772,6 +820,9 @@ exit:
 static int fpc1145_remove(struct spi_device *spi)
 {
 	struct fpc1145_data *fpc1145 = dev_get_drvdata(&spi->dev);
+
+	if (fpc1145->input_dev != NULL)
+		input_free_device(fpc1145->input_dev);
 
 	sysfs_remove_group(&spi->dev.kobj, &attribute_group);
 	mutex_destroy(&fpc1145->lock);
