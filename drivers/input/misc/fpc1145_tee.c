@@ -641,10 +641,12 @@ static irqreturn_t fpc1145_irq_handler(int irq, void *handle)
 	sysfs_notify(&fpc1145->dev->kobj, NULL, dev_attr_irq.attr.name);
 
 	if (!is_display_on()) {
+		sched_set_boost(1);
 		input_report_key(fpc1145->input_dev, KEY_FINGERPRINT, 1);
 		input_sync(fpc1145->input_dev);
 		input_report_key(fpc1145->input_dev, KEY_FINGERPRINT, 0);
 		input_sync(fpc1145->input_dev);
+		sched_set_boost(0);
 	}
 
 	return IRQ_HANDLED;
