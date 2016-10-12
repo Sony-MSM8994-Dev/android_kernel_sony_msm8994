@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -634,8 +634,8 @@ static int calculate_residency(struct power_params *base_pwr,
 		residency /= (int32_t)(base_pwr->ss_power - next_pwr->ss_power);
 
 	if (residency < 0) {
-		__WARN_printf("%s: Incorrect power attributes for LPM\n",
-				__func__);
+		pr_err("%s: residency < 0 for LPM\n",
+			__func__);
 		return next_pwr->time_overhead_us;
 	}
 
