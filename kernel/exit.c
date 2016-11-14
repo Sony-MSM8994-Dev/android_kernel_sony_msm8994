@@ -833,6 +833,7 @@ void do_exit(long code)
 	 */
 	perf_event_exit_task(tsk);
 
+	sched_autogroup_exit_task(tsk);
 	cgroup_exit(tsk, 1);
 
 	module_put(task_thread_info(tsk)->exec_domain->module);
