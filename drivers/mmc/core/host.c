@@ -32,6 +32,8 @@
 
 #include <linux/mmc/host.h>
 #include <linux/mmc/card.h>
+#include <linux/mmc/ring_buffer.h>
+
 #include <linux/mmc/slot-gpio.h>
 #include <trace/events/mmc.h>
 
@@ -1039,6 +1041,7 @@ int mmc_add_host(struct mmc_host *host)
 	mmc_add_host_debugfs(host);
 #endif
 	mmc_host_clk_sysfs_init(host);
+	mmc_trace_init(host);
 
 	host->clk_scaling.up_threshold = 35;
 	host->clk_scaling.down_threshold = 5;

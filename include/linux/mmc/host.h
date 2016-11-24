@@ -24,6 +24,7 @@
 
 #include <linux/mmc/core.h>
 #include <linux/mmc/pm.h>
+#include <linux/mmc/ring_buffer.h>
 
 struct mmc_ios {
 	unsigned int	clock;			/* clock rate */
@@ -535,6 +536,7 @@ struct mmc_host {
 		u32		lower_bus_speed_mode;
 #define MMC_SCALING_LOWER_DDR52_MODE	(1 << 0)
 	} clk_scaling;
+	struct mmc_trace_buffer trace_buf;
 	enum dev_state dev_status;
 	/*
 	 * Set to 1 to just stop the SDCLK to the card without
