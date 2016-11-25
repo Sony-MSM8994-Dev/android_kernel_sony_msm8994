@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2009-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -584,6 +584,13 @@ static char *msm_read_hardware_id(void)
 	if (ret > sizeof(msm_soc_str))
 		goto err_path;
 
+	/* Add suffix if need to be */
+	if ((socinfo->v2.raw_version == 2) && strlen(cpu_of_id[socinfo->v1.id].suffix)) {
+		ret = strlcat(msm_soc_str, cpu_of_id[socinfo->v1.id].suffix,
+			sizeof(msm_soc_str));
+		if (ret > sizeof(msm_soc_str))
+			goto err_path;
+	}
 	string_generated = true;
 	return msm_soc_str;
 err_path:
