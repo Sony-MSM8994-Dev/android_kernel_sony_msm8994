@@ -3186,6 +3186,8 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
 	for (iter = next_tgid(ns, iter);
 	     iter.task;
 	     iter.tgid += 1, iter = next_tgid(ns, iter)) {
+
+		cond_resched();
 		if (has_pid_permissions(ns, iter.task, 2))
 			__filldir = filldir;
 		else
