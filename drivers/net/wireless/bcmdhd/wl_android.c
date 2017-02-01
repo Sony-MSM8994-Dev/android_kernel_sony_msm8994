@@ -1625,6 +1625,10 @@ wl_android_set_roampref(struct net_device *dev, char *command, int total_len)
 
 	total_len_left -= (num_akm_suites * WIDTH_AKM_SUITE);
 	num_ucipher_suites = simple_strtoul(pcmd, NULL, 16);
+	if (num_ucipher_suites > MAX_NUM_SUITES) {
+		DHD_ERROR(("too many UCIPHER suites = %d\n", num_ucipher_suites));
+		return -1;
+	}
 	/* Increment for number of cipher suites field + space */
 	pcmd += 3;
 	total_len_left -= 3;
