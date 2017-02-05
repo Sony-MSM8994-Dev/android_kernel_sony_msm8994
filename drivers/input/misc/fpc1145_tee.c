@@ -44,6 +44,7 @@
 #include <soc/qcom/scm.h>
 #include <linux/input.h>
 #include <linux/display_state.h>
+#include <linux/wakelock.h>
 
 /* Unused key value to avoid interfering with active keys */
 #define KEY_FINGERPRINT 0x2ee
@@ -55,6 +56,7 @@
 #define PWR_ON_STEP_RANGE1 100
 #define PWR_ON_STEP_RANGE2 900
 #define NUM_PARAMS_REG_ENABLE_SET 2
+#define FPC_TTW_HOLD_TIME 1000
 
 static const char * const pctl_names[] = {
 	"fpc1145_spi_active",
@@ -88,6 +90,7 @@ struct fpc1145_data {
 	struct clk *core_clk;
 	struct regulator *vreg[ARRAY_SIZE(vreg_conf)];
 
+	struct wake_lock ttw_wl;
 	int irq_gpio;
 	int cs0_gpio;
 	int cs1_gpio;
@@ -95,6 +98,7 @@ struct fpc1145_data {
 	int qup_id;
 	struct mutex lock;
 	bool prepared;
+	bool wakeup_enabled;
 	bool clocks_enabled;
 	bool clocks_suspended;
 	struct input_dev *input_dev;
@@ -551,6 +555,16 @@ static DEVICE_ATTR(spi_prepare, S_IWUSR, NULL, spi_prepare_set);
 static ssize_t wakeup_enable_set(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
+	struct fpc1145_data *fpc1145 = dev_get_drvdata(dev);
+	if (!strncmp(buf, "enable", strlen("enable"))) {
+		fpc1145->wakeup_enabled = true;
+		smp_wmb();
+	} else if (!strncmp(buf, "disable", strlen("disable"))) {
+		fpc1145->wakeup_enabled = false;
+		smp_wmb();
+	} else {
+		return -EINVAL;
+	}
 	return count;
 }
 static DEVICE_ATTR(wakeup_enable, S_IWUSR, NULL, wakeup_enable_set);
@@ -637,6 +651,13 @@ static irqreturn_t fpc1145_irq_handler(int irq, void *handle)
 {
 	struct fpc1145_data *fpc1145 = handle;
 	dev_dbg(fpc1145->dev, "%s\n", __func__);
+
+	/* Make sure 'wakeup_enabled' is updated before using it
+	** since this is interrupt context (other thread...) */
+	smp_rmb();
+	if (fpc1145->wakeup_enabled ) {
+		wake_lock_timeout(&fpc1145->ttw_wl, msecs_to_jiffies(FPC_TTW_HOLD_TIME));
+	}
 
 	sysfs_notify(&fpc1145->dev->kobj, NULL, dev_attr_irq.attr.name);
 
@@ -783,6 +804,7 @@ static int fpc1145_probe(struct spi_device *spi)
 	if (rc < 0)
 		goto exit;
 
+	fpc1145->wakeup_enabled = false;
 	fpc1145->clocks_enabled = false;
 	fpc1145->clocks_suspended = false;
 
@@ -791,6 +813,12 @@ static int fpc1145_probe(struct spi_device *spi)
 		goto exit;
 
 	irqf = IRQF_TRIGGER_RISING | IRQF_ONESHOT;
+
+	if (of_property_read_bool(dev->of_node, "fpc,enable-wakeup")) {
+		irqf |= IRQF_NO_SUSPEND;
+		device_init_wakeup(dev, 1);
+	}
+
 	mutex_init(&fpc1145->lock);
 	rc = devm_request_threaded_irq(dev, gpio_to_irq(fpc1145->irq_gpio),
 			NULL, fpc1145_irq_handler, irqf,
@@ -801,6 +829,10 @@ static int fpc1145_probe(struct spi_device *spi)
 		goto exit;
 	}
 	dev_dbg(dev, "requested irq %d\n", gpio_to_irq(fpc1145->irq_gpio));
+
+	/* Request that the interrupt should be wakeable */
+	enable_irq_wake( gpio_to_irq( fpc1145->irq_gpio ) );
+	wake_lock_init(&fpc1145->ttw_wl, WAKE_LOCK_SUSPEND, "fpc_ttw_wl");
 
 	rc = sysfs_create_group(&dev->kobj, &attribute_group);
 	if (rc) {
@@ -828,6 +860,7 @@ static int fpc1145_remove(struct spi_device *spi)
 
 	sysfs_remove_group(&spi->dev.kobj, &attribute_group);
 	mutex_destroy(&fpc1145->lock);
+	wake_lock_destroy(&fpc1145->ttw_wl);
 	(void)vreg_setup(fpc1145, "vdd_io", false);
 	(void)vreg_setup(fpc1145, "vcc_spi", false);
 	(void)vreg_setup(fpc1145, "vdd_ana", false);
