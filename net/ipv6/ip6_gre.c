@@ -55,7 +55,7 @@
 #include <net/ip6_fib.h>
 #include <net/ip6_route.h>
 #include <net/ip6_tunnel.h>
-
+#include <net/gre.h>
 
 static bool log_ecn_error = true;
 module_param(log_ecn_error, bool, 0644);
