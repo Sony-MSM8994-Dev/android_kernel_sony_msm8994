@@ -569,7 +569,7 @@ static int context_alloc(struct fastrpc_apps *me, uint32_t kernel,
 		}
 	}
 	ctx->sc = invoke->sc;
-	if (REMOTE_SCALARS_INBUFS(ctx->sc) + REMOTE_SCALARS_OUTBUFS(ctx->sc)) {
+	if (bufs) {
 		VERIFY(err, 0 == context_build_overlap(ctx));
 		if (err)
 			goto bail;
