@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014, Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2017, Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -780,6 +780,7 @@ static int msm_lsm_ioctl_compat(struct snd_pcm_substream *substream,
 			pr_err("%s: copy user failed ioctl %s, size %zd\n",
 				__func__, "SNDRV_LSM_REG_SND_MODEL32",
 				sizeof(struct snd_lsm_sound_model32));
+			goto done;
 		} else {
 			snd_model.data = compat_ptr(snd_model32.data);
 			snd_model.data_size = snd_model32.data_size;
@@ -927,7 +928,8 @@ static int msm_lsm_ioctl_compat(struct snd_pcm_substream *substream,
                 dev_err(rtd->dev,
                         "%s: Invalid cmd for compat_ioctl\n",
                         __func__);
-                err = -EINVAL;
+				 err = -EINVAL;
+				 goto done;
                 break;
 	default:
 		err = msm_lsm_ioctl_shared(substream, cmd, arg);
