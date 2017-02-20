@@ -29,8 +29,8 @@
 #define DCMD_SLOT 31
 #define NUM_SLOTS 32
 
-/* 1 sec */
-#define HALT_TIMEOUT_MS 1000
+/* 10 sec */
+#define HALT_TIMEOUT_MS 10000
 
 static int cmdq_halt_poll(struct mmc_host *mmc);
 static int cmdq_halt(struct mmc_host *mmc, bool halt);
@@ -889,6 +889,7 @@ static int cmdq_halt(struct mmc_host *mmc, bool halt)
 {
 	struct cmdq_host *cq_host = (struct cmdq_host *)mmc_cmdq_private(mmc);
 	u32 val;
+	u32 config = 0;
 	int retries = 3;
 
 	if (halt) {
@@ -897,9 +898,28 @@ static int cmdq_halt(struct mmc_host *mmc, bool halt)
 				    CQCTL);
 			val = wait_for_completion_timeout(&cq_host->halt_comp,
 					  msecs_to_jiffies(HALT_TIMEOUT_MS));
-			if (!val && !(cmdq_readl(cq_host, CQCTL) & HALT)) {
-				retries--;
-				continue;
+			if (!val) {
+				pr_warn("%s: %s: HAC int timeout\n",
+					mmc_hostname(mmc), __func__);
+				if ((cmdq_readl(cq_host, CQCTL) & HALT)) {
+					/*
+					 * Don't retry if CQE is halted but irq
+					 * is not triggered in timeout period.
+					 * And since we are returning error,
+					 * un-halt CQE. Since irq was not fired
+					 * yet, no need to set other params
+					 */
+					retries = 0;
+					config = cmdq_readl(cq_host, CQCTL);
+					config &= ~HALT;
+					cmdq_writel(cq_host, config, CQCTL);
+				} else {
+					pr_warn("%s: %s: retryng halt (%d)\n",
+						mmc_hostname(mmc), __func__,
+						retries);
+					retries--;
+					continue;
+				}
 			} else {
 				/* halt done: re-enable legacy interrupts */
 				if (cq_host->ops->clear_set_irqs)
