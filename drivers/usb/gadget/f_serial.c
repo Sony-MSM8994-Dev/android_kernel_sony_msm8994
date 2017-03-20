@@ -4,7 +4,7 @@
  * Copyright (C) 2003 Al Borchers (alborchers@steinerpoint.com)
  * Copyright (C) 2008 by David Brownell
  * Copyright (C) 2008 by Nokia Corporation
- * Copyright (c) 2014, 2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014,2016-2017, The Linux Foundation. All rights reserved.
  *
  * This software is distributed under the terms of the GNU General
  * Public License ("GPL") as published by the Free Software Foundation,
@@ -1077,19 +1077,24 @@ struct usb_function *gser_alloc(struct usb_function_instance *fi)
 	struct f_gser	*gser;
 	struct f_serial_opts *opts;
 
+	opts = container_of(fi, struct f_serial_opts, func_inst);
+	if (nr_ports) {
+		opts->port_num = gser_next_free_port++;
+		if (opts->port_num >= GSERIAL_NO_PORTS) {
+			pr_err("%s: No serial allowed for port %d\n",
+					__func__, opts->port_num);
+			return ERR_PTR(-EINVAL);
+		}
+	}
+
 	/* allocate and initialize one new instance */
 	gser = kzalloc(sizeof(*gser), GFP_KERNEL);
 	if (!gser)
 		return ERR_PTR(-ENOMEM);
 
-	opts = container_of(fi, struct f_serial_opts, func_inst);
-
 #ifdef CONFIG_MODEM_SUPPORT
 	spin_lock_init(&gser->lock);
 #endif
-	if (nr_ports)
-		opts->port_num = gser_next_free_port++;
-
 	gser->port_num = opts->port_num;
 
 	gser->port.func.name = "gser";
