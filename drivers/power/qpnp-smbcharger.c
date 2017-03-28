@@ -6913,6 +6913,7 @@ static int smbchg_probe(struct spmi_device *spmi)
 
 	power_supply_set_present(chip->usb_psy, chip->usb_present);
 
+	update_usb_status(chip, is_usb_present(chip), false);
 	dump_regs(chip);
 	create_debugfs_entries(chip);
 	dev_info(chip->dev,
