@@ -542,7 +542,7 @@ config SRAM
 	  areas found on many SoCs.
 
 config UID_SYS_STATS
-	tristate "Per-UID statistics"
+	bool "Per-UID statistics"
 	depends on PROFILING
 	select TASKSTATS
 	select TASK_XACCT
