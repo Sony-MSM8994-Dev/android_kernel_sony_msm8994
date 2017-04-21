@@ -231,11 +231,6 @@ int __cpu_disable(void)
 	 */
 	migrate_irqs();
 
-	/*
-	 * Remove this CPU from the vm mask set of all processes.
-	 */
-	clear_tasks_mm_cpumask(cpu);
-
 	return 0;
 }
 
@@ -264,6 +259,12 @@ void __cpu_die(unsigned int cpu)
 		pr_crit("CPU%u: cpu didn't die\n", cpu);
 		return;
 	}
+
+	/*
+	 * Remove this CPU from the vm mask set of all processes.
+	 */
+	clear_tasks_mm_cpumask(cpu);
+
 	pr_debug("CPU%u: shutdown\n", cpu);
 
 	/*
