@@ -12,8 +12,8 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you can access it online at
- * http://www.gnu.org/licenses/gpl-2.0.html.
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *
  * Copyright (C) IBM Corporation, 2006
  * Copyright (C) Fujitsu, 2012
@@ -300,9 +300,9 @@ int __srcu_read_lock(struct srcu_struct *sp)
 
 	idx = ACCESS_ONCE(sp->completed) & 0x1;
 	preempt_disable();
-	__this_cpu_inc(sp->per_cpu_ref->c[idx]);
+	ACCESS_ONCE(this_cpu_ptr(sp->per_cpu_ref)->c[idx]) += 1;
 	smp_mb(); /* B */  /* Avoid leaking the critical section. */
-	__this_cpu_inc(sp->per_cpu_ref->seq[idx]);
+	ACCESS_ONCE(this_cpu_ptr(sp->per_cpu_ref)->seq[idx]) += 1;
 	preempt_enable();
 	return idx;
 }

@@ -14,8 +14,8 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you can access it online at
- * http://www.gnu.org/licenses/gpl-2.0.html.
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *
  * Copyright (c) 2010 Linaro
  *
@@ -36,7 +36,7 @@ struct rcu_ctrlblk {
 	RCU_TRACE(unsigned long gp_start); /* Start time for stalls. */
 	RCU_TRACE(unsigned long ticks_this_gp); /* Statistic for stalls. */
 	RCU_TRACE(unsigned long jiffies_stall); /* Jiffies at next stall. */
-	RCU_TRACE(char *name);		/* Name of RCU type. */
+	RCU_TRACE(const char *name);	/* Name of RCU type. */
 };
 
 /* Definition for rcupdate control block. */

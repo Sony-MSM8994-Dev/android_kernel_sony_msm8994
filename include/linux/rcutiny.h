@@ -12,8 +12,8 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you can access it online at
- * http://www.gnu.org/licenses/gpl-2.0.html.
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *
  * Copyright IBM Corporation, 2008
  *
@@ -156,6 +156,10 @@ static inline void rcu_cpu_stall_reset(void)
 {
 }
 
+static inline void exit_rcu(void)
+{
+}
+
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 extern int rcu_scheduler_active __read_mostly;
 extern void rcu_scheduler_starting(void);
@@ -164,5 +168,22 @@ static inline void rcu_scheduler_starting(void)
 {
 }
 #endif /* #else #ifdef CONFIG_DEBUG_LOCK_ALLOC */
+
+#if defined(CONFIG_DEBUG_LOCK_ALLOC) || defined(CONFIG_RCU_TRACE)
+
+static inline bool rcu_is_watching(void)
+{
+	return __rcu_is_watching();
+}
+
+#else /* defined(CONFIG_DEBUG_LOCK_ALLOC) || defined(CONFIG_RCU_TRACE) */
+
+static inline bool rcu_is_watching(void)
+{
+	return true;
+}
+
+
+#endif /* #else defined(CONFIG_DEBUG_LOCK_ALLOC) || defined(CONFIG_RCU_TRACE) */
 
 #endif /* __LINUX_RCUTINY_H */

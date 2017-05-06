@@ -12,8 +12,8 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, you can access it online at
- * http://www.gnu.org/licenses/gpl-2.0.html.
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *
  * Copyright IBM Corporation, 2011
  *
@@ -67,12 +67,15 @@
 
 extern struct debug_obj_descr rcuhead_debug_descr;
 
-static inline void debug_rcu_head_queue(struct rcu_head *head)
+static inline int debug_rcu_head_queue(struct rcu_head *head)
 {
-	debug_object_activate(head, &rcuhead_debug_descr);
+	int r1;
+
+	r1 = debug_object_activate(head, &rcuhead_debug_descr);
 	debug_object_active_state(head, &rcuhead_debug_descr,
 				  STATE_RCU_HEAD_READY,
 				  STATE_RCU_HEAD_QUEUED);
+	return r1;
 }
 
 static inline void debug_rcu_head_unqueue(struct rcu_head *head)
@@ -83,8 +86,9 @@ static inline void debug_rcu_head_unqueue(struct rcu_head *head)
 	debug_object_deactivate(head, &rcuhead_debug_descr);
 }
 #else	/* !CONFIG_DEBUG_OBJECTS_RCU_HEAD */
-static inline void debug_rcu_head_queue(struct rcu_head *head)
+static inline int debug_rcu_head_queue(struct rcu_head *head)
 {
+	return 0;
 }
 
 static inline void debug_rcu_head_unqueue(struct rcu_head *head)
@@ -94,7 +98,7 @@ static inline void debug_rcu_head_unqueue(struct rcu_head *head)
 
 extern void kfree(const void *);
 
-static inline bool __rcu_reclaim(char *rn, struct rcu_head *head)
+static inline bool __rcu_reclaim(const char *rn, struct rcu_head *head)
 {
 	unsigned long offset = (unsigned long)head->func;
 
@@ -117,5 +121,12 @@ extern int rcu_cpu_stall_suppress;
 int rcu_jiffies_till_stall_check(void);
 
 #endif /* #ifdef CONFIG_RCU_STALL_COMMON */
+
+/*
+ * Strings used in tracepoints need to be exported via the
+ * tracing system such that tools like perf and trace-cmd can
+ * translate the string address pointers to actual text.
+ */
+#define TPS(x)  tracepoint_string(x)
 
 #endif /* __LINUX_RCU_H */
