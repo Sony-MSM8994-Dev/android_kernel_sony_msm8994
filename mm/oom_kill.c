@@ -454,8 +454,9 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 	struct mm_struct *mm;
 	unsigned long victim_rss;
 	unsigned int victim_points = 0;
-	static DEFINE_RATELIMIT_STATE(oom_rs, DEFAULT_RATELIMIT_INTERVAL,
-					      DEFAULT_RATELIMIT_BURST);
+
+	/* CrOS: lower burst ratelimit to 1 to prevent excessive jank */
+	static DEFINE_RATELIMIT_STATE(oom_rs, DEFAULT_RATELIMIT_INTERVAL, 1);
 
 	/*
 	 * If the task is already exiting, don't alarm the sysadmin or kill
