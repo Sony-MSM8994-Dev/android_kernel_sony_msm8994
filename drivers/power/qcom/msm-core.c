@@ -446,7 +446,7 @@ static int update_userspace_power(struct sched_params __user *argp)
 	mutex_unlock(&policy_update_mutex);
 
 	for_each_possible_cpu(cpu) {
-		if (pdata_valid[cpu])
+		if (!pdata_valid[cpu])
 			continue;
 
 		blocking_notifier_call_chain(
