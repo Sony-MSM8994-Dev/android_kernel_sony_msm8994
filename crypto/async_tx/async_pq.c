@@ -65,6 +65,9 @@ do_async_gen_syndrome(struct dma_chan *chan, struct page **blocks,
 	int idx;
 	int i;
 
+	if (submit->flags & ASYNC_TX_FENCE)
+		dma_flags |= DMA_PREP_FENCE;
+
 	/* DMAs use destinations as sources, so use BIDIRECTIONAL mapping */
 	if (P(blocks, disks))
 		dma_dest[0] = dma_map_page(dma->dev, P(blocks, disks), offset,
@@ -110,8 +113,6 @@ do_async_gen_syndrome(struct dma_chan *chan, struct page **blocks,
 			if (cb_fn_orig)
 				dma_flags |= DMA_PREP_INTERRUPT;
 		}
-		if (submit->flags & ASYNC_TX_FENCE)
-			dma_flags |= DMA_PREP_FENCE;
 
 		/* Since we have clobbered the src_list we are committed
 		 * to doing this asynchronously.  Drivers force forward
