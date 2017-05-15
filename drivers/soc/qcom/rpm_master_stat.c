@@ -99,6 +99,7 @@ static int msm_rpm_master_copy_stats(
 	static int master_cnt;
 	int count, j = 0;
 	char *buf;
+	unsigned long active_cores;
 
 	/* Iterate possible number of masters */
 	if (master_cnt > prvdata->num_masters - 1) {
@@ -245,12 +246,11 @@ static int msm_rpm_master_copy_stats(
 			record.active_cores);
 	}
 
-	j = find_first_bit((unsigned long *)&record.active_cores,
-							BITS_PER_LONG);
+	active_cores = record.active_cores;
+	j = find_first_bit(&active_cores, BITS_PER_LONG);
 	while (j < BITS_PER_LONG) {
 		SNPRINTF(buf, count, "\t\tcore%d\n", j);
-		j = find_next_bit((unsigned long *)&record.active_cores,
-				BITS_PER_LONG, j + 1);
+		j = find_next_bit(&active_cores, BITS_PER_LONG, j + 1);
 	}
 
 	master_cnt++;
