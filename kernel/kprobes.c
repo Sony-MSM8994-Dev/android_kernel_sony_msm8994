@@ -591,7 +591,7 @@ static __kprobes void kprobe_optimizer(struct work_struct *work)
 }
 
 /* Wait for completing optimization and unoptimization */
-static __kprobes void wait_for_kprobe_optimizer(void)
+__kprobes void wait_for_kprobe_optimizer(void)
 {
 	mutex_lock(&kprobe_mutex);
 
