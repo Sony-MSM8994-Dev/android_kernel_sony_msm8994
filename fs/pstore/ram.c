@@ -76,7 +76,7 @@ module_param(dump_oops, int, 0600);
 MODULE_PARM_DESC(dump_oops,
 		"set to 1 to dump oopses, 0 to only dump panics (default 1)");
 
-static int ramoops_ecc;
+static int ramoops_ecc = 1;
 module_param_named(ecc, ramoops_ecc, int, 0600);
 MODULE_PARM_DESC(ramoops_ecc,
 		"if non-zero, the option enables ECC support and specifies "
@@ -508,6 +508,7 @@ static void  ramoops_of_init(struct platform_device *pdev)
 	pdata->record_size = record;
 	pdata->ftrace_size = ftrace;
 	pdata->dump_oops = (int)oops;
+	pdata->ecc_info.ecc_size = ramoops_ecc == 1 ? 16 : ramoops_ecc;
 	pdata->ecc_info.block_size = ecc_info[0];
 	pdata->ecc_info.ecc_size = ecc_info[1];
 	pdata->ecc_info.symsize = ecc_info[2];
