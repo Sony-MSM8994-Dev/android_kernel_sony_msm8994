@@ -80,7 +80,6 @@ struct danipc_name {
 #define DANIPC_MAX_BUF 1600
 #define DANIPC_BUFS_MAX_NUM_BUF 8
 #define DANIPC_MMAP_TX_BUF_HEADROOM 0
-#define DANIPC_MMAP_RX_BUF_HEADROOM 32
 
 struct danipc_cdev_msghdr {
 	uint8_t		dst;
