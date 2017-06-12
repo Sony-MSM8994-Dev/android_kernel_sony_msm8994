@@ -44,5 +44,7 @@ extern int	icmp_rcv(struct sk_buff *skb);
 extern void	icmp_err(struct sk_buff *, u32 info);
 extern int	icmp_init(void);
 extern void	icmp_out_count(struct net *net, unsigned char type);
+extern int	icmp_register_notifier(struct notifier_block *nb, u8 icmp_type);
+extern int	icmp_unregister_notifier(struct notifier_block *nb, u8 icmp_type);
 
 #endif	/* _ICMP_H */

@@ -17,6 +17,8 @@ extern void icmpv6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info);
 typedef void ip6_icmp_send_t(struct sk_buff *skb, u8 type, u8 code, __u32 info);
 extern int inet6_register_icmp_sender(ip6_icmp_send_t *fn);
 extern int inet6_unregister_icmp_sender(ip6_icmp_send_t *fn);
+extern void icmpv6_register_notifier(struct notifier_block *nb, u8 icmp_type);
+extern void icmpv6_unregister_notifier(struct notifier_block *nb, u8 icmp_type);
 
 #else
 

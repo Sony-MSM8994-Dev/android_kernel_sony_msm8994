@@ -192,9 +192,10 @@ EXPORT_SYMBOL(icmp_err_convert);
 struct icmp_control {
 	void (*handler)(struct sk_buff *skb);
 	short   error;		/* This ICMP is classed as an error message */
+	struct atomic_notifier_head notifier_head;
 };
 
-static const struct icmp_control icmp_pointers[NR_ICMP_TYPES+1];
+static struct icmp_control icmp_pointers[NR_ICMP_TYPES+1];
 
 /*
  *	The ICMP socket(s). This is the most convenient way to flow control
@@ -663,6 +664,28 @@ static void icmp_socket_deliver(struct sk_buff *skb, u32 info)
 	rcu_read_unlock();
 }
 
+int icmp_register_notifier(struct notifier_block *nb, u8 icmp_type)
+{
+	if (icmp_type >= ARRAY_SIZE(icmp_pointers))
+		return -EINVAL;
+
+	atomic_notifier_chain_register(&icmp_pointers[icmp_type].notifier_head, nb);
+
+	return 0;
+}
+EXPORT_SYMBOL(icmp_register_notifier);
+
+int icmp_unregister_notifier(struct notifier_block *nb, u8 icmp_type)
+{
+	if (icmp_type >= ARRAY_SIZE(icmp_pointers))
+		return -EINVAL;
+
+	atomic_notifier_chain_unregister(&icmp_pointers[icmp_type].notifier_head, nb);
+
+	return 0;
+}
+EXPORT_SYMBOL(icmp_unregister_notifier);
+
 /*
  *	Handle ICMP_DEST_UNREACH, ICMP_TIME_EXCEED, and ICMP_QUENCH.
  */
@@ -931,6 +954,12 @@ int icmp_rcv(struct sk_buff *skb)
 
 	icmp_pointers[icmph->type].handler(skb);
 
+	/*
+	 * call the notifier chain corresponding to icmp type
+	 */
+	atomic_notifier_call_chain(&icmp_pointers[icmph->type].notifier_head,
+					   icmph->code, (void *)skb);
+
 drop:
 	kfree_skb(skb);
 	return 0;
@@ -968,7 +997,7 @@ void icmp_err(struct sk_buff *skb, u32 info)
 /*
  *	This table is the definition of how we handle ICMP.
  */
-static const struct icmp_control icmp_pointers[NR_ICMP_TYPES + 1] = {
+static struct icmp_control icmp_pointers[NR_ICMP_TYPES + 1] = {
 	[ICMP_ECHOREPLY] = {
 		.handler = ping_rcv,
 	},
@@ -1119,5 +1148,11 @@ static struct pernet_operations __net_initdata icmp_sk_ops = {
 
 int __init icmp_init(void)
 {
+	int i;
+	struct icmp_control *ctrl = icmp_pointers;
+
+	for (i = 0; i < ARRAY_SIZE(icmp_pointers); i++, ctrl++)
+		ATOMIC_INIT_NOTIFIER_HEAD(&ctrl->notifier_head);
+
 	return register_pernet_subsys(&icmp_sk_ops);
 }
