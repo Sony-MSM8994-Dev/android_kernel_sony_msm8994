@@ -6477,8 +6477,18 @@ static int tomtom_codec_enable_slim_chmask(struct wcd9xxx_codec_dai_data *dai,
 	int ret = 0;
 	struct wcd9xxx_ch *ch;
 
+	if (!dai) {
+		pr_err("%s: dai data is null, skipping task.", __func__);
+		/* dai is null */
+		return -EINVAL;
+	}
+
 	if (up) {
 		list_for_each_entry(ch, &dai->wcd9xxx_ch_list, list) {
+			if (!ch) {
+				pr_err("%s: ch is null, not continuing.", __func__);
+				return -EINVAL;
+			}
 			ret = wcd9xxx_get_slave_port(ch->ch_num);
 			if (ret < 0) {
 				pr_err("%s: Invalid slave port ID: %d\n",
