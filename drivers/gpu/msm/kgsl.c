@@ -4794,7 +4794,7 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 				PM_QOS_DEFAULT_VALUE);
 	}
 
-	device->events_wq = alloc_workqueue("kgsl-events",
+	device->events_wq = alloc_workqueue("kgsl-events", WQ_HIGHPRI |
 		WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
 
 	/* Initalize the snapshot engine */
