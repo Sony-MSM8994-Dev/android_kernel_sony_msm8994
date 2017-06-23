@@ -644,7 +644,7 @@ void resched_cpu(int cpu)
 
 #ifdef CONFIG_SCHED_HMP
 
-__read_mostly unsigned int sysctl_power_aware_timer_migration;
+__read_mostly unsigned int sysctl_power_aware_timer_migration = 1;
 
 /* Return first cpu found in shallowest C-state in least power-cost cluster */
 static int _get_nohz_timer_target_hmp(void)
