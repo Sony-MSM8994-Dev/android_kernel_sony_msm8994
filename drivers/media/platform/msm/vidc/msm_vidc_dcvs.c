@@ -527,6 +527,8 @@ static int msm_dcvs_check_supported(struct msm_vidc_inst *inst)
 			(inst->fmts[OUTPUT_PORT]->fourcc ==
 				V4L2_PIX_FMT_VP8) ||
 			(inst->fmts[OUTPUT_PORT]->fourcc ==
+				V4L2_PIX_FMT_VP9) ||
+			(inst->fmts[OUTPUT_PORT]->fourcc ==
 				V4L2_PIX_FMT_H264_NO_SC);
 		/* 2K DCVS is supported for H264 only on 8992
 		 * 4K DCVS is same as earlier.
