@@ -805,6 +805,8 @@ static u32 xhci_get_port_status(struct usb_hcd *hcd,
 					wIndex + 1);
 			bus_state->resume_done[wIndex] = 0;
 			clear_bit(wIndex, &bus_state->resuming_ports);
+			xhci_test_and_clear_bit(xhci, port_array, wIndex,
+						PORT_PLC);
 			xhci_set_link_state(xhci, port_array, wIndex,
 					XDEV_U0);
 			xhci_dbg(xhci, "set port %d resume\n",
