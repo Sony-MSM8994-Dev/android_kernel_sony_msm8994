@@ -6097,7 +6097,11 @@ dhd_preinit_ioctls(dhd_pub_t *dhd)
 #ifdef WLAIBSS
 	setbit(eventmask, WLC_E_AIBSS_TXFAIL);
 #endif /* WLAIBSS */
+#ifdef SHOW_LOGTRACE
 	setbit(eventmask, WLC_E_TRACE);
+#else
+	clrbit(eventmask, WLC_E_TRACE);
+#endif /* SHOW_LOGTRACE */
 	setbit(eventmask, WLC_E_CSA_COMPLETE_IND);
 	/* Write updated Event mask */
 	ret = dhd_iovar(dhd, 0, "event_msgs", eventmask, WL_EVENTING_MASK_LEN, NULL, 0, TRUE);
