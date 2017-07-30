@@ -253,7 +253,7 @@ void nls_cstring_to_uniname(struct super_block *sb, UNI_NAME_T *p_uniname, UINT8
 {
 	INT32 i, j, lossy = FALSE;
 	UINT8 *end_of_name;
-	UINT16 upname[MAX_NAME_LENGTH];
+	UINT8 upname[MAX_NAME_LENGTH * 2];
 	UINT16 *uniname = p_uniname->name;
 	struct nls_table *nls = EXFAT_SB(sb)->nls_io;
 
@@ -283,7 +283,7 @@ void nls_cstring_to_uniname(struct super_block *sb, UNI_NAME_T *p_uniname, UINT8
 		if ((*uniname < 0x0020) || WSTRCHR(bad_uni_chars, *uniname))
 			lossy = TRUE;
 
-		*(upname+j) = nls_upper(sb, *uniname);
+		SET16_A(upname + j * 2, nls_upper(sb, *uniname));
 
 		uniname++;
 		j++;
