@@ -2787,6 +2787,12 @@ static int __init exfat_init_inodecache(void)
 
 static void __exit exfat_destroy_inodecache(void)
 {
+	/*
+	 * Make sure all delayed rcu free inodes are flushed before we
+	 * destroy cache.
+	 */
+	rcu_barrier();
+
 	kmem_cache_destroy(exfat_inode_cachep);
 }
 
