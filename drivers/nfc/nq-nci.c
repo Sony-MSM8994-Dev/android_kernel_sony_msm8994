@@ -295,11 +295,11 @@ static int nqx_standby_write(struct nqx_dev *nqx_dev,
 }
 
 /*
-	Power management of the eSE
-	NFC & eSE ON : NFC_EN high and eSE_pwr_req high.
-	NFC OFF & eSE ON : NFC_EN high and eSE_pwr_req high.
-	NFC OFF & eSE OFF : NFC_EN low and eSE_pwr_req low.
-*/
+ * Power management of the eSE
+ * NFC & eSE ON : NFC_EN high and eSE_pwr_req high.
+ * NFC OFF & eSE ON : NFC_EN high and eSE_pwr_req high.
+ * NFC OFF & eSE OFF : NFC_EN low and eSE_pwr_req low.
+ */
 static int nqx_ese_pwr(struct nqx_dev *nqx_dev, unsigned long int arg)
 {
 	int r = -1;
