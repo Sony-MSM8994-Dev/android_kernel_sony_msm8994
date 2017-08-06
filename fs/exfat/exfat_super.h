@@ -110,6 +110,11 @@ static inline struct exfat_inode_info *EXFAT_I(struct inode *inode) {
 	return container_of(inode, struct exfat_inode_info, vfs_inode);
 }
 
+static inline bool exfat_readonly(struct super_block *sb)
+{
+	return sb->s_flags & MS_RDONLY;
+}
+
 static inline int exfat_mode_can_hold_ro(struct inode *inode)
 {
 	struct exfat_sb_info *sbi = EXFAT_SB(inode->i_sb);

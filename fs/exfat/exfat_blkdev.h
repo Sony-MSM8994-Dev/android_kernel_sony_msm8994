@@ -39,6 +39,10 @@ extern "C" {
 	INT32 bdev_read(struct super_block *sb, UINT32 secno, struct buffer_head **bh, UINT32 num_secs, INT32 read);
 	INT32 bdev_write(struct super_block *sb, UINT32 secno, struct buffer_head *bh, UINT32 num_secs, INT32 sync);
 	INT32 bdev_sync(struct super_block *sb);
+
+void bdev_end_buffer_write(struct buffer_head *bh, int uptodate, int sync);
+	INT32 bdev_sync_dirty_buffer(struct buffer_head *bh,
+					struct super_block *sb, int sync);
 	INT32 bdev_reada(struct super_block *sb, UINT32 secno, UINT32 num_secs);
 #ifdef __cplusplus
 }
