@@ -101,6 +101,7 @@ extern void vlan_vids_del_by_dev(struct net_device *dev,
 				 const struct net_device *by_dev);
 
 extern bool vlan_uses_dev(const struct net_device *dev);
+extern u16 vlan_dev_get_egress_qos_mask(struct net_device *dev, struct sk_buff *skb);
 #else
 static inline struct net_device *
 __vlan_find_dev_deep(struct net_device *real_dev,
