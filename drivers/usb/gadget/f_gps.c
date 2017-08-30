@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2011-2014, 2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2014, 2016-2017, The Linux Foundation.
+ * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -250,6 +251,7 @@ static void gps_purge_responses(struct f_gps *dev)
 
 	pr_debug("%s: port#%d\n", __func__, dev->port_num);
 
+	usb_ep_dequeue(dev->notify, dev->notify_req);
 	spin_lock_irqsave(&dev->lock, flags);
 	while (!list_empty(&dev->cpkt_resp_q)) {
 		cpkt = list_first_entry(&dev->cpkt_resp_q,
@@ -490,6 +492,8 @@ static void gps_notify_complete(struct usb_ep *ep, struct usb_request *req)
 		if (!atomic_read(&dev->ctrl_online))
 			break;
 
+		pr_debug("%s: decrement notify_count:%u\n", __func__,
+				atomic_read(&dev->notify_count));
 		if (atomic_dec_and_test(&dev->notify_count))
 			break;
 
