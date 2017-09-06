@@ -22,7 +22,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: wl_cfg80211.c 701450 2017-05-25 02:10:23Z $
+ * $Id: wl_cfg80211.c 704367 2017-06-13 09:05:24Z $
  */
 /* */
 #include <typedefs.h>
@@ -5592,6 +5592,11 @@ wl_cfg80211_mgmt_tx(struct wiphy *wiphy, bcm_struct_cfgdev *cfgdev,
 	s8 eabuf[ETHER_ADDR_STR_LEN];
 
 	WL_DBG(("Enter \n"));
+
+	if (len > ACTION_FRAME_SIZE) {
+		WL_ERR(("bad length:%zu\n", len));
+		return BCME_BADLEN;
+	}
 
 	dev = cfgdev_to_wlc_ndev(cfgdev, cfg);
 
