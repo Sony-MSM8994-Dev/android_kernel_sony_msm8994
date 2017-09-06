@@ -25,7 +25,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: dhd.h 676009 2016-12-20 02:54:41Z $
+ * $Id: dhd.h 687068 2017-02-27 11:13:31Z $
  */
 
 /****************

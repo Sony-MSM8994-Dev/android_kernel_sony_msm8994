@@ -742,11 +742,8 @@ dhdpcie_bus_release(dhd_bus_t *bus)
 		MFREE(osh, bus, sizeof(dhd_bus_t));
 
 	}
-
 	DHD_TRACE(("%s: Exit\n", __FUNCTION__));
-
 }
-
 
 void
 dhdpcie_bus_release_dongle(dhd_bus_t *bus, osl_t *osh, bool dongle_isolation, bool reset_flag)

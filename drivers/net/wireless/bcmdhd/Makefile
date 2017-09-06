@@ -461,6 +461,12 @@ endif
 ifneq ($(CONFIG_SOMC_WLAN_NVRAM_PATH),)
   DHDCFLAGS += -DCONFIG_BCMDHD_NVRAM_PATH=\"$(CONFIG_SOMC_WLAN_NVRAM_PATH)\"
 endif
+
+# Enable Disconnection timing log
+ifeq ($(CONFIG_SOMC_WLAN_ENABLE_DISC_TIME_LOG),y)
+  DHDCFLAGS += -DDHD_ENABLE_DISC_TIME_LOG
+endif
+
 #########
 # Others
 #########
