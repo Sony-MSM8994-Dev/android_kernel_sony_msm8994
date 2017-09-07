@@ -173,7 +173,7 @@ DHDCFLAGS += -DUSE_INITIAL_SHORT_DWELL_TIME
 DHDCFLAGS += -DWL_ABORT_SCAN
 
 # Disable to delay link down event
-DHDCFLAGS += -DDISABLE_BCN_DLY
+#DHDCFLAGS += -DDISABLE_BCN_DLY
 
 ##############################
 # Android Platform Definition
@@ -447,6 +447,11 @@ ifneq ($(CONFIG_SOMC_WLAN_LOW_POWER_NV_PATH),)
 endif
 endif
 
+# Disable to delay link down event
+ifeq ($(CONFIG_SOMC_WLAN_DISABLE_BCM_DLY),y)
+  DHDCFLAGS += -DDISABLE_BCN_DLY
+endif
+
 # Change scan time
 ifeq ($(CONFIG_SOMC_CFG_WLAN_CHANGE_SCAN_TIME),y)
   DHDCFLAGS += -DCHANGE_SCAN_TIME
@@ -463,9 +468,9 @@ ifneq ($(CONFIG_SOMC_WLAN_NVRAM_PATH),)
 endif
 
 # Enable Disconnection timing log
-ifeq ($(CONFIG_SOMC_WLAN_ENABLE_DISC_TIME_LOG),y)
-  DHDCFLAGS += -DDHD_ENABLE_DISC_TIME_LOG
-endif
+#ifeq ($(CONFIG_SOMC_WLAN_ENABLE_DISC_TIME_LOG),y)
+#  DHDCFLAGS += -DDHD_ENABLE_DISC_TIME_LOG
+#endif
 
 #########
 # Others
