@@ -19,7 +19,6 @@
 
 #include <linux/mmc/card.h>
 #include <linux/mmc/host.h>
-#include <linux/sched/rt.h>
 #include "queue.h"
 
 #define MMC_QUEUE_BOUNCESZ	65536
@@ -59,11 +58,6 @@ static int mmc_queue_thread(void *d)
 	struct mmc_queue *mq = d;
 	struct request_queue *q = mq->queue;
 	struct mmc_card *card = mq->card;
-
-	struct sched_param scheduler_params = {0};
-	scheduler_params.sched_priority = 1;
-
-	sched_setscheduler(current, SCHED_FIFO, &scheduler_params);
 
 	current->flags |= PF_MEMALLOC;
 	if (card->host->wakeup_on_idle)
@@ -282,6 +276,7 @@ int mmc_init_queue(struct mmc_queue *mq, struct mmc_card *card,
 
 	blk_queue_prep_rq(mq->queue, mmc_prep_request);
 	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, mq->queue);
+	queue_flag_clear_unlocked(QUEUE_FLAG_ADD_RANDOM, mq->queue);
 	if (mmc_can_erase(card))
 		mmc_queue_setup_discard(mq->queue, card);
 

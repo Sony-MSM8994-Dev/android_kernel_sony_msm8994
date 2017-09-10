@@ -879,6 +879,7 @@ static void perf_event_ctx_unlock(struct perf_event *event,
 	put_ctx(ctx);
 }
 
+
 static void unclone_ctx(struct perf_event_context *ctx)
 {
 	if (ctx->parent_ctx) {
@@ -3347,8 +3348,8 @@ static void perf_remove_from_owner(struct perf_event *event)
 		 * However we can safely take this lock because its the child
 		 * ctx->mutex.
 		 */
-		mutex_lock_nested(&owner->perf_event_mutex,
-					SINGLE_DEPTH_NESTING);
+		mutex_lock_nested(&owner->perf_event_mutex, SINGLE_DEPTH_NESTING);
+
 
 		/*
 		 * We have to re-check the event->owner field, if it is cleared
@@ -3559,7 +3560,7 @@ perf_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 	struct perf_event *event = file->private_data;
 	struct perf_event_context *ctx;
 	int ret;
-
+ 
 	ctx = perf_event_ctx_lock(event);
 	ret = perf_read_hw(event, buf, count);
 	perf_event_ctx_unlock(event, ctx);
@@ -3683,8 +3684,7 @@ static int perf_event_set_output(struct perf_event *event,
 				 struct perf_event *output_event);
 static int perf_event_set_filter(struct perf_event *event, void __user *arg);
 
-static long _perf_ioctl(struct perf_event *event, unsigned int cmd,
-			unsigned long arg)
+static long _perf_ioctl(struct perf_event *event, unsigned int cmd, unsigned long arg)
 {
 	void (*func)(struct perf_event *);
 	u32 flags = arg;
@@ -3741,15 +3741,18 @@ static long _perf_ioctl(struct perf_event *event, unsigned int cmd,
 
 static long perf_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-        struct perf_event *event = file->private_data;
-        struct perf_event_context *ctx;
-        long ret;
+	struct perf_event *event = file->private_data;
+	struct perf_event_context *ctx;
+	long ret;
 
+	ctx = perf_event_ctx_lock(event);
+	ret = _perf_ioctl(event, cmd, arg);
+	perf_event_ctx_unlock(event, ctx);
         ctx = perf_event_ctx_lock(event);
         ret = _perf_ioctl(event, cmd, arg);
         perf_event_ctx_unlock(event, ctx);
 
-        return ret;
+	return ret;
 }
 
 #ifdef CONFIG_COMPAT
@@ -7175,7 +7178,11 @@ SYSCALL_DEFINE5(perf_event_open,
 		 */
 		mutex_lock_double(&gctx->mutex, &ctx->mutex);
 
-		mutex_lock(&gctx->mutex);
+		/*
+		 * See perf_event_ctx_lock() for comments on the details
+		 * of swizzling perf_event::ctx.
+		 */
+		mutex_lock_double(&gctx->mutex, &ctx->mutex);
 		perf_remove_from_context(group_leader, false);
 
 		/*
@@ -7202,6 +7209,7 @@ SYSCALL_DEFINE5(perf_event_open,
 		 * the old lists, before installing it on new lists.
 		 */
 		synchronize_rcu();
+
 		perf_install_in_context(ctx, group_leader, group_leader->cpu);
 		get_ctx(ctx);
 		list_for_each_entry(sibling, &group_leader->sibling_list,
