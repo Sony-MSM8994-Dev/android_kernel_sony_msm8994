@@ -2717,20 +2717,20 @@ static void fg_cap_learning_post_process(struct fg_chip *chip)
 
 #ifdef CONFIG_QPNP_FG_EXTENSION
 	max_inc_val = chip->learning_data.max_increment ?
-			chip->learning_data.learned_cc_uah
+			(int64_t)chip->learning_data.learned_cc_uah
 			* (1000 + chip->learning_data.max_increment) :
 			((int64_t)chip->nom_cap_uah) * 1000;
 #else
-	max_inc_val = chip->learning_data.learned_cc_uah
+	max_inc_val = (int64_t)chip->learning_data.learned_cc_uah
 			* (1000 + chip->learning_data.max_increment);
 #endif
 	do_div(max_inc_val, 1000);
 
-	min_dec_val = chip->learning_data.learned_cc_uah
+	min_dec_val = (int64_t)chip->learning_data.learned_cc_uah
 			* (1000 - chip->learning_data.max_decrement);
 	do_div(min_dec_val, 1000);
 
-	old_cap = chip->learning_data.learned_cc_uah;
+	old_cap = (int64_t)chip->learning_data.learned_cc_uah;
 	if (chip->learning_data.cc_uah > max_inc_val)
 		chip->learning_data.learned_cc_uah = max_inc_val;
 	else if (chip->learning_data.cc_uah < min_dec_val)
