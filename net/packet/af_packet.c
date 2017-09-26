@@ -2529,16 +2529,18 @@ static int packet_do_bind(struct sock *sk, struct net_device *dev, __be16 proto)
 	struct net_device *dev_curr;
 	__be16 proto_curr;
 	bool need_rehook;
+	int ret = 0;
+
+	lock_sock(sk);
+	spin_lock(&po->bind_lock);
 
 	if (po->fanout) {
 		if (dev)
 			dev_put(dev);
 
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out_unlock;
 	}
-
-	lock_sock(sk);
-	spin_lock(&po->bind_lock);
 
 	proto_curr = po->prot_hook.type;
 	dev_curr = po->prot_hook.dev;
@@ -2572,7 +2574,7 @@ static int packet_do_bind(struct sock *sk, struct net_device *dev, __be16 proto)
 out_unlock:
 	spin_unlock(&po->bind_lock);
 	release_sock(sk);
-	return 0;
+	return ret;
 }
 
 /*
