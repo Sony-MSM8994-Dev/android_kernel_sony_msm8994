@@ -9843,7 +9843,7 @@ wl_cfg80211_netdev_notifier_call(struct notifier_block * nb,
 			int max_wait_timeout = 2;
 			int max_wait_count = 100;
 			int refcnt = 0;
-			unsigned long limit = jiffies + max_wait_timeout * HZ;
+			unsigned long limit = jiffies + max_wait_timeout * msecs_to_jiffies(1000);
 			while (work_pending(&wdev->cleanup_work)) {
 				if (refcnt%5 == 0) {
 					WL_ERR(("[NETDEV_DOWN] wait for "
