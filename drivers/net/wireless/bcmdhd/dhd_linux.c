@@ -7357,7 +7357,7 @@ dhd_os_ioctl_resp_wait(dhd_pub_t *pub, uint *condition, bool *pending)
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27))
 	timeout = msecs_to_jiffies(dhd_ioctl_timeout_msec);
 #else
-	timeout = dhd_ioctl_timeout_msec * HZ / 1000;
+	timeout = dhd_ioctl_timeout_msec * msecs_to_jiffies(1);
 #endif
 
 	DHD_PERIM_UNLOCK(pub);
@@ -7388,7 +7388,7 @@ dhd_os_d3ack_wait(dhd_pub_t *pub, uint *condition, bool *pending)
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27))
 	timeout = msecs_to_jiffies(dhd_ioctl_timeout_msec);
 #else
-	timeout = dhd_ioctl_timeout_msec * HZ / 1000;
+	timeout = dhd_ioctl_timeout_msec * msecs_to_jiffies(1);
 #endif
 
 	DHD_PERIM_UNLOCK(pub);
@@ -7766,7 +7766,7 @@ void dhd_wait_for_event(dhd_pub_t *dhd, bool *lockvar)
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27))
 	int timeout = msecs_to_jiffies(IOCTL_RESP_TIMEOUT);
 #else
-	int timeout = (IOCTL_RESP_TIMEOUT / 1000) * HZ;
+	int timeout = IOCTL_RESP_TIMEOUT * msecs_to_jiffies(1);
 #endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)) */
 
 	dhd_os_sdunlock(dhd);

@@ -243,7 +243,7 @@ extern int osl_error(int bcmerror);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 4, 29)
 #define OSL_SYSUPTIME()		((uint32)jiffies_to_msecs(jiffies))
 #else
-#define OSL_SYSUPTIME()		((uint32)jiffies * (1000 / HZ))
+#define OSL_SYSUPTIME()		((uint32)jiffies * msecs_to_jiffies(1))
 #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2, 4, 29) */
 #define	printf(fmt, args...)	printk(fmt , ## args)
 #include <linux/kernel.h>	/* for vsn/printf's */
