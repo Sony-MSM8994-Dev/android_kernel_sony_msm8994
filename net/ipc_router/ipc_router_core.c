@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -2754,6 +2754,9 @@ int msm_ipc_router_register_server(struct msm_ipc_port *port_ptr,
 		ipc_router_destroy_rport(rport_ptr);
 		return -ENOMEM;
 	}
+
+	rport_ptr->sec_rule = msm_ipc_get_security_rule(
+				server->name.service, server->name.instance);
 
 	memset(&ctl, 0, sizeof(ctl));
 	ctl.cmd = IPC_ROUTER_CTRL_CMD_NEW_SERVER;
