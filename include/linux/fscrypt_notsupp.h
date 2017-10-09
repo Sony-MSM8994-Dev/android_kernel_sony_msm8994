@@ -192,4 +192,10 @@ static inline int __fscrypt_prepare_link(struct inode *inode,
 	return -EOPNOTSUPP;
 }
 
+static inline int __fscrypt_prepare_lookup(struct inode *dir,
+					   struct dentry *dentry)
+{
+	return -EOPNOTSUPP;
+}
+
 #endif	/* _LINUX_FSCRYPT_NOTSUPP_H */
