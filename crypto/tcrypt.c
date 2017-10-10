@@ -264,11 +264,13 @@ static void sg_init_aead(struct scatterlist *sg, char *xbuf[XBUFSIZE],
 	}
 
 	sg_init_table(sg, np);
-	np--;
+	if (rem)
+		np--;
 	for (k = 0; k < np; k++)
 		sg_set_buf(&sg[k], xbuf[k], PAGE_SIZE);
 
-	sg_set_buf(&sg[k], xbuf[k], rem);
+	if (rem)
+		sg_set_buf(&sg[k], xbuf[k], rem);
 }
 
 static void test_aead_speed(const char *algo, int enc, unsigned int sec,
