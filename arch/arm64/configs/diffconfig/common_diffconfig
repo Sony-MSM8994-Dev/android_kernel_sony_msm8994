@@ -215,6 +215,9 @@ CONFIG_QNS_SYSTEM=y
 # Android timed gpio driver
 CONFIG_ANDROID_TIMED_GPIO=y
 
+# Battery level reporting for HID devices
+CONFIG_HID_BATTERY_STRENGTH=y
+
 # Misc
 CONFIG_AIO_SSD_ONLY=y
 CONFIG_STATE_NOTIFIER=y
