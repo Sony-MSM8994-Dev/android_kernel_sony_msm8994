@@ -33,7 +33,7 @@
 #define RCU_KTHREAD_PRIO 1
 
 #ifdef CONFIG_RCU_BOOST
-#include "../locking/rtmutex_common.h"
+#include "../rtmutex_common.h"
 
 /* rcuc/rcub kthread realtime priority */
 static int kthread_prio = CONFIG_RCU_KTHREAD_PRIO;
