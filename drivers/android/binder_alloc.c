@@ -217,17 +217,13 @@ static int binder_update_page_range(struct binder_alloc *alloc, int allocate,
 		}
 	}
 
-	if (need_mm)
-		mm = get_task_mm(alloc->tsk);
+	if (!vma && need_mm && mmget_not_zero(alloc->vma_vm_mm))
+		mm = alloc->vma_vm_mm;
+>>>>>>> a0c2baaf81bd5 (android: binder: Don't get mm from task)
 
 	if (mm) {
 		down_read(&mm->mmap_sem);
 		vma = alloc->vma;
-		if (vma && mm != alloc->vma_vm_mm) {
-			pr_err("%d: vma mm and task mm mismatch\n",
-				alloc->pid);
-			vma = NULL;
-		}
 	}
 
 	if (!vma && need_mm) {
@@ -871,6 +867,8 @@ void binder_alloc_deferred_release(struct binder_alloc *alloc)
 		vfree(alloc->buffer);
 	}
 	mutex_unlock(&alloc->mutex);
+	if (alloc->vma_vm_mm)
+		mmdrop(alloc->vma_vm_mm);
 
 	binder_alloc_debug(BINDER_DEBUG_OPEN_CLOSE,
 		     "%s: %d buffers %d, pages %d\n",
@@ -1078,7 +1076,6 @@ static struct shrinker binder_shrinker = {
  */
 void binder_alloc_init(struct binder_alloc *alloc)
 {
-	alloc->tsk = current->group_leader;
 	alloc->pid = current->group_leader->pid;
 	mutex_init(&alloc->mutex);
 	INIT_LIST_HEAD(&alloc->buffers);
