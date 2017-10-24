@@ -378,8 +378,9 @@ static s32 wl_cfg80211_resume(struct wiphy *wiphy);
 	2, 0))
 static s32 wl_cfg80211_mgmt_tx_cancel_wait(struct wiphy *wiphy,
 	bcm_struct_cfgdev *cfgdev, u64 cookie);
-static s32 wl_cfg80211_del_station(struct wiphy *wiphy,
-	struct net_device *ndev, u8* mac_addr);
+static s32 wl_cfg80211_del_station(
+		struct wiphy *wiphy, struct net_device *ndev,
+		struct station_del_parameters *params);
 static s32 wl_cfg80211_change_station(struct wiphy *wiphy,
 	struct net_device *dev, u8 *mac, struct station_parameters *params);
 #endif /* WL_SUPPORT_BACKPORTED_KPATCHES || KERNEL_VER >= KERNEL_VERSION(3, 2, 0)) */
@@ -6796,9 +6797,8 @@ static s32 wl_cfg80211_hostapd_sec(
 	2, 0))
 static s32
 wl_cfg80211_del_station(
-	struct wiphy *wiphy,
-	struct net_device *ndev,
-	u8* mac_addr)
+		struct wiphy *wiphy, struct net_device *ndev,
+		struct station_del_parameters *params)
 {
 	struct net_device *dev;
 	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
@@ -6809,6 +6809,8 @@ wl_cfg80211_del_station(
 		sizeof(struct ether_addr) + sizeof(uint)] = {0};
 	struct maclist *assoc_maclist = (struct maclist *)mac_buf;
 	int num_associated = 0;
+
+	const u8 *mac_addr = params->mac;
 
 	WL_DBG(("Entry\n"));
 	if (mac_addr == NULL) {
