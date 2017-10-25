@@ -1364,7 +1364,8 @@ static int parse_dirplusfile(char *buf, size_t nbytes, struct file *file,
 			over = filldir(dstbuf, dirent->name, dirent->namelen,
 				       file->f_pos, dirent->ino,
 				       dirent->type);
-			file->f_pos = dirent->off;
+			if (!over)
+				file->f_pos = dirent->off;
 		}
 
 		buf += reclen;
