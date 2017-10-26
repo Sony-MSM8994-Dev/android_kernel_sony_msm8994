@@ -217,6 +217,9 @@ CONFIG_QNS_SYSTEM=y
 # Android timed gpio driver
 CONFIG_ANDROID_TIMED_GPIO=y
 
+# Automatic process group scheduling
+# CONFIG_SCHED_AUTOGROUP is not set
+
 # RCU
 CONFIG_TREE_PREEMPT_RCU=y
 CONFIG_PREEMPT_RCU=y
