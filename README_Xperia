@@ -8,7 +8,7 @@ Configuration files can be found in arch/arm64/configs.
     Xperia Z4 E6533                    => ivy_dsds_diffconfig
     Xperia Z4 Tablet SGP771            => karin_diffconfig
     Xperia Z4 Tablet SGP712            => karin_windy_diffconfig
-    Xperia Z5 E6603/E6653                    => sumire_diffconfig
+    Xperia Z5 E6603/E6653              => sumire_diffconfig
     Xperia Z5 Dual E6633/E6683         => sumire_dsds_diffconfig
     Xperia Z5 Compact E5803/E5823      => suzuran_diffconfig
     Xperia Z5 Premium E6853            => satsuki_diffconfig
