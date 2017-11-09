@@ -152,6 +152,13 @@ static int ecryptfs_crypto_api_algify_cipher_name(char **algified_name,
 	int algified_name_len;
 	int rc;
 
+	if (!strcmp(cipher_name, "aes") &&
+	    (!strcmp(chaining_modifier, "cbc") ||
+	     !strcmp(chaining_modifier, "xts"))) {
+		cipher_name = "fipsaes";
+		cipher_name_len = strlen(cipher_name);
+	}
+
 	algified_name_len = (chaining_modifier_len + cipher_name_len + 3);
 	(*algified_name) = kmalloc(algified_name_len, GFP_KERNEL);
 	if (!(*algified_name)) {
@@ -2102,6 +2109,7 @@ ecryptfs_decode_from_filename(unsigned char *dst, size_t *dst_size,
 			break;
 		case 2:
 			dst[dst_byte_offset++] |= (src_byte);
+			dst[dst_byte_offset] = 0;
 			current_bit_offset = 0;
 			break;
 		}
