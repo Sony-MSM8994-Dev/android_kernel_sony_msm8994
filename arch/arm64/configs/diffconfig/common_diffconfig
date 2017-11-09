@@ -281,6 +281,9 @@ CONFIG_EXFAT_DISCARD=y
 CONFIG_EXFAT_COMPAT_TUXERA=y
 # CONFIG_EXFAT_DEBUG is not set
 
+# eCrypt filesystem
+CONFIG_ECRYPT_FS=y
+
 # Battery level reporting for HID devices
 CONFIG_HID_BATTERY_STRENGTH=y
 

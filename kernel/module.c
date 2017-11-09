@@ -1177,6 +1177,9 @@ static int check_version(Elf_Shdr *sechdrs,
 	if(!strncmp("core_ctl", mod->name, 8))
 		return 0;
 
+	if(!strncmp("ecryptfs", mod->name, 8))
+		return 0;
+
 	/* Exporting module didn't supply crcs?  OK, we're already tainted. */
 	if (!crc)
 		return 1;
