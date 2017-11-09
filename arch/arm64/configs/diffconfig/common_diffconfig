@@ -284,6 +284,12 @@ CONFIG_EXFAT_COMPAT_TUXERA=y
 # eCrypt filesystem
 CONFIG_ECRYPT_FS=y
 
+# Broadcom built-in bluetooth driver
+CONFIG_BT_PROTOCOL_DRIVER=m
+CONFIG_LINE_DISCIPLINE_DRIVER=m
+CONFIG_V4L2_ANT_DRIVER=m
+CONFIG_V4L2_FM_DRIVER=m
+
 # Battery level reporting for HID devices
 CONFIG_HID_BATTERY_STRENGTH=y
 
