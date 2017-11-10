@@ -1906,7 +1906,8 @@ int mhl_sii8620_device_start(void *context)
 	mhl_unpowered_start();
 	chip_power_on();
 	pr_debug("%s:RGND measurement wait\n", __func__);
-	timeout = wait_for_completion_interruptible_timeout(&rgnd_done, HZ/2);
+	timeout = wait_for_completion_interruptible_timeout(&rgnd_done,
+							msecs_to_jiffies(500));
 	if (!timeout) {
 		/* timeout happens */
 		pr_warn("%s:time out\n", __func__);

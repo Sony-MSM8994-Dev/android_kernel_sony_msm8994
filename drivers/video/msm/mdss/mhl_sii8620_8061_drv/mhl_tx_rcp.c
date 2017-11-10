@@ -305,7 +305,7 @@ int mhl_tx_rcp_start(void)
 		init_timer(&key_release_timer);
 		key_release_timer.function = mhl_tx_rcp_key_release_timer;
 		key_release_timer.data = (unsigned long)&s_rcp_info;
-		key_release_timer.expires = jiffies - HZ;
+		key_release_timer.expires = jiffies - msecs_to_jiffies(1000);
 		add_timer(&key_release_timer);
 		s_rcp_info.bReady = true;
 		s_rcp_info.input = input_allocate_device();
