@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015,2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2015, 2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -948,7 +948,7 @@ static int sps_device_init(void)
 		goto exit_err;
 	}
 
-	SPS_DBG2("sps:bamdma_bam.phys=%pa.virt=0x%p.",
+	SPS_DBG2("sps:bamdma_bam.phys=%pa.virt=0x%pK.",
 		&bamdma_props.phys_addr,
 		bamdma_props.virt_addr);
 
@@ -962,7 +962,7 @@ static int sps_device_init(void)
 		goto exit_err;
 	}
 
-	SPS_DBG2("sps:bamdma_dma.phys=%pa.virt=0x%p.",
+	SPS_DBG2("sps:bamdma_dma.phys=%pa.virt=0x%pK.",
 		&bamdma_props.periph_phys_addr,
 		bamdma_props.periph_virt_addr);
 
