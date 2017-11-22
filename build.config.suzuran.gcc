@@ -36,4 +36,10 @@ then
 	 --tags_offset 0x01E00000 \
 	 --output ../final_files/boot_E5823_Enf.img
 
+	# Copy BT drivers
+	cp out/drivers/bluetooth/broadcom/bt_protocol_driver/brcm_bt_drv.ko ../final_files/modules/
+	cp out/drivers/bluetooth/broadcom/line_discipline_driver/brcm_hci_ldisc.ko ../final_files/modules/
+	cp out/drivers/bluetooth/broadcom/v4l2_ant_driver/ant_drv.ko ../final_files/modules/
+	cp out/drivers/bluetooth/broadcom/v4l2_fm_driver/fm_drv.ko ../final_files/modules/
+
 fi
