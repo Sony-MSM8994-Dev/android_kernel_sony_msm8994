@@ -2341,7 +2341,7 @@ static const struct nla_policy xfrma_policy[XFRMA_MAX+1] = {
 	[XFRMA_TFCPAD]		= { .type = NLA_U32 },
 	[XFRMA_REPLAY_ESN_VAL]	= { .len = sizeof(struct xfrm_replay_state_esn) },
 	[XFRMA_SA_EXTRA_FLAGS]	= { .type = NLA_U32 },
-	[XFRMA_OUTPUT_MARK]	= { .len = NLA_U32 },
+	[XFRMA_OUTPUT_MARK]	= { .type = NLA_U32 },
 };
 
 static const struct xfrm_link {
