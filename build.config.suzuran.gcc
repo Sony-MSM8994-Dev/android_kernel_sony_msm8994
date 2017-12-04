@@ -11,7 +11,7 @@ export ARCH=arm64
 #export CROSS_COMPILE=aarch64-linux-android-
 
 ### GCC 6.4.1 / Linaro Toolchain
-export PATH=~/android/toolchain/gcc-linaro-6.4.1-2017.08-x86_64_aarch64-linux-gnu/bin/:$PATH
+export PATH=~/android/toolchain/gcc-linaro-6.4.1-2017.11-x86_64_aarch64-linux-gnu/bin/:$PATH
 export CROSS_COMPILE=aarch64-linux-gnu-
 
 export KBUILD_DIFFCONFIG=suzuran_diffconfig
