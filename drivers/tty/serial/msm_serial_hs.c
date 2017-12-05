@@ -2182,8 +2182,6 @@ void toggle_wakeup_interrupt(struct msm_hs_port *msm_uport)
 		disable_irq(uport->irq);
 		msm_uport->wakeup.enabled = true;
 		spin_unlock_irqrestore(&uport->lock, flags);
-		disable_irq(uport->irq);
-		enable_irq(msm_uport->wakeup.irq);
 	} else {
 		spin_lock_irqsave(&uport->lock, flags);
 		if (!atomic_read(&msm_uport->wakeup_irq_disabled)) {
