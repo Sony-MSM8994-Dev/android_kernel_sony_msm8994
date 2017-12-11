@@ -263,6 +263,10 @@ typedef struct dhd_pub {
 	int pktfilter_count;
 
 	wl_country_t dhd_cspec;		/* Current Locale info */
+#ifdef CUSTOM_FORCE_NODFS_FLAG
+	uint	dhd_cflags;
+#endif /* CUSTOM_FORCE_NODFS_FLAG */
+	bool force_country_change;
 	char eventmask[WL_EVENTING_MASK_LEN];
 	int	op_mode;				/* STA, HostAPD, WFD, SoftAP */
 
@@ -584,6 +588,9 @@ extern int *dhd_dev_get_feature_set_matrix(struct net_device *dev, int *num);
 
 extern int dhd_dev_get_feature_set(struct net_device *dev);
 extern int *dhd_dev_get_feature_set_matrix(struct net_device *dev, int *num);
+#ifdef CUSTOM_FORCE_NODFS_FLAG
+extern int dhd_dev_set_nodfs(struct net_device *dev, uint nodfs);
+#endif /* CUSTOM_FORCE_NODFS_FLAG */
 extern int dhd_dev_cfg_rand_mac_oui(struct net_device *dev, uint8 *oui);
 extern int dhd_set_rand_mac_oui(dhd_pub_t *dhd);
 
@@ -641,7 +648,13 @@ extern int dhd_customer_gpio_wlan_ctrl(void *adapter, int onoff);
 extern int somc_get_mac_address(unsigned char *buf);
 #endif /* GET_CUSTOM_MAC_ENABLE */
 extern int dhd_custom_get_mac_address(void *adapter, unsigned char *buf);
-extern void get_customized_country_code(void *adapter, char *country_iso_code, wl_country_t *cspec);
+#ifdef CUSTOM_FORCE_NODFS_FLAG
+extern void get_customized_country_code(void *adapter, char *country_iso_code,
+					wl_country_t *cspec, u32 flags);
+#else
+extern void get_customized_country_code(void *adapter, char *country_iso_code,
+					wl_country_t *cspec);
+#endif /* CUSTOM_FORCE_NODFS_FLAG */
 extern void dhd_os_sdunlock_sndup_rxq(dhd_pub_t * pub);
 extern void dhd_os_sdlock_eventq(dhd_pub_t * pub);
 extern void dhd_os_sdunlock_eventq(dhd_pub_t * pub);
