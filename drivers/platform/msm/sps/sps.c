@@ -2199,7 +2199,7 @@ exit_err:
 	}
 #endif /* CONFIG_SPS_SUPPORT_BAMDMA */
 
-	SPS_INFO("sps:BAM %pa is registered.", &bam->props.phys_addr);
+	SPS_INFO("sps:BAM %pa is registered.\n", &bam->props.phys_addr);
 
 	return 0;
 }
@@ -2784,7 +2784,7 @@ static int msm_sps_probe(struct platform_device *pdev)
 #endif
 	sps->is_ready = true;
 
-	SPS_INFO("sps:sps is ready.");
+	SPS_INFO("sps:sps is ready.\n");
 
 	return 0;
 dfab_clk_err:
