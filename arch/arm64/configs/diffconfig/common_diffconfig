@@ -257,15 +257,15 @@ CONFIG_RCU_CPU_STALL_TIMEOUT=30
 # Power-Efficient workqueues
 CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y
 
-# Misc
-CONFIG_AIO_SSD_ONLY=y
-CONFIG_STATE_NOTIFIER=y
-# CONFIG_POWERSUSPEND is not set
-CONFIG_HAVE_ARCH_BITREVERSE=y
+# Timer frequency
 CONFIG_HZ_300=y
 CONFIG_HZ=300
-CONFIG_DM_VERITY_HASH_PREFETCH_MIN_SIZE_128=y
-CONFIG_FW_CACHE=y
+
+# State Notifier Driver
+CONFIG_STATE_NOTIFIER=y
+
+# Power Suspend driver for PM
+# CONFIG_POWERSUSPEND is not set
 
 # Cryptographic Extensions
 CONFIG_CRYPTO_AES_ARM64=y
@@ -303,6 +303,12 @@ CONFIG_LINE_DISCIPLINE_DRIVER=m
 CONFIG_V4L2_ANT_DRIVER=m
 CONFIG_V4L2_FM_DRIVER=m
 
+# Misc
+CONFIG_AIO_SSD_ONLY=y
+CONFIG_HAVE_ARCH_BITREVERSE=y
+CONFIG_DM_VERITY_HASH_PREFETCH_MIN_SIZE_128=y
+CONFIG_FW_CACHE=y
+
 # Battery level reporting for HID devices
 CONFIG_HID_BATTERY_STRENGTH=y
 
@@ -327,3 +333,19 @@ CONFIG_HID_SENSOR_HUB=y
 
 # Enable FiiO HID Quirk
 CONFIG_HID_FIIO=y
+
+# kswapd: limit it to the first 4 cores
+# by doing so also avoid an error/issue with vmscan
+CONFIG_KSWAPD_CPU_AFFINITY_MASK="f"
+
+# CMA, allocating framebuffer, etc. memory [CMA_SIZE_MBYTES 16 -> 32]
+CONFIG_CMA_SIZE_MBYTES=32
+
+# enable Panic on data corruption, if there's data corruption we better
+# crash the system as soon as it occurs, otherwise the context is lost
+# to track the (potentially fixable) origin down, also it's a
+# surefire way to screw up the system anyway
+CONFIG_PANIC_ON_DATA_CORRUPTION=y
+
+# disable MMC CMD debug feature
+# CONFIG_MMC_CMD_DEBUG is not set
