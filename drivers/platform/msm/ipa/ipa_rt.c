@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, 2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -53,7 +53,7 @@ int __ipa_generate_rt_hw_rule_v2(enum ipa_ip_type ip,
 	int pipe_idx;
 
 	if (buf == NULL) {
-		memset(tmp, 0, (IPA_RT_FLT_HW_RULE_BUF_SIZE/4));
+		memset(tmp, 0, IPA_RT_FLT_HW_RULE_BUF_SIZE);
 		buf = (u8 *)tmp;
 	}
 
@@ -68,15 +68,8 @@ int __ipa_generate_rt_hw_rule_v2(enum ipa_ip_type ip,
 	rule_hdr->u.hdr.pipe_dest_idx = pipe_idx;
 	rule_hdr->u.hdr.system = !ipa_ctx->hdr_tbl_lcl;
 	if (entry->hdr) {
-		if (entry->hdr->cookie == IPA_COOKIE) {
-			rule_hdr->u.hdr.hdr_offset =
-				entry->hdr->offset_entry->offset >> 2;
-		} else {
-			IPAERR("Entry hdr deleted by user = %d cookie = %u\n",
-				 entry->hdr->user_deleted, entry->hdr->cookie);
-			WARN_ON(1);
-			rule_hdr->u.hdr.hdr_offset = 0;
-		}
+		rule_hdr->u.hdr.hdr_offset =
+			entry->hdr->offset_entry->offset >> 2;
 	} else {
 		rule_hdr->u.hdr.hdr_offset = 0;
 	}
