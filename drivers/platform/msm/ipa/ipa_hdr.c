@@ -561,8 +561,7 @@ static int __ipa_add_hdr_proc_ctx(struct ipa_hdr_proc_ctx_add *proc_ctx,
 	return 0;
 
 bad_len:
-	if (add_ref_hdr)
-		hdr_entry->ref_cnt--;
+	hdr_entry->ref_cnt--;
 	entry->cookie = 0;
 	kmem_cache_free(ipa_ctx->hdr_proc_ctx_cache, entry);
 	return -EPERM;
