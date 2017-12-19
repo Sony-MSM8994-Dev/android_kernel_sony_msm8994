@@ -45,21 +45,27 @@ How to build your kernel:
     $ export KBUILD_DIFFCONFIG=sumire_diffconfig
       NOTE: Please set a configuration file you want to build.
 
-    $ make msm8994-perf_defconfig
+    $ mkdir -p out
 
-    $ make
+    $ make msm8994-perf_defconfig O=./out
 
-    You can see arch/arm64/boot/Image.gz-dtb if you succeed in building.
+    $ make O=./out
+
+    You can see out/arch/arm64/boot/Image.gz-dtb if you succeed in building.
 
 
   Step 2: Assembling the boot.img
     (In the Linux Kernel directory)
     $ mkbootimg \
-      --kernel arch/arm64/boot/Image.gz-dtb \
+      --kernel out/arch/arm64/boot/Image.gz-dtb \
       --ramdisk ramdisk.img \
-      --cmdline "androidboot.hardware=qcom user_debug=31 msm_rtb.filter=0x237 ehci-hcd.park=3 lpm_levels.sleep_disabled=1 boot_cpus=0-5 dwc3_msm.prop_chg_detect=Y coherent_pool=2M dwc3_msm.hvdcp_max_current=1500" \
+      --os_version "7.1.1" --os_patch_level "2017-09-01" \
+      --cmdline "androidboot.hardware=qcom user_debug=31 msm_rtb.filter=0x237 ehci-hcd.park=3 lpm_levels.sleep_disabled=1 boot_cpus=0-5 dwc3_msm.prop_chg_detect=Y coherent_pool=2M dwc3_msm.hvdcp_max_current=1500 zram.backend=z3fold buildvariant=user" \
       --base 0x00000000 \
       --pagesize 4096 \
       --ramdisk_offset 0x02000000 \
       --tags_offset 0x01E00000 \
       --output boot.img
+
+      NOTE: Since Android O, you need to set 'os_version' and 'os_patch_level'
+            parameter for mkbootimg according to your base Android system image.
