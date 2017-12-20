@@ -221,6 +221,9 @@ CONFIG_DEFAULT_WESTWOOD=y
 CONFIG_NF_NAT_IPV4=y
 CONFIG_NF_NAT_IPV6=y
 
+# WireGuard secure network tunnel
+CONFIG_WIREGUARD=n
+
 # Fingerprint Boost Driver
 CONFIG_FINGERPRINT_BOOST=y
 
