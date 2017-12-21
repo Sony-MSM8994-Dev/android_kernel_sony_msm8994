@@ -92,9 +92,6 @@ DHDCFLAGS += -DROAM_ENABLE
 DHDCFLAGS += -DENABLE_FW_ROAM_SUSPEND
 
 
-
-
-
 # SoftAP
 DHDCFLAGS += -DWL_SUPPORT_AUTO_CHANNEL -DSUPPORT_HIDDEN_AP
 DHDCFLAGS += -DDISABLE_11H_SOFTAP
@@ -173,7 +170,7 @@ DHDCFLAGS += -DUSE_INITIAL_SHORT_DWELL_TIME
 DHDCFLAGS += -DWL_ABORT_SCAN
 
 # Disable to delay link down event
-#DHDCFLAGS += -DDISABLE_BCN_DLY
+DHDCFLAGS += -DDISABLE_BCN_DLY
 
 ##############################
 # Android Platform Definition
@@ -209,8 +206,6 @@ DHDCFLAGS += -DWL_VENDOR_EXT_SUPPORT
 
 # Extra file list for Lollipop
 ANDROID_OFILES := wl_cfgvendor.o
-
-
 
 
 ##########################
@@ -293,7 +288,7 @@ endif
   DHDCFLAGS += -DDISABLE_TXBFR
 ifeq ($(CONFIG_BCM4356),y)
   DHDCFLAGS += -DENABLE_INSMOD_NO_FW_LOAD
-#  DHDCFLAGS += -DUSE_LATE_INITCALL_SYNC
+  DHDCFLAGS += -DUSE_LATE_INITCALL_SYNC
 endif
 ifeq ($(BUS_IFACE_SDIO),y)
   DHDCFLAGS += -DCUSTOM_PSPRETEND_THR=30
@@ -341,7 +336,6 @@ ifeq ($(BUS_IFACE_PCIE),y)
 endif
 
 
-
 # New Features
   DHDCFLAGS += -DWL11U
   DHDCFLAGS += -DBCMCCX
@@ -354,7 +348,7 @@ endif
   DHDCFLAGS += -DSUPPORT_WL_TXPOWER
 ifeq ($(CONFIG_BCM4354),y)
   DHDCFLAGS += -DENABLE_INSMOD_NO_FW_LOAD
-# DHDCFLAGS += -DUSE_LATE_INITCALL_SYNC
+  DHDCFLAGS += -DUSE_LATE_INITCALL_SYNC
 endif
 
 ifeq ($(BUS_IFACE_SDIO),y)
@@ -405,6 +399,7 @@ endif
   DHDCFLAGS += -DDISABLE_WL_FRAMEBURST_SOFTAP
 endif
 endif
+
 #############################
 # Platform dependent feature
 #############################
@@ -448,9 +443,9 @@ endif
 endif
 
 # Disable to delay link down event
-ifeq ($(CONFIG_SOMC_WLAN_DISABLE_BCM_DLY),y)
-  DHDCFLAGS += -DDISABLE_BCN_DLY
-endif
+#ifeq ($(CONFIG_SOMC_WLAN_DISABLE_BCM_DLY),y)
+#  DHDCFLAGS += -DDISABLE_BCN_DLY
+#endif
 
 # Change scan time
 ifeq ($(CONFIG_SOMC_CFG_WLAN_CHANGE_SCAN_TIME),y)
@@ -468,9 +463,9 @@ ifneq ($(CONFIG_SOMC_WLAN_NVRAM_PATH),)
 endif
 
 # Enable Disconnection timing log
-#ifeq ($(CONFIG_SOMC_WLAN_ENABLE_DISC_TIME_LOG),y)
-#  DHDCFLAGS += -DDHD_ENABLE_DISC_TIME_LOG
-#endif
+ifeq ($(CONFIG_SOMC_WLAN_ENABLE_DISC_TIME_LOG),y)
+  DHDCFLAGS += -DDHD_ENABLE_DISC_TIME_LOG
+endif
 
 #########
 # Others
