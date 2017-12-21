@@ -23,7 +23,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: dhd_linux.c 676009 2016-12-20 02:54:41Z $
+ * $Id: dhd_linux.c 718504 2017-08-31 02:38:08Z $
  */
 
 #include <typedefs.h>
@@ -8175,12 +8175,12 @@ void * dhd_dev_hotlist_scan_event(struct net_device *dev,
 
 /* Linux wrapper to call common dhd_process_full_gscan_result */
 void * dhd_dev_process_full_gscan_result(struct net_device *dev,
-const void  *data, uint32 len, int *send_evt_bytes)
+
+	const void	*data, uint32 len, int *send_evt_bytes)
 {
 	dhd_info_t *dhd = *(dhd_info_t **)netdev_priv(dev);
 
-	return dhd_process_full_gscan_result(&dhd->pub, data, len,
-			send_evt_bytes);
+	return (dhd_process_full_gscan_result(&dhd->pub, data, len, send_evt_bytes));
 }
 
 void dhd_dev_gscan_hotlist_cache_cleanup(struct net_device *dev, hotlist_type_t type)

@@ -349,18 +349,18 @@ typedef struct gscan_results_cache {
 } gscan_results_cache_t;
 
 typedef struct dhd_pno_gscan_capabilities {
-	int max_scan_cache_size;
-	int max_scan_buckets;
-	int max_ap_cache_per_scan;
-	int max_rssi_sample_size;
-	int max_scan_reporting_threshold;
-	int max_hotlist_bssids;
-	int max_hotlist_ssids;
-	int max_significant_wifi_change_aps;
-	int max_bssid_history_entries;
-	int max_epno_ssid_crc32;
-	int max_epno_hidden_ssid;
-	int max_white_list_ssid;
+    int max_scan_cache_size;
+    int max_scan_buckets;
+    int max_ap_cache_per_scan;
+    int max_rssi_sample_size;
+    int max_scan_reporting_threshold;
+    int max_hotlist_bssids;
+    int max_hotlist_ssids;
+    int max_significant_wifi_change_aps;
+    int max_bssid_history_entries;
+    int max_epno_ssid_crc32;
+    int max_epno_hidden_ssid;
+    int max_white_list_ssid;
 } dhd_pno_gscan_capabilities_t;
 
 struct dhd_pno_gscan_params {
@@ -483,7 +483,7 @@ int dhd_retreive_batch_scan_results(dhd_pub_t *dhd);
 extern void * dhd_dev_hotlist_scan_event(struct net_device *dev,
                          const void  *data, int *send_evt_bytes, hotlist_type_t type);
 void * dhd_dev_process_full_gscan_result(struct net_device *dev,
-			const void  *data, uint32 len, int *send_evt_bytes);
+	const void	*data, uint32 len, int *send_evt_bytes);
 extern int dhd_dev_gscan_batch_cache_cleanup(struct net_device *dev);
 extern void dhd_dev_gscan_hotlist_cache_cleanup(struct net_device *dev, hotlist_type_t type);
 extern int dhd_dev_wait_batch_results_complete(struct net_device *dev);
@@ -527,9 +527,8 @@ extern int dhd_pno_cfg_gscan(dhd_pub_t *dhd, dhd_pno_gscan_cmd_cfg_t type, void 
 extern int dhd_dev_retrieve_batch_scan(struct net_device *dev);
 extern void *dhd_handle_hotlist_scan_evt(dhd_pub_t *dhd, const void *event_data,
                        int *send_evt_bytes, hotlist_type_t type);
-extern void *
-dhd_process_full_gscan_result(dhd_pub_t *dhd, const void *event_data,
-			      uint32 len, int *send_evt_bytes);
+extern void *dhd_process_full_gscan_result(dhd_pub_t *dhd, const void *event_data,
+	uint32 len, int *send_evt_bytes);
 extern int dhd_gscan_batch_cache_cleanup(dhd_pub_t *dhd);
 extern void dhd_gscan_hotlist_cache_cleanup(dhd_pub_t *dhd, hotlist_type_t type);
 extern int dhd_wait_batch_results_complete(dhd_pub_t *dhd);
