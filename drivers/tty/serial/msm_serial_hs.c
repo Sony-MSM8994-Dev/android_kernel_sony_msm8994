@@ -1583,8 +1583,9 @@ static void flip_insert_work(struct work_struct *work)
 				retval << 8 | (rx_count - retval) << 16;
 	}
 	if (msm_uport->rx.buffer_pending) {
-		schedule_delayed_work(&msm_uport->rx.flip_insert_work,
-				      msecs_to_jiffies(RETRY_TIMEOUT));
+		queue_delayed_work(system_power_efficient_wq,
+				&msm_uport->rx.flip_insert_work,
+				msecs_to_jiffies(RETRY_TIMEOUT));
 	} else if (msm_uport->rx.flush <= FLUSH_IGNORE) {
 			MSM_HS_WARN("Pending buffers cleared, restarting");
 			clear_bit(msm_uport->rx.rx_inx,
@@ -1756,8 +1757,9 @@ static void msm_serial_hs_rx_work(struct kthread_work *work)
 out:
 	if (msm_uport->rx.buffer_pending) {
 		MSM_HS_WARN("tty buffer exhausted. Stalling\n");
-		schedule_delayed_work(&msm_uport->rx.flip_insert_work
-				      , msecs_to_jiffies(RETRY_TIMEOUT));
+		queue_delayed_work(system_power_efficient_wq,
+				&msm_uport->rx.flip_insert_work,
+				msecs_to_jiffies(RETRY_TIMEOUT));
 	}
 	/* tty_flip_buffer_push() might call msm_hs_start(), so unlock */
 	spin_unlock_irqrestore(&uport->lock, flags);
