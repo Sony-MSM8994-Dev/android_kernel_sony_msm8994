@@ -1,6 +1,9 @@
 /*
  * z3fold.c
  *
+ * Author: Vitaly Wool <vitaly.wool@konsulko.com>
+ * Copyright (C) 2016, Sony Mobile Communications Inc.
+ *
  * This implementation is based on zbud written by Seth Jennings.
  *
  * z3fold is an special purpose allocator for storing compressed pages. It
