@@ -462,11 +462,6 @@ static void z3fold_free(struct z3fold_pool *pool, unsigned long handle)
 	spin_unlock(&pool->lock);
 }
 
-#ifndef list_last_entry
-#define list_last_entry(ptr, type, member) \
-		       list_entry((ptr)->prev, type, member)
-#endif
-
 /**
  * z3fold_reclaim_page() - evicts allocations from a pool page and frees it
  * @pool:	pool from which a page will attempt to be evicted
