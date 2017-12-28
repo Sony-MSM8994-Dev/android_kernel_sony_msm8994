@@ -686,7 +686,10 @@ static u64 z3fold_get_pool_size(struct z3fold_pool *pool)
 
 static int z3fold_zpool_evict(struct z3fold_pool *pool, unsigned long handle)
 {
-	return zpool_evict(pool, handle);
+	if (pool->zpool && pool->zpool_ops && pool->zpool_ops->evict)
+		return pool->zpool_ops->evict(pool->zpool, handle);
+	else
+		return -ENOENT;
 }
 
 static const struct z3fold_ops z3fold_zpool_ops = {
@@ -694,9 +697,16 @@ static const struct z3fold_ops z3fold_zpool_ops = {
 };
 
 static void *z3fold_zpool_create(char *name, gfp_t gfp,
-				struct zpool_ops *zpool_ops)
+			struct zpool_ops *zpool_ops, struct zpool *zpool)
 {
-	return z3fold_create_pool(gfp, &z3fold_zpool_ops);
+	struct z3fold_pool *pool;
+
+	pool = z3fold_create_pool(gfp, zpool_ops ? &z3fold_zpool_ops : NULL);
+	if (pool) {
+		pool->zpool = zpool;
+		pool->zpool_ops = zpool_ops;
+	}
+	return pool;
 }
 
 static void z3fold_zpool_destroy(void *pool)
