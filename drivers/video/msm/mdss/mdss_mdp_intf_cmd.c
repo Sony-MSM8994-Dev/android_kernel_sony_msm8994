@@ -492,7 +492,7 @@ static void mdss_mdp_cmd_pingpong_done(void *arg)
 		if (mdss_mdp_cmd_do_notifier(ctx)) {
 			atomic_inc(&ctx->pp_done_cnt);
 			status = mdss_mdp_ctl_perf_get_transaction_status(ctl);
-			if (status == 0 && !ctl->commit_in_progress)
+			if (status == 0)
 				schedule_work(&ctx->pp_done_work);
 		}
 		wake_up_all(&ctx->pp_waitq);
