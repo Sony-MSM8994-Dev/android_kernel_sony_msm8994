@@ -203,5 +203,11 @@ extern int fscrypt_zeroout_range(const struct inode *, pgoff_t, sector_t,
 extern int fscrypt_file_open(struct inode *inode, struct file *filp);
 extern int __fscrypt_prepare_link(struct inode *inode, struct inode *dir);
 extern int __fscrypt_prepare_lookup(struct inode *dir, struct dentry *dentry);
+extern int __fscrypt_prepare_symlink(struct inode *dir, unsigned int len,
+				     unsigned int max_len,
+				     struct fscrypt_str *disk_link);
+extern int __fscrypt_encrypt_symlink(struct inode *inode, const char *target,
+				     unsigned int len,
+				     struct fscrypt_str *disk_link);
 
 #endif	/* _LINUX_FSCRYPT_SUPP_H */
