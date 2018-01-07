@@ -19,6 +19,11 @@ LIBGCC 		:= $(shell $(CC) $(KBUILD_CFLAGS) -print-libgcc-file-name)
 
 KBUILD_DEFCONFIG := defconfig
 
+# Optimize for big.LITTLE configuration
+KBUILD_CFLAGS	+= -march=armv8-a+crc \
+		   -mcpu=cortex-a57.cortex-a53+crc+crypto \
+		   -mtune=cortex-a57.cortex-a53
+
 KBUILD_CFLAGS	+= -mgeneral-regs-only
 KBUILD_CFLAGS	+= -fno-pic
 ifeq ($(CONFIG_CPU_BIG_ENDIAN), y)
