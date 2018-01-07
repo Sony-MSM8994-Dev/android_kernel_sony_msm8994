@@ -1,4 +1,5 @@
 ccflags-y := -Iinclude/uapi/drm -Iinclude/drm -Idrivers/gpu/msm
+CFLAGS_kgsl.o := $(call cc-disable-warning,tautological-compare,)
 
 msm_kgsl_core-y = \
 	kgsl.o \
