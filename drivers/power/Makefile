@@ -66,6 +66,7 @@ obj-$(CONFIG_QPNP_FG_EXTENSION)	+= qpnp-fg_extension.o
 obj-$(CONFIG_QPNP_FG)		+= qpnp-fg.o
 obj-$(CONFIG_QPNP_CHARGER)	+= qpnp-charger.o
 obj-$(CONFIG_QPNP_LINEAR_CHARGER)	+= qpnp-linear-charger.o
+CFLAGS_qpnp-smbcharger_extension.o := $(call cc-disable-warning,pointer-compare,)
 obj-$(CONFIG_QPNP_SMBCHARGER_EXTENSION)	+= qpnp-smbcharger_extension.o
 obj-$(CONFIG_QPNP_SMBCHARGER)	+= qpnp-smbcharger.o
 obj-$(CONFIG_QNS_SYSTEM)	+= qns_system.o
