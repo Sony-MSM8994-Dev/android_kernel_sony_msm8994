@@ -2413,6 +2413,11 @@ static unsigned int *somc_chg_therm_create_tb(struct device *dev,
 
 	if (of_find_property(node, thermal, &thermal_levels)) {
 		thermal_size = thermal_levels / sizeof(int);
+		if (!thermal_levels || !thermal_size) {
+			dev_err(dev, "Invalid thermal parameters\n");
+			*size = -EINVAL;
+			return NULL;
+		}
 		thermal_tb = devm_kzalloc(dev, thermal_levels, GFP_KERNEL);
 		if (thermal_tb == NULL) {
 			dev_err(dev, "thermal mitigation kzalloc() failed.\n");
