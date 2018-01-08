@@ -1418,6 +1418,10 @@ static ssize_t snd_pcm_oss_write1(struct snd_pcm_substream *substream, const cha
 			    tmp != runtime->oss.period_bytes)
 				break;
 		}
+		if (signal_pending(current)) {
+			tmp = -ERESTARTSYS;
+			goto err;
+		}
 	}
 	mutex_unlock(&runtime->oss.params_lock);
 	return xfer;
@@ -1502,6 +1506,10 @@ static ssize_t snd_pcm_oss_read1(struct snd_pcm_substream *substream, char __use
 			buf += tmp;
 			bytes -= tmp;
 			xfer += tmp;
+		}
+		if (signal_pending(current)) {
+			tmp = -ERESTARTSYS;
+			goto err;
 		}
 	}
 	mutex_unlock(&runtime->oss.params_lock);
