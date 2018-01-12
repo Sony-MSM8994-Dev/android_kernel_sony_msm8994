@@ -37,6 +37,9 @@ then
 	cp out/drivers/bluetooth/broadcom/v4l2_ant_driver/ant_drv.ko ../final_files/modules/
 	cp out/drivers/bluetooth/broadcom/v4l2_fm_driver/fm_drv.ko ../final_files/modules/
 
+	# Copy MHL drivers
+	cp out/drivers/video/msm/mdss/mhl_sii8620_8061_drv/mhl_sii8620_8061_drv.ko ../final_files/modules/
+
 	# Copy additional modules
 	cp out/drivers/media/platform/msm/broadcast/tspp.ko ../final_files/modules/
 	cp out/drivers/media/usb/gspca/gspca_main.ko ../final_files/modules/
