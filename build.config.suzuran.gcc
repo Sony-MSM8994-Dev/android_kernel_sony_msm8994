@@ -18,7 +18,6 @@ make O=./out
 echo "checking for compiled kernel..."
 if [ -f out/arch/arm64/boot/Image.gz-dtb ]
 then
-
 	echo "Done"
 
 	### Enforcing build
@@ -38,4 +37,8 @@ then
 	cp out/drivers/bluetooth/broadcom/v4l2_ant_driver/ant_drv.ko ../final_files/modules/
 	cp out/drivers/bluetooth/broadcom/v4l2_fm_driver/fm_drv.ko ../final_files/modules/
 
+	# Copy additional modules
+	cp out/drivers/media/platform/msm/broadcast/tspp.ko ../final_files/modules/
+	cp out/drivers/media/usb/gspca/gspca_main.ko ../final_files/modules/
+	cp out/drivers/net/wireless/ath/wil6210/wil6210.ko ../final_files/modules/
 fi
