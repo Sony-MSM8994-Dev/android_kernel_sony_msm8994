@@ -35,7 +35,7 @@
 	aliases {
 		sdhc1 = &sdhc_1; /* SDC1 eMMC slot */
 		sdhc2 = &sdhc_2; /* SDC2 SD card slot */
-		sdhc3 = &sdhc_3;
+		sdhc3 = &sdhc_3; /* SDC3 SDIO slot */
 		i2c6 = &i2c_6; /* I2C6 NFC qup6 device */
 		i2c1 = &i2c_1;
 		i2c2 = &i2c_2;
