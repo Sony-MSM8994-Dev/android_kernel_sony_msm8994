@@ -509,7 +509,7 @@
 		qcom,leds@d800 {
 			qcom,fs-curr-ua = <24000>;
 			somc,calc-curr;
-			somc,init-br = <256>;
+			somc,init-br = <128>;
 			somc-s1,br-power-save = <131>;
 			qcom,led-strings-list = [00 01];
 		};

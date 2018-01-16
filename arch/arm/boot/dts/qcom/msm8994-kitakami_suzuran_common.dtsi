@@ -826,7 +826,7 @@
 			qcom,ilim-ma = <660>;
 			qcom,fs-curr-ua = <25000>;
 			somc,bl-scale-enabled;
-			somc,init-br = <256>;
+			somc,init-br = <128>;
 			somc-s1,br-power-save = <131>;
 			qcom,led-strings-list = [00 01];
 		};
