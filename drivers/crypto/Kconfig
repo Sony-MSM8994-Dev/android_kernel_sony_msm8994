@@ -468,4 +468,11 @@ config CRYPTO_DEV_ATMEL_SHA
 	  To compile this driver as a module, choose M here: the module
 	  will be called atmel-sha.
 
+config CRYPTO_DEV_SOMC_FIPS_KSCL
+	tristate "Sony Mobile FIPS AES-XTS/AES-CBC Driver"
+	default n
+	help
+	  Support for the SOMC FIPS AES-XTS/AES-CBC Driver.
+	  To compile this driver as a module, choose M here.
+
 endif # CRYPTO_HW
