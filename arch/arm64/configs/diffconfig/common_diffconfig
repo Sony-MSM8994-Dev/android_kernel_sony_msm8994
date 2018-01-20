@@ -20,9 +20,6 @@ CONFIG_DYNAMIC_DEBUG=y
 CONFIG_FB_MSM_LOGO=y
 CONFIG_FB_MSM_MDSS_SPECIFIC_PANEL=y
 #CONFIG_FB_MSM_MDSS_XLOG_DEBUG=y
-CONFIG_HID_LOGITECH=y
-CONFIG_HID_PANTHERLORD=y
-CONFIG_HID_SONY=y
 # CONFIG_IKCONFIG_PROC is not set
 CONFIG_INET_XFRM_MODE_BEET=y
 CONFIG_INPUT_BU520X1NVX=y
@@ -37,7 +34,6 @@ CONFIG_LDO_VIBRATOR=y
 CONFIG_LOG_BUF_SHIFT=18
 # CONFIG_MII is not set
 CONFIG_MMC_BLOCK_DEFERRED_RESUME=y
-CONFIG_MMC_CMD_DEBUG=y
 CONFIG_MSM_BCL_SOMC_CTL=y
 # CONFIG_MSM_BT_POWER is not set
 # CONFIG_MSM_DLOAD_MODE is not set
@@ -113,11 +109,9 @@ CONFIG_CIFS_DEBUG=y
 CONFIG_CRASH_LAST_LOGS=y
 # CONFIG_DEFAULT_SECURITY_SONY is not set
 CONFIG_EXT4_USE_FOR_EXT23=y
-# CONFIG_HID_LOGITECH_DJ is not set
 # CONFIG_IP_MROUTE is not set
 # CONFIG_LOGIG940_FF is not set
 # CONFIG_LOGIRUMBLEPAD2_FF is not set
-# CONFIG_LOGITECH_FF is not set
 # CONFIG_LOGIWHEELS_FF is not set
 # CONFIG_MACH_SONY_AOI is not set
 # CONFIG_MACH_SONY_AOI_VZW is not set
@@ -146,7 +140,6 @@ CONFIG_EXT4_USE_FOR_EXT23=y
 # CONFIG_MACH_SONY_SUZURAN_DCM is not set
 CONFIG_MMC_CMD_QUEUE_SIZE=256
 CONFIG_MSM_RTB_SEPARATE_CPUS=y
-# CONFIG_PANTHERLORD_FF is not set
 CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=1
 CONFIG_SERIAL_CORE_CONSOLE=y
 CONFIG_SERIAL_MSM_HSL_CONSOLE=y
@@ -351,11 +344,11 @@ CONFIG_KSWAPD_CPU_AFFINITY_MASK="f"
 # CMA, allocating framebuffer, etc. memory [CMA_SIZE_MBYTES 16 -> 32]
 CONFIG_CMA_SIZE_MBYTES=32
 
-# enable Panic on data corruption, if there's data corruption we better
+# Enable Panic on data corruption, if there's data corruption we better
 # crash the system as soon as it occurs, otherwise the context is lost
 # to track the (potentially fixable) origin down, also it's a
 # surefire way to screw up the system anyway
 CONFIG_PANIC_ON_DATA_CORRUPTION=y
 
-# disable MMC CMD debug feature
+# Disable MMC CMD debug feature
 # CONFIG_MMC_CMD_DEBUG is not set
