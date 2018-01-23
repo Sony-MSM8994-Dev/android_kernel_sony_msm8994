@@ -1272,8 +1272,9 @@ static int mtp_ctrlrequest(struct usb_composite_dev *cdev,
 		memcpy(cdev->req->buf, mtp_os_string, value);
 	} else if ((ctrl->bRequestType & USB_TYPE_MASK) == USB_TYPE_VENDOR) {
 		/* Handle MTP OS descriptor */
-		DBG(cdev, "vendor request:%d index:%d value:%d length:%d\n",
+		DBG(cdev, "vendor request: %d index: %d value: %d length: %d\n",
 			ctrl->bRequest, w_index, w_value, w_length);
+
 		if (((ctrl->bRequest == MSOS_GOOGLE_VENDOR_CODE) ||
 			(ctrl->bRequest == MSOS_VENDOR_CODE)) &&
 			(ctrl->bRequestType & USB_DIR_IN) && (w_index == 4)) {
@@ -1283,7 +1284,7 @@ static int mtp_ctrlrequest(struct usb_composite_dev *cdev,
 			int interface_num = 0;
 			struct mtp_ext_config_desc_header *head;
 			struct mtp_ext_config_desc_function *func;
-			struct usb_configuration        *cfg;
+			struct usb_configuration *cfg;
 			struct usb_function *f;
 
 			head = (struct mtp_ext_config_desc_header *)
