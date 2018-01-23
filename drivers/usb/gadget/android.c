@@ -3877,7 +3877,12 @@ static int android_bind(struct usb_composite_dev *cdev)
 	strlcpy(product_string, "Android", sizeof(product_string) - 1);
 	strlcpy(serial_string, "0123456789ABCDEF", sizeof(serial_string) - 1);
 
+#ifdef CONFIG_USB_ANDROID_PRODUCTION
+	/* Set id to 0 to comply with Sony production tools */
+	id = 0;
+#else
 	id = usb_string_id(cdev);
+#endif
 	if (id < 0)
 		return id;
 	strings_dev[STRING_SERIAL_IDX].id = id;

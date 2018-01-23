@@ -888,7 +888,14 @@ config USB_ANDROID_RNDIS_DWORD_ALIGNED
 	boolean "Use double word aligned"
 	depends on USB_G_ANDROID
 	help
-		Provides dword aligned for DMA controller.
+	  Provides dword aligned for DMA controller.
+
+config USB_ANDROID_PRODUCTION
+	boolean "Production capable Android gadget"
+	depends on USB_G_ANDROID
+	default n
+	help
+	  Provides an Android gadget where iSerialNumber is set to 0.
 
 config USB_AUTO_CDROM_EJECTION
 	boolean "Auto Cdrom Ejection"
