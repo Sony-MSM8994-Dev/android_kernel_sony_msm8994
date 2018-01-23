@@ -1,4 +1,5 @@
-/* Copyright (c) 2008-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2015, 2017-2018 The Linux Foundation.
+ * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -322,9 +323,9 @@ static int diagchar_open(struct inode *inode, struct file *file)
 	return -ENOMEM;
 
 fail:
-	mutex_unlock(&driver->diagchar_mutex);
 	driver->num_clients--;
-	pr_alert("diag: Insufficient memory for new client");
+	mutex_unlock(&driver->diagchar_mutex);
+	pr_err_ratelimited("diag: Insufficient memory for new client");
 	return -ENOMEM;
 }
 
@@ -1269,10 +1270,6 @@ long diagchar_compat_ioctl(struct file *filp,
 		dci_client = diag_dci_get_client_entry(client_id);
 		if (!dci_client)
 			return DIAG_DCI_NOT_SUPPORTED;
-<<<<<<< HEAD
-=======
-		}
->>>>>>> 1ede4694d5b2 (diag: Fix for possible dci stale entries)
 		result = diag_dci_deinit_client(dci_client);
 		mutex_unlock(&driver->dci_mutex);
 		break;
