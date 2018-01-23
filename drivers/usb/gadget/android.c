@@ -2490,6 +2490,10 @@ static int mass_storage_function_init(struct android_usb_function *f,
 	config->fsg.nluns = 1;
 	snprintf(name[0], MAX_LUN_NAME, "lun");
 	config->fsg.luns[0].removable = 1;
+	config->fsg.luns[0].ro = 1;
+	config->fsg.luns[0].cdrom = 1;
+	config->fsg.cdrom_vendor_name = "SONY";
+	config->fsg.cdrom_product_name = "CD-ROM";
 
 	if (dev->pdata && dev->pdata->cdrom) {
 		config->fsg.luns[config->fsg.nluns].cdrom = 1;
