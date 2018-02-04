@@ -263,6 +263,9 @@ CONFIG_STATE_NOTIFIER=y
 # Power Suspend driver for PM
 # CONFIG_POWERSUSPEND is not set
 
+# Quick wakeup
+CONFIG_QUICK_WAKEUP=y
+
 # Cryptographic Extensions
 CONFIG_CRYPTO_AES_ARM64=y
 CONFIG_CRYPTO_SHA256_ARM64=y
