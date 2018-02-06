@@ -3245,6 +3245,7 @@
 		qcom,freq-mitigation-control-mask = <0xFF>;
 		qcom,online-hotplug-core;
 		qcom,synchronous-cluster-id = <0 1>;
+		qcom,disable-vdd-rstr;
 		qcom,mx-restriction-temp = <5>;
 		qcom,mx-restriction-temp-hysteresis = <10>;
 		qcom,mx-retention-min = <3>;
