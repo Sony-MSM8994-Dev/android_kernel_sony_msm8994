@@ -102,7 +102,7 @@ void mlock_vma_page(struct page *page)
 
 /**
  * munlock_vma_page - munlock a vma page
- * @page - page to be unlocked
+ * @page: page to be unlocked
  *
  * called from munlock()/munmap() path with page supposedly on the LRU.
  * When we munlock a page, because the vma where we found the page is being
