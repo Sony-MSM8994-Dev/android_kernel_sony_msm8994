@@ -147,7 +147,7 @@ unsigned long __init init_bootmem(unsigned long start, unsigned long pages)
 
 /*
  * free_bootmem_late - free bootmem pages directly to page allocator
- * @addr: starting physical address of the range
+ * @physaddr: starting physical address of the range
  * @size: size of the range in bytes
  *
  * This is only useful when the bootmem allocator has already been torn
@@ -421,7 +421,7 @@ void __init free_bootmem_node(pg_data_t *pgdat, unsigned long physaddr,
 
 /**
  * free_bootmem - mark a page range as usable
- * @addr: starting physical address of the range
+ * @physaddr: starting physical address of the range
  * @size: size of the range in bytes
  *
  * Partial pages will be considered reserved and left as they are.

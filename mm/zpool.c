@@ -164,7 +164,7 @@ struct zpool *zpool_create_pool(char *type, char *name, gfp_t gfp,
 
 /**
  * zpool_destroy_pool() - Destroy a zpool
- * @pool:	The zpool to destroy.
+ * @zpool:	The zpool to destroy.
  *
  * Implementations must guarantee this to be thread-safe,
  * however only when destroying different pools.  The same
@@ -187,7 +187,7 @@ void zpool_destroy_pool(struct zpool *zpool)
 
 /**
  * zpool_get_type() - Get the type of the zpool
- * @pool:	The zpool to check
+ * @zpool:	The zpool to check
  *
  * This returns the type of the pool.
  *
@@ -202,7 +202,7 @@ char *zpool_get_type(struct zpool *zpool)
 
 /**
  * zpool_malloc() - Allocate memory
- * @pool:	The zpool to allocate from.
+ * @zpool:	The zpool to allocate from.
  * @size:	The amount of memory to allocate.
  * @gfp:	The GFP flags to use when allocating memory.
  * @handle:	Pointer to the handle to set
@@ -224,7 +224,7 @@ int zpool_malloc(struct zpool *zpool, size_t size, gfp_t gfp,
 
 /**
  * zpool_free() - Free previously allocated memory
- * @pool:	The zpool that allocated the memory.
+ * @zpool:	The zpool that allocated the memory.
  * @handle:	The handle to the memory to free.
  *
  * This frees previously allocated memory.  This does not guarantee
@@ -243,7 +243,7 @@ void zpool_free(struct zpool *zpool, unsigned long handle)
 
 /**
  * zpool_shrink() - Shrink the pool size
- * @pool:	The zpool to shrink.
+ * @zpool:	The zpool to shrink.
  * @pages:	The number of pages to shrink the pool.
  * @reclaimed:	The number of pages successfully evicted.
  *
@@ -266,13 +266,13 @@ int zpool_shrink(struct zpool *zpool, unsigned int pages,
 
 /**
  * zpool_map_handle() - Map a previously allocated handle into memory
- * @pool:	The zpool that the handle was allocated from
+ * @zpool:	The zpool that the handle was allocated from
  * @handle:	The handle to map
- * @mm:		How the memory should be mapped
+ * @mapmode:	How the memory should be mapped
  *
- * This maps a previously allocated handle into memory.  The @mm
- * param indicates to the implementation how the memory will be
- * used, i.e. read-only, write-only, read-write.  If the
+ * This maps a previously allocated handle into memory.
+ * The @mapmode param indicates to the implementation how the memory
+ * will be used, i.e. read-only, write-only, read-write.  If the
  * implementation does not support it, the memory will be treated
  * as read-write.
  *
@@ -294,7 +294,7 @@ void *zpool_map_handle(struct zpool *zpool, unsigned long handle,
 
 /**
  * zpool_unmap_handle() - Unmap a previously mapped handle
- * @pool:	The zpool that the handle was allocated from
+ * @zpool:	The zpool that the handle was allocated from
  * @handle:	The handle to unmap
  *
  * This unmaps a previously mapped handle.  Any locks or other
@@ -309,7 +309,7 @@ void zpool_unmap_handle(struct zpool *zpool, unsigned long handle)
 
 /**
  * zpool_get_total_size() - The total size of the pool
- * @pool:	The zpool to check
+ * @zpool:	The zpool to check
  *
  * This returns the total size in bytes of the pool.
  *
@@ -322,7 +322,7 @@ u64 zpool_get_total_size(struct zpool *zpool)
 
 /**
  * zpool_compact() - trigger backend-specific pool compaction
- * @pool:	The zpool to compact
+ * @zpool:	The zpool to compact
  *
  * This returns the total size in bytes of the pool.
  *
