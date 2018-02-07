@@ -264,7 +264,7 @@ CONFIG_STATE_NOTIFIER=y
 # CONFIG_POWERSUSPEND is not set
 
 # Quick wakeup
-CONFIG_QUICK_WAKEUP=y
+# CONFIG_QUICK_WAKEUP is not set
 
 # Cryptographic Extensions
 CONFIG_CRYPTO_AES_ARM64=y
