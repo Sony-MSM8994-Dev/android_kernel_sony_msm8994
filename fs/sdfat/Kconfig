@@ -107,6 +107,11 @@ config SDFAT_STATISTICS
 	depends on SDFAT_FS
 	default y
 
+config SDFAT_DFR
+	bool "enable sdfat defragger"
+	depends on SDFAT_FS
+	default n
+
 config SDFAT_EXFAT_WRAPPER
 	bool "enable wrapper for exfat"
 	depends on SDFAT_FS
