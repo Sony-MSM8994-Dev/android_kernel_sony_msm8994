@@ -4974,6 +4974,20 @@ static struct file_system_type sdfat_fs_type = {
 	.fs_flags    = FS_REQUIRES_DEV,
 };
 
+#ifdef CONFIG_SDFAT_TEXFAT_WRAPPER
+static struct file_system_type sdfat_texfat_fs_type = {
+	.owner       = THIS_MODULE,
+	.name        = "texfat",
+	.mount       = sdfat_fs_mount,
+#ifdef CONFIG_SDFAT_DBG_IOCTL
+	.kill_sb    = sdfat_debug_kill_sb,
+#else
+	.kill_sb    = kill_block_super,
+#endif /* CONFIG_SDFAT_DBG_IOCTL */
+	.fs_flags    = FS_REQUIRES_DEV,
+};
+#endif
+
 static int __init init_sdfat_fs(void)
 {
 	int err;
@@ -5012,6 +5026,14 @@ static int __init init_sdfat_fs(void)
 		goto error;
 	}
 
+#ifdef CONFIG_SDFAT_TEXFAT_WRAPPER
+	err = register_filesystem(&sdfat_texfat_fs_type);
+	if (err) {
+		pr_err("[SDFAT] failed to register texfat filesystem\n");
+		goto error;
+	}
+#endif
+
 	return 0;
 error:
 	sdfat_statistics_uninit();
@@ -5041,6 +5063,10 @@ static void __exit exit_sdfat_fs(void)
 
 	sdfat_destroy_inodecache();
 	unregister_filesystem(&sdfat_fs_type);
+
+#ifdef CONFIG_SDFAT_TEXFAT_WRAPPER
+	unregister_filesystem(&sdfat_texfat_fs_type);
+#endif
 
 	fsapi_shutdown();
 }
