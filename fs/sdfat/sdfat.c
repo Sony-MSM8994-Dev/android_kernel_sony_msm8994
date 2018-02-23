@@ -4513,6 +4513,14 @@ static int parse_options(struct super_block *sb, char *options, int silent,
 	opts->discard = 0;
 	*debug = 0;
 
+#ifdef CONFIG_SDFAT_DELAY_ALLOC
+	opts->improved_allocation |= SDFAT_ALLOC_DELAY;
+#endif
+
+#ifdef CONFIG_SDFAT_SMART_ALLOC
+	opts->improved_allocation |= SDFAT_ALLOC_SMART;
+#endif
+
 	if (!options)
 		goto out;
 
