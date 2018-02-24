@@ -53,6 +53,7 @@
 #include <linux/oom.h>
 #include <linux/writeback.h>
 #include <linux/shm.h>
+#include <linux/oom_score_notifier.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -93,6 +94,8 @@ static void __exit_signal(struct task_struct *tsk)
 	spin_lock(&sighand->siglock);
 
 	posix_cpu_timers_exit(tsk);
+	oom_score_notify_free(tsk);
+
 	if (group_dead) {
 		posix_cpu_timers_exit_group(tsk);
 		tty = sig->tty;

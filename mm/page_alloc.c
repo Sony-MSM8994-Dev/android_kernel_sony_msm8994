@@ -2594,7 +2594,6 @@ __alloc_pages_high_priority(gfp_t gfp_mask, unsigned int order,
 	return page;
 }
 
-static inline
 void wake_all_kswapd(unsigned int order, struct zonelist *zonelist,
 						enum zone_type high_zoneidx,
 						enum zone_type classzone_idx)
