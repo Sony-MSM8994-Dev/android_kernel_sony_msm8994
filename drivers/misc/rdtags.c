@@ -1,5 +1,4 @@
 /*
- *
  * Author: Nilsson, Stefan 2 <stefan2.nilsson@sonymobile.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -8,7 +7,7 @@
  * of the License, or (at your option) any later version.
  */
 /*
- * Copyright (C) 2014 Sony Mobile Communications Inc.
+ * Copyright (C) 2014-2015 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2, as
@@ -27,8 +26,8 @@
 #include <linux/kfifo.h>
 #include <linux/delay.h>
 #include <linux/vmalloc.h>
+#include <linux/mutex.h>
 
-#define RDTAGS_MEM_SIZE (256 * SZ_1K)
 #define RDTAGS_SIG 0x47415452
 #define RDTAGS_NAME_SIZE 28
 #define RDTAGS_ALIGNMENT 64
@@ -42,7 +41,7 @@ static void *rdtags_io_base;
 static void *rdtags_base;
 static void *rdtags_end;
 static size_t rdtags_size;
-static spinlock_t rdlock;
+static DEFINE_MUTEX(rdlock);
 static uint8_t rdtags_initialized;
 
 struct rtag_head {
@@ -90,8 +89,8 @@ static DECLARE_WORK(procfs_work, procfs_work_func);
 #define CRC_SIZE 2 /* bytes */
 #define RDTAG_FLAGS_CRC_PRESENT 0x1
 
-static ssize_t tag_read (struct file *file , char __user *buf, size_t size,
-		loff_t *off);
+static ssize_t tag_read(struct file *file, char __user *buf, size_t size,
+			loff_t *off);
 
 static const struct file_operations tag_fops = {
 	.read = tag_read,
@@ -130,6 +129,7 @@ static void procfs_work_func(struct work_struct *work)
 	while (kfifo_get(&procfs_fifo, &item)) {
 		int ret;
 		char *name = (char *)&item.name;
+
 		dev_dbg(dev, "wq: Processing request %s %s\n",
 			item.cmd == PROCFS_CMD_ADD ? "ADD" : "DELETE", name);
 
@@ -156,6 +156,7 @@ static void procfs_work_func(struct work_struct *work)
 static void procfs_async_cmd(char *name, enum procfs_cmd cmd)
 {
 	struct procfs_fifo_item item;
+
 	if (unlikely(kfifo_is_full(&procfs_fifo))) {
 		dev_err(dev, "procfs FIFO buffer overflow! procfs will" \
 			"be out of sync!\n");
@@ -389,7 +390,6 @@ static void _remove_tag(struct rtag_head *mt)
 int rdtags_remove_tag(const char *name)
 {
 	struct rtag_head *mt;
-	unsigned long flags;
 	int ret = 0;
 
 	if (!name)
@@ -400,7 +400,7 @@ int rdtags_remove_tag(const char *name)
 
 	dev_dbg(dev, "Removing tag \"%s\"\n", name);
 
-	spin_lock_irqsave(&rdlock, flags);
+	mutex_lock(&rdlock);
 
 	/* Get the tag */
 	mt = get_tag(name);
@@ -412,7 +412,7 @@ int rdtags_remove_tag(const char *name)
 	_remove_tag(mt);
 
 exit:
-	spin_unlock_irqrestore(&rdlock, flags);
+	mutex_unlock(&rdlock);
 
 	if (ret)
 		dev_err(dev, "Could not remove tag \"%s\"\n", name);
@@ -503,12 +503,10 @@ static int _update_tag(struct rtag_head *mt, const unsigned char *data,
  * Returns 0 on success or a negative error code on failure
  */
 int rdtags_append_tagdata(const char *name, const unsigned char *data,
-		   const uint32_t size)
+			  const uint32_t size)
 {
 	struct rtag_head *mt;
-	unsigned long flags;
 	int ret = 0;
-	char *kbuf;
 
 	if (!name || !data || size == 0)
 		return -EINVAL;
@@ -518,34 +516,35 @@ int rdtags_append_tagdata(const char *name, const unsigned char *data,
 
 	dev_dbg(dev, "Appending tag \"%s\"\n", name);
 
-	kbuf = vmalloc(RDTAGS_MEM_SIZE);
-	if (kbuf == NULL) {
-		dev_err(dev, "Unable to assign memory.\n");
-		ret = -ENOMEM;
-		goto exit_1;
-	}
-
-	spin_lock_irqsave(&rdlock, flags);
+	mutex_lock(&rdlock);
 
 	/* First check if the tag exists */
 	mt = get_tag(name);
 	if (mt != NULL) {
+		char *kbuf;
 		unsigned int totalsize = 0;
 
 		totalsize = size + mt->data_size;
 
+		kbuf = vmalloc(totalsize);
+		if (NULL == kbuf) {
+			dev_err(dev, "Unable to assign memory.\n");
+			ret = -ENOMEM;
+			goto exit;
+		}
+
+		/* Update the tag */
 		memcpy(kbuf, mt->data, mt->data_size);
 		memcpy((kbuf + mt->data_size), data, size);
 		ret = _update_tag(mt, kbuf, totalsize);
+		vfree(kbuf);
 		goto exit;
 	}
 
 	/* Add the tag */
 	ret = _add_tag(name, data, size);
 exit:
-	spin_unlock_irqrestore(&rdlock, flags);
-	vfree(kbuf);
-exit_1:
+	mutex_unlock(&rdlock);
 	if (ret)
 		dev_err(dev, "Could not add/update tag \"%s\" with %d bytes of data\n\n",
 			name, size);
@@ -573,7 +572,6 @@ int rdtags_add_tag(const char *name, const unsigned char *data,
 		   const size_t size)
 {
 	struct rtag_head *mt;
-	unsigned long flags;
 	int ret = 0;
 
 	if (!name || !data || size == 0)
@@ -584,7 +582,7 @@ int rdtags_add_tag(const char *name, const unsigned char *data,
 
 	dev_dbg(dev, "Adding tag \"%s\"\n", name);
 
-	spin_lock_irqsave(&rdlock, flags);
+	mutex_lock(&rdlock);
 
 	/* First check if the tag exists */
 	mt = get_tag(name);
@@ -598,7 +596,7 @@ int rdtags_add_tag(const char *name, const unsigned char *data,
 	/* Add the tag */
 	ret = _add_tag(name, data, size);
 exit:
-	spin_unlock_irqrestore(&rdlock, flags);
+	mutex_unlock(&rdlock);
 
 	if (ret)
 		dev_err(dev, "Could not add/update tag \"%s\" with %zd" \
@@ -624,7 +622,6 @@ EXPORT_SYMBOL(rdtags_add_tag);
 int rdtags_get_tag_data(const char *name, unsigned char *data, size_t *size)
 {
 	struct rtag_head *mt;
-	unsigned long flags;
 	int ret = 0;
 
 	if (!name || !size)
@@ -633,7 +630,7 @@ int rdtags_get_tag_data(const char *name, unsigned char *data, size_t *size)
 	if (!rdtags_initialized)
 		return -ENODEV;
 
-	spin_lock_irqsave(&rdlock, flags);
+	mutex_lock(&rdlock);
 
 	/* First check if the tag exists */
 	mt = get_tag(name);
@@ -655,7 +652,7 @@ int rdtags_get_tag_data(const char *name, unsigned char *data, size_t *size)
 	memcpy(data, mt->data, mt->data_size);
 	*size = mt->data_size;
 error:
-	spin_unlock_irqrestore(&rdlock, flags);
+	mutex_unlock(&rdlock);
 	if (ret == -ENOBUFS)
 		dev_dbg(dev, "Returning size %zd for tag \"%s\"!\n",
 			*size, name);
@@ -676,7 +673,6 @@ EXPORT_SYMBOL(rdtags_get_tag_data);
 void rdtags_clear_tags(void)
 {
 	struct rtag_head *mt = (struct rtag_head *)rdtags_base;
-	unsigned long flags;
 
 	if (!rdtags_initialized) {
 		dev_err(dev, "Not yet initialized, cannot clear!\n");
@@ -685,7 +681,7 @@ void rdtags_clear_tags(void)
 
 	dev_dbg(dev, "Clearing rdtags!\n");
 
-	spin_lock_irqsave(&rdlock, flags);
+	mutex_lock(&rdlock);
 
 	/* Go through all tags and remove their procfs nodes */
 	while (mt->sig == RDTAGS_SIG) {
@@ -702,7 +698,7 @@ void rdtags_clear_tags(void)
 	/* Finally reset the entire area to make it clean */
 	memset(rdtags_base, 0x0, rdtags_size);
 	rdtags_flush();
-	spin_unlock_irqrestore(&rdlock, flags);
+	mutex_unlock(&rdlock);
 }
 EXPORT_SYMBOL(rdtags_clear_tags);
 
@@ -744,8 +740,8 @@ loop_next:
 	return count;
 }
 
-static ssize_t tag_read (struct file *file , char __user *ubuf, size_t len,
-		loff_t *offset)
+static ssize_t tag_read(struct file *file, char __user *ubuf, size_t len,
+			loff_t *offset)
 {
 	ssize_t count;
 	loff_t pos = *offset;
@@ -793,8 +789,8 @@ static ssize_t tag_read (struct file *file , char __user *ubuf, size_t len,
 	return count;
 }
 
-static ssize_t tags_read (struct file *file , char __user *ubuf, size_t len,
-		loff_t *offset)
+static ssize_t tags_read(struct file *file, char __user *ubuf, size_t len,
+			loff_t *offset)
 {
 	/* Assume that this text always fits in count bytes */
 	char *message = "Usage: <tag name/command> [tag data]\n"
@@ -816,8 +812,8 @@ static ssize_t tags_read (struct file *file , char __user *ubuf, size_t len,
 	return len;
 }
 
-static ssize_t tags_write (struct file *file, const char __user *ubuf,
-		size_t count, loff_t *offset)
+static ssize_t tags_write(struct file *file, const char __user *ubuf,
+			  size_t count, loff_t *offset)
 {
 	char *tag_data;
 	int tag_size;
@@ -937,7 +933,6 @@ static int rdtags_driver_probe(struct platform_device *pdev)
 	int ret = 0;
 
 	dev = &pdev->dev;
-	spin_lock_init(&rdlock);
 
 	/* Get resources */
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
