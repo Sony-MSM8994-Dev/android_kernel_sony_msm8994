@@ -5099,6 +5099,20 @@ static struct file_system_type sdfat_texfat_fs_type = {
 MODULE_ALIAS_FS("texfat");
 #endif
 
+#ifdef CONFIG_SDFAT_USE_FOR_EXFAT
+static struct file_system_type exfat_fs_type = {
+	.owner       = THIS_MODULE,
+	.name        = "exfat",
+	.mount       = sdfat_fs_mount,
+#ifdef CONFIG_SDFAT_DBG_IOCTL
+	.kill_sb    = sdfat_debug_kill_sb,
+#else
+	.kill_sb    = kill_block_super,
+#endif /* CONFIG_SDFAT_DBG_IOCTL */
+	.fs_flags    = FS_REQUIRES_DEV,
+};
+#endif /* CONFIG_SDFAT_USE_FOR_EXFAT */
+
 static int __init init_sdfat_fs(void)
 {
 	int err;
@@ -5153,6 +5167,14 @@ static int __init init_sdfat_fs(void)
 	}
 #endif
 
+#ifdef CONFIG_SDFAT_USE_FOR_EXFAT
+	err = register_filesystem(&exfat_fs_type);
+	if (err) {
+		pr_err("[SDFAT] failed to register for exfat filesystem\n");
+		goto error;
+	}
+#endif /* CONFIG_SDFAT_USE_FOR_EXFAT */
+
 	return 0;
 error:
 	sdfat_statistics_uninit();
@@ -5190,6 +5212,10 @@ static void __exit exit_sdfat_fs(void)
 #ifdef CONFIG_SDFAT_TEXFAT_WRAPPER
 	unregister_filesystem(&sdfat_texfat_fs_type);
 #endif
+
+#ifdef CONFIG_SDFAT_USE_FOR_EXFAT
+	unregister_filesystem(&exfat_fs_type);
+#endif /* CONFIG_SDFAT_USE_FOR_EXFAT */
 
 	fsapi_shutdown();
 }
