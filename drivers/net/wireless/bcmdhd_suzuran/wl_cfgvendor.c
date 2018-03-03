@@ -1299,53 +1299,88 @@ wl_cfgvendor_set_bssid_blacklist(struct wiphy *wiphy,
 	int err = 0;
 	int type, tmp;
 	const struct nlattr *iter;
-	uint32 mem_needed = 0, flush = 0, i = 0, num = 0;
+	uint32 mem_needed = 0, flush = 0, num = 0;
 
 	/* Assumption: NUM attribute must come first */
 	nla_for_each_attr(iter, data, len, tmp) {
 		type = nla_type(iter);
 		switch (type) {
 			case GSCAN_ATTRIBUTE_NUM_BSSID:
+				if (num != 0) {
+					WL_ERR(("attempt to change BSSID num\n"));
+					err = -EINVAL;
+					goto exit;
+				}
+				if (nla_len(iter) != sizeof(uint32)) {
+					WL_ERR(("not matching nla_len.\n"));
+					err = -EINVAL;
+					goto exit;
+				}
 				num = nla_get_u32(iter);
-				if (num > MAX_BSSID_BLACKLIST_NUM) {
-					WL_ERR(("Too many Blacklist BSSIDs!\n"));
+				if (num == 0 || num > MAX_BSSID_BLACKLIST_NUM) {
+					WL_ERR(("wrong BSSID count:%d\n", num));
+					err = -EINVAL;
+					goto exit;
+				}
+				if (!blacklist) {
+					mem_needed = OFFSETOF(maclist_t, ea) +
+						sizeof(struct ether_addr) * (num);
+					blacklist = (maclist_t *)
+						kzalloc(mem_needed, GFP_KERNEL);
+					if (!blacklist) {
+						WL_ERR(("kzalloc failed.\n"));
+						err = -ENOMEM;
+						goto exit;
+					}
+				}
+				break;
+			case GSCAN_ATTRIBUTE_BSSID_BLACKLIST_FLUSH:
+				if (nla_len(iter) != sizeof(uint32)) {
+					WL_ERR(("not matching nla_len.\n"));
+					err = -EINVAL;
+					goto exit;
+				}
+				flush = nla_get_u32(iter);
+				if (flush != 1) {
+					WL_ERR(("flush arg is worng:%d\n", flush));
 					err = -EINVAL;
 					goto exit;
 				}
 				break;
-			case GSCAN_ATTRIBUTE_BSSID_BLACKLIST_FLUSH:
-				flush = nla_get_u32(iter);
-				break;
 			case GSCAN_ATTRIBUTE_BLACKLIST_BSSID:
-				if (num) {
-					if (!blacklist) {
-						mem_needed = sizeof(maclist_t) +
-						     sizeof(struct ether_addr) * (num - 1);
-						blacklist = (maclist_t *)
-						      kmalloc(mem_needed, GFP_KERNEL);
-						if (!blacklist) {
-							WL_ERR(("%s: Can't malloc %d bytes\n",
-							     __FUNCTION__, mem_needed));
-							err = -ENOMEM;
-							goto exit;
-						}
-						blacklist->count = num;
-					}
-					if (i >= num) {
-						WL_ERR(("CFGs don't seem right!\n"));
-						err = -EINVAL;
-						goto exit;
-					}
-					memcpy(&(blacklist->ea[i]),
-					  nla_data(iter), ETHER_ADDR_LEN);
-					i++;
+				if (num == 0 || !blacklist) {
+					WL_ERR(("number of BSSIDs not received.\n"));
+					err = -EINVAL;
+					goto exit;
 				}
+				if (nla_len(iter) != ETHER_ADDR_LEN) {
+					WL_ERR(("not matching nla_len.\n"));
+					err = -EINVAL;
+					goto exit;
+				}
+				if (blacklist->count >= num) {
+					WL_ERR(("too many BSSIDs than expected:%d\n",
+						blacklist->count));
+					err = -EINVAL;
+					goto exit;
+				}
+				memcpy(&(blacklist->ea[blacklist->count]), nla_data(iter),
+						ETHER_ADDR_LEN);
+				blacklist->count++;
 				break;
-			default:
-				WL_ERR(("%s: No such attribute %d\n", __FUNCTION__, type));
-				break;
-			}
+		default:
+			WL_ERR(("No such attribute:%d\n", type));
+			break;
+		}
 	}
+
+	if (blacklist && (blacklist->count != num)) {
+		WL_ERR(("not matching bssid count:%d to expected:%d\n",
+				blacklist->count, num));
+		err = -EINVAL;
+		goto exit;
+	}
+
 	err = dhd_dev_set_blacklist_bssid(bcmcfg_to_prmry_ndev(cfg),
 	          blacklist, mem_needed, flush);
 exit:
