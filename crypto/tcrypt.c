@@ -1704,6 +1704,10 @@ static int do_test(const char *alg, u32 type, u32 mask, int m)
 		ret += tcrypt_test("cmac(des3_ede)");
 		break;
 
+	case 191:
+		ret += tcrypt_test("ecb(sm4)");
+		break;
+
 	case 200:
 		test_cipher_speed("ecb(aes)", ENCRYPT, sec, NULL, 0,
 				speed_template_16_24_32);
