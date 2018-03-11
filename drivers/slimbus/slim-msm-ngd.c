@@ -164,7 +164,7 @@ static int ngd_qmi_available(struct notifier_block *n, unsigned long code,
 	SLIM_INFO(dev, "Slimbus QMI NGD CB received event:%ld\n", code);
 	switch (code) {
 	case QMI_SERVER_ARRIVE:
-		queue_work(system_unbound_wq, &qmi->ssr_up);
+		schedule_work(&qmi->ssr_up);
 		break;
 	default:
 		break;
