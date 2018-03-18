@@ -1180,8 +1180,7 @@ int find_suitable_fallback(struct free_area *area, unsigned int order,
  * as well.
  */
 static void try_to_steal_freepages(struct zone *zone, struct page *page,
-                                  int start_type, int fallback_type,
-                                  int start_order)
+                                  int start_type, int fallback_type)
 {
         int current_order = page_order(page);
 
@@ -1193,8 +1192,7 @@ static void try_to_steal_freepages(struct zone *zone, struct page *page,
 
         if (current_order >= pageblock_order / 2 ||
             start_type == MIGRATE_RECLAIMABLE ||
-            // allow unmovable allocs up to 64K without migrating blocks
-            (start_type == MIGRATE_UNMOVABLE && start_order >= 5) ||
+            start_type == MIGRATE_UNMOVABLE ||
             page_group_by_mobility_disabled) {
                 int pages;
 
@@ -1238,7 +1236,7 @@ __rmqueue_fallback(struct zone *zone, int order, int start_migratetype)
 				area->nr_free_cma--;
 
 			try_to_steal_freepages(zone, page, start_migratetype,
-								migratetype, order);
+								migratetype);
 
 			/* Remove the page from the freelists */
 			list_del(&page->lru);
