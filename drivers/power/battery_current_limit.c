@@ -256,19 +256,19 @@ static void bcl_handle_hotplug(struct work_struct *work)
 				continue;
 			ret = cpu_down(_cpu);
 			if (ret)
-				pr_err("Error %d offlining core %d\n",
+				pr_debug("Error %d offlining core %d\n",
 					ret, _cpu);
 			else
-				pr_info("Set Offline CPU:%d\n", _cpu);
+				pr_debug("Set Offline CPU:%d\n", _cpu);
 		} else {
 			if (cpu_online(_cpu))
 				continue;
 			ret = cpu_up(_cpu);
 			if (ret)
-				pr_err("Error %d onlining core %d\n",
+				pr_debug("Error %d onlining core %d\n",
 					ret, _cpu);
 			else
-				pr_info("Allow Online CPU:%d\n", _cpu);
+				pr_debug("Allow Online CPU:%d\n", _cpu);
 		}
 	}
 
@@ -293,7 +293,7 @@ static int bcl_cpu_ctrl_callback(struct notifier_block *nfb,
 			pr_debug("BCL online Mask: %u\n",
 				cpumask_weight(bcl_cpu_online_mask));
 		if (bcl_hotplug_request & BIT(cpu)) {
-			pr_info("preventing CPU%d from coming online\n", cpu);
+			pr_debug("preventing CPU%d from coming online\n", cpu);
 			return NOTIFY_BAD;
 		} else {
 			pr_debug("voting for CPU%d to be online\n", cpu);
