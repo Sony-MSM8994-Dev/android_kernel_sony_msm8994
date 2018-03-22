@@ -374,3 +374,6 @@ CONFIG_PANIC_ON_DATA_CORRUPTION=y
 
 # Print scheduling debugging info from sysrq-trigger
 # CONFIG_SYSRQ_SCHED_DEBUG is not set
+
+# Force flush the console on restart
+CONFIG_ARM64_FLUSH_CONSOLE_ON_RESTART=y
