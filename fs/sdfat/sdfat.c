@@ -4981,6 +4981,7 @@ static struct file_system_type sdfat_fs_type = {
 #endif /* CONFIG_SDFAT_DBG_IOCTL */
 	.fs_flags    = FS_REQUIRES_DEV,
 };
+MODULE_ALIAS_FS("sdfat");
 
 #ifdef CONFIG_SDFAT_EXFAT_WRAPPER
 static struct file_system_type sdfat_exfat_fs_type = {
@@ -4994,6 +4995,7 @@ static struct file_system_type sdfat_exfat_fs_type = {
 #endif /* CONFIG_SDFAT_DBG_IOCTL */
 	.fs_flags    = FS_REQUIRES_DEV,
 };
+MODULE_ALIAS_FS("exfat");
 #endif
 
 #ifdef CONFIG_SDFAT_TEXFAT_WRAPPER
@@ -5008,6 +5010,7 @@ static struct file_system_type sdfat_texfat_fs_type = {
 #endif /* CONFIG_SDFAT_DBG_IOCTL */
 	.fs_flags    = FS_REQUIRES_DEV,
 };
+MODULE_ALIAS_FS("texfat");
 #endif
 
 static int __init init_sdfat_fs(void)
