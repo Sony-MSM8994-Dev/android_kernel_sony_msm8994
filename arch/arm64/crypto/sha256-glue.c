@@ -162,22 +162,24 @@ static struct shash_alg neon_algs[] = { {
 
 static int __init sha256_mod_init(void)
 {
-	int ret = crypto_register_shashes(algs, ARRAY_SIZE(algs));
-	if (ret)
-		return ret;
+	int err;
 
-	if (elf_hwcap & HWCAP_ASIMD) {
-		ret = crypto_register_shashes(neon_algs, ARRAY_SIZE(neon_algs));
-		if (ret)
-			crypto_unregister_shashes(algs, ARRAY_SIZE(algs));
+	err = crypto_register_shashes(algs, ARRAY_SIZE(algs));
+	if (err)
+		return err;
+
+	err = crypto_register_shashes(neon_algs, ARRAY_SIZE(neon_algs));
+	if (err) {
+		crypto_unregister_shashes(algs, ARRAY_SIZE(algs));
+		return err;
 	}
-	return ret;
+
+	return 0;
 }
 
 static void __exit sha256_mod_fini(void)
 {
-	if (elf_hwcap & HWCAP_ASIMD)
-		crypto_unregister_shashes(neon_algs, ARRAY_SIZE(neon_algs));
+	crypto_unregister_shashes(neon_algs, ARRAY_SIZE(neon_algs));
 	crypto_unregister_shashes(algs, ARRAY_SIZE(algs));
 }
 
