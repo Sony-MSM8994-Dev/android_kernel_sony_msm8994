@@ -286,8 +286,6 @@ static struct crypto_alg speck_algs[] = {
 
 static int __init speck_neon_module_init(void)
 {
-	if (!(elf_hwcap & HWCAP_ASIMD))
-		return -ENODEV;
 	return crypto_register_algs(speck_algs, ARRAY_SIZE(speck_algs));
 }
 
