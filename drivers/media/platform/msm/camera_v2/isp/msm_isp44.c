@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2015, 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -943,10 +943,12 @@ static int msm_vfe44_fetch_engine_start(struct vfe_device *vfe_dev,
 	vfe_dev->fetch_engine_info.session_id = fe_cfg->session_id;
 	vfe_dev->fetch_engine_info.stream_id = fe_cfg->stream_id;
 
+	mutex_lock(&vfe_dev->buf_mgr->lock);
 	rc = vfe_dev->buf_mgr->ops->get_buf_by_index(
 		vfe_dev->buf_mgr, bufq_handle, fe_cfg->buf_idx, &buf);
 	if (rc < 0) {
 		pr_err("%s: No fetch buffer\n", __func__);
+		mutex_unlock(&vfe_dev->buf_mgr->lock);
 		return -EINVAL;
 	}
 	vfe_dev->fetch_engine_info.buf_idx = fe_cfg->buf_idx;
@@ -959,6 +961,7 @@ static int msm_vfe44_fetch_engine_start(struct vfe_device *vfe_dev,
 
 	ISP_DBG("%s: Fetch Engine ready\n", __func__);
 	buf->state = MSM_ISP_BUFFER_STATE_DIVERTED;
+	mutex_unlock(&vfe_dev->buf_mgr->lock);
 
 	return 0;
 }
