@@ -618,7 +618,10 @@ static int proc_sys_link_fill_cache(struct file *filp, void *dirent,
 				    struct ctl_table *table)
 {
 	int err, ret = 0;
+
 	head = sysctl_head_grab(head);
+	if (IS_ERR(head))
+		return false;
 
 	if (S_ISLNK(table->mode)) {
 		/* It is not an error if we can not follow the link ignore it */
