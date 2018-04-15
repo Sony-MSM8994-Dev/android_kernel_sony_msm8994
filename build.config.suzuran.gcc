@@ -32,19 +32,23 @@ then
 	 --tags_offset 0x01E00000 \
 	 --output ../final_files/boot_E5823_Enf.img
 
-	# Copy BT drivers
+	# Broadcom ANT/BT/FM drivers
 	cp out/drivers/bluetooth/broadcom/bt_protocol_driver/brcm_bt_drv.ko ../final_files/modules/
 	cp out/drivers/bluetooth/broadcom/line_discipline_driver/brcm_hci_ldisc.ko ../final_files/modules/
 	cp out/drivers/bluetooth/broadcom/v4l2_ant_driver/ant_drv.ko ../final_files/modules/
 	cp out/drivers/bluetooth/broadcom/v4l2_fm_driver/fm_drv.ko ../final_files/modules/
 
-	# Copy MHL drivers
+	# MHL drivers
 	cp out/drivers/video/msm/mdss/mhl_sii8620_8061_drv/mhl_sii8620_8061_drv.ko ../final_files/modules/
 
-	# Copy additional modules
-	cp out/crypto/ansi_cprng.ko ../final_files/modules/
+	# MSM Broadcast
 	cp out/drivers/media/platform/msm/broadcast/tspp.ko ../final_files/modules/
-	cp out/drivers/net/wireless/ath/wil6210/wil6210.ko ../final_files/modules/
+
+	# MobiCore driver
+	cp out/drivers/gud/mcDrvModule.ko ../final_files/modules/
+	cp out/drivers/gud/mcKernelApi.ko ../final_files/modules/
+
+	# User mode SPI device driver
 	cp out/drivers/spi/spidev.ko ../final_files/modules/
 
 	# GPIO driver
@@ -53,4 +57,10 @@ then
 	cp out/drivers/input/misc/gpio_input.ko ../final_files/modules/
 	cp out/drivers/input/misc/gpio_matrix.ko ../final_files/modules/
 	cp out/drivers/input/misc/gpio_output.ko ../final_files/modules/
+
+	# Software Pseudo Random Number Generator
+	cp out/crypto/ansi_cprng.ko ../final_files/modules/
+
+	# Wilocity 60g WiFi
+	cp out/drivers/net/wireless/ath/wil6210/wil6210.ko ../final_files/modules/
 fi
