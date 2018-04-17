@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2015, 2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -616,6 +616,8 @@ struct vfe_device {
 	spinlock_t tasklet_lock;
 	spinlock_t shared_data_lock;
 	spinlock_t reg_update_lock;
+	spinlock_t reset_completion_lock;
+	spinlock_t halt_completion_lock;
 	struct list_head tasklet_q;
 	struct tasklet_struct vfe_tasklet;
 	struct msm_vfe_tasklet_queue_cmd
