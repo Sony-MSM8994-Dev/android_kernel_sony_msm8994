@@ -60,7 +60,4 @@ then
 
 	# Software Pseudo Random Number Generator
 	cp out/crypto/ansi_cprng.ko ../final_files/modules/
-
-	# Wilocity 60g WiFi
-	cp out/drivers/net/wireless/ath/wil6210/wil6210.ko ../final_files/modules/
 fi
