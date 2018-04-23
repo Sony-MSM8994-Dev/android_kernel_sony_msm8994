@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
- * Copyright (C) 2017 Paranoid Android for Nextbit Systems Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -176,8 +175,6 @@ static int boost_adjust_notify(struct notifier_block *nb, unsigned long val,
 			break;
 
 		min = max(b_min, ib_min);
-
-		min = min(min, policy->max);
 
 		pr_debug("CPU%u policy min before boost: %u kHz\n",
 			 cpu, policy->min);
