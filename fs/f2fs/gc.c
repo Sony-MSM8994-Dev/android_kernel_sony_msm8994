@@ -878,11 +878,11 @@ next_step:
 			bool locked = false;
 
 			if (S_ISREG(inode->i_mode)) {
-				if (!down_write_trylock(&fi->dio_rwsem[READ]))
+				if (!down_write_trylock(&fi->i_gc_rwsem[READ]))
 					continue;
 				if (!down_write_trylock(
-						&fi->dio_rwsem[WRITE])) {
-					up_write(&fi->dio_rwsem[READ]);
+						&fi->i_gc_rwsem[WRITE])) {
+					up_write(&fi->i_gc_rwsem[READ]);
 					continue;
 				}
 				locked = true;
@@ -900,8 +900,8 @@ next_step:
 								segno, off);
 
 			if (locked) {
-				up_write(&fi->dio_rwsem[WRITE]);
-				up_write(&fi->dio_rwsem[READ]);
+				up_write(&fi->i_gc_rwsem[WRITE]);
+				up_write(&fi->i_gc_rwsem[READ]);
 			}
 
 			stat_inc_data_blk_count(sbi, 1, gc_type);
