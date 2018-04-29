@@ -544,8 +544,6 @@ struct mdss_mdp_pipe {
 	u8 chroma_sample_v;
 
 	u8 csc_coeff_set;
-
-	u32 frame_rate;
 };
 
 struct mdss_mdp_writeback_arg {
