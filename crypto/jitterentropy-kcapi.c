@@ -146,7 +146,6 @@ static void jent_kcapi_cleanup(struct crypto_tfm *tfm)
 }
 
 static int jent_kcapi_random(struct crypto_rng *tfm,
-			     const u8 *src, unsigned int slen,
 			     u8 *rdata, unsigned int dlen)
 {
 	struct jitterentropy *rng = crypto_rng_ctx(tfm);
@@ -160,42 +159,47 @@ static int jent_kcapi_random(struct crypto_rng *tfm,
 }
 
 static int jent_kcapi_reset(struct crypto_rng *tfm,
-			    const u8 *seed, unsigned int slen)
+			    u8 *seed, unsigned int slen)
 {
 	return 0;
 }
 
-static struct rng_alg jent_alg = {
-	.generate		= jent_kcapi_random,
-	.seed			= jent_kcapi_reset,
-	.seedsize		= 0,
-	.base			= {
-		.cra_name               = "jitterentropy_rng",
-		.cra_driver_name        = "jitterentropy_rng",
-		.cra_priority           = 100,
-		.cra_ctxsize            = sizeof(struct jitterentropy),
-		.cra_module             = THIS_MODULE,
-		.cra_init               = jent_kcapi_init,
-		.cra_exit               = jent_kcapi_cleanup,
-
+static struct crypto_alg jent_alg = {
+	.cra_name		= "jitterentropy_rng",
+	.cra_driver_name	= "jitterentropy_rng",
+	.cra_priority		= 100,
+	.cra_flags		= CRYPTO_ALG_TYPE_RNG,
+	.cra_ctxsize		= sizeof(struct jitterentropy),
+	.cra_type		= &crypto_rng_type,
+	.cra_module		= THIS_MODULE,
+	.cra_init		= jent_kcapi_init,
+	.cra_exit		= jent_kcapi_cleanup,
+	.cra_u			= {
+		.rng = {
+			.rng_make_random	= jent_kcapi_random,
+			.rng_reset		= jent_kcapi_reset,
+			.seedsize = 0,
+		}
 	}
 };
 
+/* Module initalization */
 static int __init jent_mod_init(void)
 {
 	int ret = 0;
 
 	ret = jent_entropy_init();
 	if (ret) {
-		pr_info("jitterentropy: Initialization failed with host not compliant with requirements: %d\n", ret);
+		pr_info("jitterentropy: Initialization failed with host "
+			"not compliant with requirements: %d\n", ret);
 		return -EFAULT;
 	}
-	return crypto_register_rng(&jent_alg);
+	return crypto_register_alg(&jent_alg);
 }
 
 static void __exit jent_mod_exit(void)
 {
-	crypto_unregister_rng(&jent_alg);
+	crypto_unregister_alg(&jent_alg);
 }
 
 module_init(jent_mod_init);
