@@ -220,15 +220,6 @@ static void __d_free(struct rcu_head *head)
 	kmem_cache_free(dentry_cache, dentry); 
 }
 
-static void dentry_free(struct dentry *dentry)
-{
-    /* if dentry was never visible to RCU, immediate free is OK */
-    if (!(dentry->d_flags & DCACHE_RCUACCESS))
-        __d_free(&dentry->d_u.d_rcu);
-    else
-        call_rcu(&dentry->d_u.d_rcu, __d_free);
-}
-
 /*
  * no locks, please.
  */
@@ -240,46 +231,12 @@ static void d_free(struct dentry *dentry)
 	if (dentry->d_op && dentry->d_op->d_release)
 		dentry->d_op->d_release(dentry);
 
-	dentry_free(dentry);
+	/* if dentry was never visible to RCU, immediate free is OK */
+	if (!(dentry->d_flags & DCACHE_RCUACCESS))
+		__d_free(&dentry->d_u.d_rcu);
+	else
+		call_rcu(&dentry->d_u.d_rcu, __d_free);
 }
-
-void take_dentry_name_snapshot(struct name_snapshot *name, struct dentry *dentry)
-{
-	spin_lock(&dentry->d_lock);
-	if (unlikely(dname_external(dentry))) {
-		u32 len;
-		char *p = NULL;
-
-		for (;;) {
-			len = dentry->d_name.len;
-			spin_unlock(&dentry->d_lock);
-
-			if (p)
-				kfree(p);
-			p = kmalloc(len + 1, GFP_KERNEL | __GFP_NOFAIL);
-
-			spin_lock(&dentry->d_lock);
-			if (dentry->d_name.len <= len)
-				break;
-		}
-		memcpy(p, dentry->d_name.name, dentry->d_name.len + 1);
-		spin_unlock(&dentry->d_lock);
-
-		name->name = p;
-	} else {
-		memcpy(name->inline_name, dentry->d_iname, DNAME_INLINE_LEN);
-		spin_unlock(&dentry->d_lock);
-		name->name = name->inline_name;
-	}
-}
-EXPORT_SYMBOL(take_dentry_name_snapshot);
-
-void release_dentry_name_snapshot(struct name_snapshot *name)
-{
-	if (unlikely(name->name != name->inline_name))
-		kfree(name->name);
-}
-EXPORT_SYMBOL(release_dentry_name_snapshot);
 
 /**
  * dentry_rcuwalk_barrier - invalidate in-progress rcu-walk lookups
