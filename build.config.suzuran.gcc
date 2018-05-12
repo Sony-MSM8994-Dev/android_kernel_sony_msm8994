@@ -7,7 +7,7 @@ export CACHE_DIR=~/.ccache
 export ARCH=arm64
 
 ### GCC 7.3.1 / Linaro Toolchain
-export PATH=~/android/toolchain/gcc-linaro-7.3.1-2018.04-arm64_aarch64-linux-gnu/bin/:$PATH
+export PATH=~/android/toolchain/gcc-linaro-7.3.1-2018.05_aarch64-linux-gnu/bin/:$PATH
 export CROSS_COMPILE=aarch64-linux-gnu-
 
 export KBUILD_DIFFCONFIG=suzuran_diffconfig
