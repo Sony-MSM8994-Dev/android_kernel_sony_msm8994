@@ -13,7 +13,9 @@ export CROSS_COMPILE=aarch64-linux-gnu-
 export KBUILD_DIFFCONFIG=sumire_dsds_diffconfig
 mkdir -p out
 make msm8994-perf_defconfig O=./out
-make O=./out
+
+NUM_CPUS=`grep -c ^processor /proc/cpuinfo`
+make -j$NUM_CPUS O=./out
 
 
 echo "checking for compiled kernel..."
