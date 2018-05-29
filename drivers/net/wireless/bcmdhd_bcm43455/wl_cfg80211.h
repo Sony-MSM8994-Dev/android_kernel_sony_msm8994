@@ -1,7 +1,7 @@
 /*
  * Linux cfg80211 driver
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: wl_cfg80211.h 596861 2015-11-03 08:54:58Z $
+ * $Id: wl_cfg80211.h 751081 2018-03-09 08:06:41Z $
  */
 
 #ifndef _wl_cfg80211_h_
@@ -364,12 +364,12 @@ struct net_info {
 };
 
 /* association inform */
-#define MAX_REQ_LINE 1024
+#define MAX_REQ_LINE 1024u
 struct wl_connect_info {
 	u8 req_ie[MAX_REQ_LINE];
-	s32 req_ie_len;
+	u32 req_ie_len;
 	u8 resp_ie[MAX_REQ_LINE];
-	s32 resp_ie_len;
+	u32 resp_ie_len;
 };
 
 /* firmware /nvram downloading controller */
