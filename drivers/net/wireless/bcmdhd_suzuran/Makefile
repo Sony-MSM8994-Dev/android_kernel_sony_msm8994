@@ -133,11 +133,11 @@ DHDCFLAGS += -DDISABLE_BCN_DLY
 #ABSOLUTE_BCM_SRC_DIR := $(WLAN_ROOT)/bcmdhd_suzuran
 BCM_SRC_DIR := ./
 
-###############################
-# Android M
-###############################
+###########
+# Lollipop
+###########
 DHDCFLAGS += -DWL_ENABLE_P2P_IF
-
+#DHDCFLAGS += -DWL_SUPPORT_BACKPORTED_KPATCHES
 # Default definitions for KitKat
 DHDCFLAGS += -DWL_CFG80211_STA_EVENT
 DHDCFLAGS += -DWL_IFACE_COMB_NUM_CHANNELS
@@ -165,40 +165,32 @@ endif
 
 ifneq ($(CONFIG_BCM43455),)
 # To support RTT
-DHDCFLAGS += -DRTT_SUPPORT
+#DHDCFLAGS += -DRTT_SUPPORT
 # To support GSCAN
 DHDCFLAGS += -DGSCAN_SUPPORT
-# To support ePNO
-DHDCFLAGS += -DEPNO_SUPPORT
 # To support Link Statictics
 DHDCFLAGS += -DLINKSTAT_SUPPORT
-# To support Rssi Monitor
-DHDCFLAGS += -DRSSI_MONITOR_SUPPORT
 # To support WL_VENDOR_EXT_SUPPORT
 DHDCFLAGS += -DWL_VENDOR_EXT_SUPPORT
-# To support ANQPO - GSCAN must be supported
-DHDCFLAGS += -DANQPO_SUPPORT
 
-# Extra file list for Android M, SOMC
-ANDROID_OFILES := wl_cfgvendor.o dhd_rtt.o bcmxtlv.o
+# Extra file list for Lollipop
+ANDROID_OFILES := wl_cfgvendor.o
 endif
 
 ifneq ($(CONFIG_BCM4354),)
 # To support RTT
-#DHDCFLAGS += -DRTT_SUPPORT
+DHDCFLAGS += -DRTT_SUPPORT
 # To support Link Statictics
 DHDCFLAGS += -DLINKSTAT_SUPPORT
 # To support GSCAN
-DHDCFLAGS += -DGSCAN_SUPPORT
+#DHDCFLAGS += -DGSCAN_SUPPORT
 
 # To support WL_VENDOR_EXT_SUPPORT
 DHDCFLAGS += -DWL_VENDOR_EXT_SUPPORT
 
-# Extra file list for Android M
-ANDROID_OFILES := wl_cfgvendor.o
+# Extra file list for Lollipop
+ANDROID_OFILES := wl_cfgvendor.o dhd_rtt.o
 endif
-
-
 
 
 #########################
@@ -348,7 +340,7 @@ endif
   # Radio_stat v2 - data structure is updated
   DHDCFLAGS += -DLINKSTAT_V2
 
-  DHDCFLAGS += -DWL_ABORT_SCAN
+# DHDCFLAGS += -DWL_ABORT_SCAN
 endif
 
 # Read custom mac address function
@@ -395,37 +387,13 @@ KBUILD_CFLAGS += -I$(LINUXDIR)/include -I$(shell pwd)
 
 MODNAME := bcmdhd
 
-DHDOFILES := 	bcmsdh.o \
-			bcmsdh_linux.o \
-			bcmsdh_sdmmc.o \
-			bcmsdh_sdmmc_linux.o \
-			dhd_cdc.o \
-			dhd_cfg80211.o \
-			dhd_common.o \
-			dhd_custom_gpio.o \
-			dhd_ip.o \
-			dhd_linux.o \
-			dhd_linux_sched.o \
-			dhd_sdio.o \
-			dhd_pno.o \
-			dhd_wlfc.o \
-			dhd_linux_wq.o \
-			aiutils.o \
-			bcmevent.o \
-			bcmutils.o \
-			bcmwifi_channels.o \
-			hndpmu.o \
-			linux_osl.o \
-			sbutils.o \
-			siutils.o \
-			wldev_common.o \
-			wl_cfg_btcoex.o \
-			wl_android.o \
-			wl_cfg80211.o \
-			wl_cfgp2p.o \
-			wl_linux_mon.o \
-			dhd_linux_platdev.o \
-			dhd_somc_custom.o
+DHDOFILES := bcmsdh.o bcmsdh_linux.o bcmsdh_sdmmc.o bcmsdh_sdmmc_linux.o \
+	dhd_cdc.o dhd_cfg80211.o dhd_common.o dhd_custom_gpio.o dhd_ip.o \
+	dhd_linux.o dhd_linux_sched.o dhd_sdio.o dhd_pno.o dhd_wlfc.o \
+	dhd_linux_wq.o aiutils.o bcmevent.o bcmutils.o bcmwifi_channels.o \
+	hndpmu.o linux_osl.o sbutils.o siutils.o wldev_common.o wl_cfg_btcoex.o \
+	wl_android.o wl_cfg80211.o wl_cfgp2p.o wl_linux_mon.o dhd_linux_platdev.o \
+	dhd_somc_custom.o
 
 DHDOFILES += $(ANDROID_OFILES)
 
