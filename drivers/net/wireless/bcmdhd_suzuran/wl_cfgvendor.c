@@ -1,7 +1,7 @@
 /*
  * Linux cfg80211 Vendor Extension Code
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2018, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -1908,36 +1908,6 @@ static int wl_cfgvendor_stop_mkeep_alive(struct wiphy *wiphy, struct wireless_de
 }
 #endif /* defined(KEEP_ALIVE) */
 
-static int wl_cfgvendor_priv_string_handler(struct wiphy *wiphy,
-	struct wireless_dev *wdev, const void  *data, int len)
-{
-	struct bcm_cfg80211 *cfg = wiphy_priv(wiphy);
-	int err = 0;
-	int data_len = 0;
-
-	WL_INFO(("%s: Enter \n", __func__));
-
-	if (strncmp((char *)data, BRCM_VENDOR_SCMD_CAPA, strlen(BRCM_VENDOR_SCMD_CAPA)) == 0) {
-		err = wldev_iovar_getbuf(bcmcfg_to_prmry_ndev(cfg), "cap", NULL, 0,
-			cfg->ioctl_buf, WLC_IOCTL_MAXLEN, &cfg->ioctl_buf_sync);
-		if (unlikely(err)) {
-			WL_ERR(("error (%d)\n", err));
-			return err;
-		}
-		data_len = strlen(cfg->ioctl_buf);
-		cfg->ioctl_buf[data_len] = '\0';
-	}
-
-	err =  wl_cfgvendor_send_cmd_reply(wiphy, bcmcfg_to_prmry_ndev(cfg),
-		cfg->ioctl_buf, data_len+1);
-	if (unlikely(err))
-		WL_ERR(("Vendor Command reply failed ret:%d \n", err));
-	else
-		WL_INFO(("Vendor Command reply sent successfully!\n"));
-
-	return err;
-}
-
 #ifdef LINKSTAT_SUPPORT
 #define NUM_RATE 32
 #define NUM_PEER 1
@@ -2130,14 +2100,6 @@ static int wl_cfgvendor_set_country(struct wiphy *wiphy,
 }
 
 static const struct wiphy_vendor_command wl_vendor_cmds [] = {
-	{
-		{
-			.vendor_id = OUI_BRCM,
-			.subcmd = BRCM_VENDOR_SCMD_PRIV_STR
-		},
-		.flags = WIPHY_VENDOR_CMD_NEED_WDEV | WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.doit = wl_cfgvendor_priv_string_handler
-	},
 #ifdef GSCAN_SUPPORT
 	{
 		{
