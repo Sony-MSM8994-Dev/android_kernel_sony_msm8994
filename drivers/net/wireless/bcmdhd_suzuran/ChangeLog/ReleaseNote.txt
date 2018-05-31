@@ -3,11 +3,30 @@ DHD 1.141.X Release for BCM4339, 4354, 43455 SDIO Projects.
 --------------------------------
 Change History
 --------------------------------
+
+Additional fixes:
+     - A-37505450 Fix RTT report of providing wrong information
+     - CVE-2017-0706 A-35195787 Adding boundary check in wl_cfg80211_mgmt_tx
+     - CVE-2017-0573 A-34469904 Fix buffer overrun in wl_android_set_roampref
+     - CVE-2016-8464 A-29000183 Fix buffer overrun in private command path
+     - A-29863589 Add boundary check while getting channel spec
+     - A-28336924 Check to avoid sending Disassoc in unassociated state
+     - A-27419732 Fix CONFIG_HZ dependency in wifi driver
+     - A-24469238 Add a NULL check in dhd_pno_get_gscan_batch_from_fw
+     - A-24270601 Disable debug trace event WLC_E_TRACE
+     - A-22666437 Fix for watch dog issue in wifi connect test
+     - Add ability to pass flags to get_country_code
+
+
+DHD 1.141.67.33 - 2018-03-09
+     - CVE-2017-13292 A-70722061 Fix integer overflow in wl_get_assoc_ies
+     - CVE-2017-13303 A-71359108 Remove obsoleted wl_cfgvendor_priv_string_handler
+
 DHD 1.141.67.32 - 2017-12-14
      - Fixed buffer overrun issue in wl_parse_ssid_list_tlv()
      - Fixed parsing issue on wl_parse_ssid_list_tlv() for PNO setup
      - Fixed memory leak in PNO
-     - Fix potential buffer overflow
+     - Fixed potential buffer overflow
      - Fixed missed SSID/MAC filtering in log for security reason
 
 DHD 1.141.67.30 - 2017.8.31
