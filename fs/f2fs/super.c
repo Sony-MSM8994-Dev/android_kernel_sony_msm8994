@@ -239,6 +239,7 @@ static int f2fs_show_options(struct seq_file *seq, struct dentry *root)
 	if (test_opt(sbi, DISABLE_EXT_IDENTIFY))
 		seq_puts(seq, ",disable_ext_identify");
 
+	seq_printf(seq, ",active_logs=%u", sbi->active_logs);
 
 	return 0;
 }
@@ -375,7 +376,7 @@ static int parse_options(struct super_block *sb, struct f2fs_sb_info *sbi,
 	return 0;
 }
 
-loff_t max_file_size(unsigned bits)
+static loff_t max_file_size(unsigned bits)
 {
 	loff_t result = ADDRS_PER_INODE;
 	loff_t leaf_count = ADDRS_PER_BLOCK;
