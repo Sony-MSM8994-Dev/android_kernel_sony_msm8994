@@ -934,6 +934,7 @@ int jbd2_journal_get_create_access(handle_t *handle, struct buffer_head *bh)
 	 * reused here.
 	 */
 	jbd_lock_bh_state(bh);
+	spin_lock(&journal->j_list_lock);
 	J_ASSERT_JH(jh, (jh->b_transaction == transaction ||
 		jh->b_transaction == NULL ||
 		(jh->b_transaction == journal->j_committing_transaction &&
@@ -956,18 +957,15 @@ int jbd2_journal_get_create_access(handle_t *handle, struct buffer_head *bh)
 		jh->b_modified = 0;
 
 		JBUFFER_TRACE(jh, "file as BJ_Reserved");
-		spin_lock(&journal->j_list_lock);
 		__jbd2_journal_file_buffer(jh, transaction, BJ_Reserved);
-		spin_unlock(&journal->j_list_lock);
 	} else if (jh->b_transaction == journal->j_committing_transaction) {
 		/* first access by this transaction */
 		jh->b_modified = 0;
 
 		JBUFFER_TRACE(jh, "set next transaction");
-		spin_lock(&journal->j_list_lock);
 		jh->b_next_transaction = transaction;
-		spin_unlock(&journal->j_list_lock);
 	}
+	spin_unlock(&journal->j_list_lock);
 	jbd_unlock_bh_state(bh);
 
 	/*
@@ -1529,6 +1527,29 @@ int jbd2_journal_stop(handle_t *handle)
 	return err;
 }
 
+/**
+ * int jbd2_journal_force_commit() - force any uncommitted transactions
+ * @journal: journal to force
+ *
+ * For synchronous operations: force any uncommitted transactions
+ * to disk.  May seem kludgy, but it reuses all the handle batching
+ * code in a very simple manner.
+ */
+int jbd2_journal_force_commit(journal_t *journal)
+{
+	handle_t *handle;
+	int ret;
+
+	handle = jbd2_journal_start(journal, 1);
+	if (IS_ERR(handle)) {
+		ret = PTR_ERR(handle);
+	} else {
+		handle->h_sync = 1;
+		ret = jbd2_journal_stop(handle);
+	}
+	return ret;
+}
+
 /*
  *
  * List management code snippets: various functions for manipulating the
@@ -1634,9 +1655,7 @@ static void __jbd2_journal_temp_unlink_buffer(struct journal_head *jh)
 
 	__blist_del_buffer(list, jh);
 	jh->b_jlist = BJ_None;
-	if (transaction && is_journal_aborted(transaction->t_journal))
-		clear_buffer_jbddirty(bh);
-	else if (test_clear_buffer_jbddirty(bh))
+	if (test_clear_buffer_jbddirty(bh))
 		mark_buffer_dirty(bh);	/* Expose it to the VM */
 }
 
@@ -1917,7 +1936,6 @@ static int journal_unmap_buffer(journal_t *journal, struct buffer_head *bh,
 
 		if (!buffer_dirty(bh)) {
 			/* bdflush has written it.  We can drop it now */
-			__jbd2_journal_remove_checkpoint(jh);
 			goto zap_buffer;
 		}
 
@@ -1947,7 +1965,6 @@ static int journal_unmap_buffer(journal_t *journal, struct buffer_head *bh,
 				/* The orphan record's transaction has
 				 * committed.  We can cleanse this buffer */
 				clear_buffer_jbddirty(bh);
-				__jbd2_journal_remove_checkpoint(jh);
 				goto zap_buffer;
 			}
 		}
