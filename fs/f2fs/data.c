@@ -152,7 +152,6 @@ static void f2fs_write_end_io(struct bio *bio, int err)
 
 	bio_for_each_segment_all(bvec, bio, i) {
 		struct page *page = bvec->bv_page;
-		enum count_type type = WB_DATA_TYPE(page);
 
 		if (IS_DUMMY_WRITTEN_PAGE(page)) {
 			set_page_private(page, (unsigned long)NULL);
@@ -169,14 +168,14 @@ static void f2fs_write_end_io(struct bio *bio, int err)
 
 		if (unlikely(err)) {
 			set_bit(AS_EIO, &page->mapping->flags);
-			if (type == F2FS_WB_CP_DATA)
+			if (WB_DATA_TYPE(page) == F2FS_WB_CP_DATA)
 				f2fs_stop_checkpoint(sbi, true);
 		}
 
 		f2fs_bug_on(sbi, page->mapping == NODE_MAPPING(sbi) &&
 					page->index != nid_of_node(page));
 
-		dec_page_count(sbi, type);
+		dec_page_count(sbi, WB_DATA_TYPE(page));
 		clear_cold_data(page);
 		end_page_writeback(page);
 	}
