@@ -47,7 +47,7 @@ then
 	cp out/drivers/media/platform/msm/broadcast/tspp.ko ../final_files/modules/
 
 	# Sony Mobile FIPS AES-XTS/AES-CBC Driver
-	#cp out/drivers/crypto/kscl.ko ../final_files/modules/
+	cp out/drivers/crypto/kscl.ko ../final_files/modules/
 	# eCrypt filesystem
 	cp out/fs/ecryptfs/ecryptfs.ko ../final_files/modules/
 
