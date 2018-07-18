@@ -418,7 +418,9 @@ int virtballoon_migratepage(struct address_space *mapping,
 	 * It's safe to delete page->lru here because this page is at
 	 * an isolated migration list, and this step is expected to happen here
 	 */
+	spin_lock_irqsave(&vb_dev_info->pages_lock, flags);
 	balloon_page_delete(page);
+	spin_unlock_irqrestore(&vb_dev_info->pages_lock, flags);
 	vb->num_pfns = VIRTIO_BALLOON_PAGES_PER_PAGE;
 	set_page_pfns(vb->pfns, page);
 	tell_host(vb, vb->deflate_vq);
