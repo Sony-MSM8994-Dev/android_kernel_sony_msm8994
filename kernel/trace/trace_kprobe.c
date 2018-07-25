@@ -196,11 +196,10 @@ static struct trace_probe *find_trace_probe(const char *event,
 static int
 enable_trace_probe(struct trace_probe *tp, struct ftrace_event_file *file)
 {
+	struct event_file_link *link;
 	int ret = 0;
 
 	if (file) {
-		struct event_file_link *link;
-
 		link = kmalloc(sizeof(*link), GFP_KERNEL);
 		if (!link) {
 			ret = -ENOMEM;
@@ -219,6 +218,16 @@ enable_trace_probe(struct trace_probe *tp, struct ftrace_event_file *file)
 			ret = enable_kretprobe(&tp->rp);
 		else
 			ret = enable_kprobe(&tp->rp.kp);
+	}
+
+	if (ret) {
+		if (file) {
+			list_del_rcu(&link->list);
+			kfree(link);
+			tp->flags &= ~TP_FLAG_TRACE;
+		} else {
+			tp->flags &= ~TP_FLAG_PROFILE;
+		}
 	}
  out:
 	return ret;
