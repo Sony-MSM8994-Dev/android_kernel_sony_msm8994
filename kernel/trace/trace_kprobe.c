@@ -196,7 +196,7 @@ static struct trace_probe *find_trace_probe(const char *event,
 static int
 enable_trace_probe(struct trace_probe *tp, struct ftrace_event_file *file)
 {
-	struct event_file_link *link;
+	struct event_file_link *link = NULL;
 	int ret = 0;
 
 	if (file) {
@@ -222,7 +222,9 @@ enable_trace_probe(struct trace_probe *tp, struct ftrace_event_file *file)
 
 	if (ret) {
 		if (file) {
-			list_del_rcu(&link->list);
+			/* Notice the if is true on not WARN() */
+			if (!WARN_ON_ONCE(!link))
+				list_del_rcu(&link->list);
 			kfree(link);
 			tp->flags &= ~TP_FLAG_TRACE;
 		} else {
