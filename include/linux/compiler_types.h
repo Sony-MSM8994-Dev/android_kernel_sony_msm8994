@@ -54,28 +54,24 @@ extern void __chk_io_ptr(const volatile void __iomem *);
 
 #ifdef __KERNEL__
 
-#ifdef __GNUC__
-#include <linux/compiler-gcc.h>
-#endif
-
-#define notrace __attribute__((no_instrument_function))
-
-/* Intel compiler defines __GNUC__. So we will overwrite implementations
- * coming from above header files here
+/*
+ * Compiler specific macros.
  */
-#ifdef __INTEL_COMPILER
-# include <linux/compiler-intel.h>
-#endif
-
-/* Clang compiler defines __GNUC__. So we will overwrite implementations
- * coming from above header files here
- */
+/* Clang compiler defines __GNUC__. */
 #ifdef __clang__
 #include <linux/compiler-clang.h>
+/* Intel compiler defines __GNUC__. */
+#elif defined(__INTEL_COMPILER)
+#include <linux/compiler-intel.h>
+/* The above compilers also define __GNUC__, so order is important here. */
+#elif defined(__GNUC__)
+#include <linux/compiler-gcc.h>
+#else
+#error "Unknown compiler"
 #endif
 
 /*
- * Generic compiler-dependent macros required for kernel
+ * Generic compiler-independent macros required for kernel
  * build go below this comment. Actual compiler/compiler version
  * specific implementations come from the above header files
  */
@@ -102,117 +98,25 @@ struct ftrace_likely_data {
 	unsigned long			constant;
 };
 
-#endif /* __KERNEL__ */
-
-#endif /* __ASSEMBLY__ */
-
-#ifdef __KERNEL__
-
 /* Don't. Just don't. */
 #define __deprecated
 #define __deprecated_for_modules
 
-#ifndef __must_check
-#define __must_check
-#endif
-
-#ifndef CONFIG_ENABLE_MUST_CHECK
-#undef __must_check
-#define __must_check
-#endif
-
-#ifndef __malloc
-#define __malloc
-#endif
-
-/*
- * Allow us to avoid 'defined but not used' warnings on functions and data,
- * as well as force them to be emitted to the assembly file.
- *
- * As of gcc 3.4, static functions that are not marked with attribute((used))
- * may be elided from the assembly file.  As of gcc 3.4, static data not so
- * marked will not be elided, but this may change in a future gcc version.
- *
- * NOTE: Because distributions shipped with a backported unit-at-a-time
- * compiler in gcc 3.3, we must define __used to be __attribute__((used))
- * for gcc >=3.3 instead of 3.4.
- *
- * In prior versions of gcc, such functions and data would be emitted, but
- * would be warned about except with attribute((unused)).
- *
- * Mark functions that are referenced only in inline assembly as __used so
- * the code is emitted even though it appears to be unreferenced.
- */
-#ifndef __used
-# define __used			/* unimplemented */
-#endif
-
-#ifndef __maybe_unused
-# define __maybe_unused		/* unimplemented */
-#endif
-
-#ifndef __always_unused
-# define __always_unused	/* unimplemented */
-#endif
-
-#ifndef noinline
-#define noinline
-#endif
-
-/*
- * Rather then using noinline to prevent stack consumption, use
- * noinline_for_stack instead.  For documentation reasons.
- */
-#define noinline_for_stack noinline
-
-#ifndef __always_inline
-#define __always_inline inline
-#endif
-
 #endif /* __KERNEL__ */
 
-/*
- * From the GCC manual:
- *
- * Many functions do not examine any values except their arguments,
- * and have no effects except the return value.  Basically this is
- * just slightly more strict class than the `pure' attribute above,
- * since function is not allowed to read global memory.
- *
- * Note that a function that has pointer arguments and examines the
- * data pointed to must _not_ be declared `const'.  Likewise, a
- * function that calls a non-`const' function usually must not be
- * `const'.  It does not make sense for a `const' function to return
- * `void'.
- */
-#ifndef __attribute_const__
-# define __attribute_const__	/* unimplemented */
-#endif
+#endif /* __ASSEMBLY__ */
 
+/*
+ * The below symbols may be defined for one or more, but not ALL, of the above
+ * compilers. We don't consider that to be an error, so set them to nothing.
+ * For example, some of them are for compiler specific plugins.
+ */
 #ifndef __designated_init
 # define __designated_init
 #endif
 
-/*
- * Tell gcc if a function is cold. The compiler will assume any path
- * directly leading to the call is unlikely.
- */
-
-#ifndef __cold
-#define __cold
-#endif
-
-/* Simple shorthand for a section definition */
-#ifndef __section
-# define __section(S) __attribute__ ((__section__(#S)))
-#endif
-
 #ifndef __visible
 #define __visible
-#endif
-
-#ifndef __nostackprotector
-# define __nostackprotector
 #endif
 
 /*
@@ -222,15 +126,87 @@ struct ftrace_likely_data {
 #define __assume_aligned(a, ...)
 #endif
 
-
 /* Are two types/vars the same type (ignoring qualifiers)? */
-#ifndef __same_type
-# define __same_type(a, b) __builtin_types_compatible_p(typeof(a), typeof(b))
-#endif
+#define __same_type(a, b) __builtin_types_compatible_p(typeof(a), typeof(b))
 
 /* Is this type a native word size -- useful for atomic operations */
-#ifndef __native_word
-# define __native_word(t) (sizeof(t) == sizeof(char) || sizeof(t) == sizeof(short) || sizeof(t) == sizeof(int) || sizeof(t) == sizeof(long))
+#define __native_word(t) \
+	(sizeof(t) == sizeof(char) || sizeof(t) == sizeof(short) || \
+	 sizeof(t) == sizeof(int) || sizeof(t) == sizeof(long))
+
+#ifndef __attribute_const__
+#define __attribute_const__	__attribute__((__const__))
 #endif
+
+#ifndef __noclone
+#define __noclone
+#endif
+
+/*
+ * From the GCC manual:
+ *
+ * Many functions have no effects except the return value and their
+ * return value depends only on the parameters and/or global
+ * variables.  Such a function can be subject to common subexpression
+ * elimination and loop optimization just as an arithmetic operator
+ * would be.
+ * [...]
+ */
+#define __pure			__attribute__((pure))
+#define __aligned(x)		__attribute__((aligned(x)))
+#define __printf(a, b)		__attribute__((format(printf, a, b)))
+#define __scanf(a, b)		__attribute__((format(scanf, a, b)))
+#define __maybe_unused		__attribute__((unused))
+#define __always_unused		__attribute__((unused))
+#define __mode(x)		__attribute__((mode(x)))
+#define __malloc		__attribute__((__malloc__))
+#define __used			__attribute__((__used__))
+#define __noreturn		__attribute__((noreturn))
+#define __packed		__attribute__((packed))
+#define __weak			__attribute__((weak))
+#define __alias(symbol)		__attribute__((alias(#symbol)))
+#define __cold			__attribute__((cold))
+#define __section(S)		__attribute__((__section__(#S)))
+
+#ifdef CONFIG_ENABLE_MUST_CHECK
+#define __must_check		__attribute__((warn_unused_result))
+#else
+#define __must_check
+#endif
+
+#define notrace			__attribute__((no_instrument_function))
+
+#define __compiler_offsetof(a, b)	__builtin_offsetof(a, b)
+
+/*
+ * Force always-inline if the user requests it so via the .config.
+ * GCC does not warn about unused static inline functions for
+ * -Wunused-function.  This turns out to avoid the need for complex #ifdef
+ * directives.  Suppress the warning in clang as well by using "unused"
+ * function attribute, which is redundant but not harmful for gcc.
+ */
+#if !defined(CONFIG_ARCH_SUPPORTS_OPTIMIZED_INLINING) || \
+	!defined(CONFIG_OPTIMIZE_INLINING)
+#define inline inline		__attribute__((always_inline,unused)) notrace
+#define __inline__ __inline__	__attribute__((always_inline,unused)) notrace
+#define __inline __inline	__attribute__((always_inline,unused)) notrace
+#else
+/* A lot of inline functions can cause havoc with function tracing */
+#define inline inline		__attribute__((unused)) notrace
+#define __inline__ __inline__	__attribute__((unused)) notrace
+#define __inline __inline	__attribute__((unused)) notrace
+#endif
+
+#define noinline	__attribute__((noinline))
+
+#ifndef __always_inline
+#define __always_inline inline __attribute__((always_inline))
+#endif
+
+/*
+ * Rather then using noinline to prevent stack consumption, use
+ * noinline_for_stack instead.  For documentation reasons.
+ */
+#define noinline_for_stack noinline
 
 #endif /* __LINUX_COMPILER_TYPES_H */
