@@ -223,7 +223,7 @@ void kzfree(const void *p)
 }
 EXPORT_SYMBOL(kzfree);
 
-/*
+/**
  * strndup_user - duplicate an existing string from user space
  * @s: The string to duplicate
  * @n: Maximum number of bytes to copy, including the trailing NUL.
