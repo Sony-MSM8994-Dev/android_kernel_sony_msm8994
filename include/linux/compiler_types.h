@@ -55,6 +55,9 @@ extern void __chk_io_ptr(const volatile void __iomem *);
 
 #ifdef __KERNEL__
 
+/* Attributes */
+#include <linux/compiler_attributes.h>
+
 /*
  * Compiler specific macros.
  */
@@ -70,12 +73,6 @@ extern void __chk_io_ptr(const volatile void __iomem *);
 #else
 #error "Unknown compiler"
 #endif
-
-/*
- * Generic compiler-independent macros required for kernel
- * build go below this comment. Actual compiler/compiler version
- * specific implementations come from the above header files
- */
 
 struct ftrace_branch_data {
 	const char *func;
@@ -99,9 +96,6 @@ struct ftrace_likely_data {
 	unsigned long			constant;
 };
 
-/* Don't. Just don't. */
-#define __deprecated
-
 #endif /* __KERNEL__ */
 
 #endif /* __ASSEMBLY__ */
@@ -111,20 +105,6 @@ struct ftrace_likely_data {
  * compilers. We don't consider that to be an error, so set them to nothing.
  * For example, some of them are for compiler specific plugins.
  */
-#ifndef __designated_init
-# define __designated_init
-#endif
-
-#ifndef __visible
-#define __visible
-#endif
-
-/*
- * Assume alignment of return value.
- */
-#ifndef __assume_aligned
-#define __assume_aligned(a, ...)
-#endif
 
 /* Are two types/vars the same type (ignoring qualifiers)? */
 #define __same_type(a, b) __builtin_types_compatible_p(typeof(a), typeof(b))
@@ -133,40 +113,6 @@ struct ftrace_likely_data {
 #define __native_word(t) \
 	(sizeof(t) == sizeof(char) || sizeof(t) == sizeof(short) || \
 	 sizeof(t) == sizeof(int) || sizeof(t) == sizeof(long))
-
-#ifndef __attribute_const__
-#define __attribute_const__	__attribute__((__const__))
-#endif
-
-#ifndef __noclone
-#define __noclone
-#endif
-
-/*
- * From the GCC manual:
- *
- * Many functions have no effects except the return value and their
- * return value depends only on the parameters and/or global
- * variables.  Such a function can be subject to common subexpression
- * elimination and loop optimization just as an arithmetic operator
- * would be.
- * [...]
- */
-#define __pure			__attribute__((__pure__))
-#define __aligned(x)		__attribute__((__aligned__(x)))
-#define __printf(a, b)		__attribute__((__format__(printf, a, b)))
-#define __scanf(a, b)		__attribute__((__format__(scanf, a, b)))
-#define __maybe_unused		__attribute__((__unused__))
-#define __always_unused		__attribute__((__unused__))
-#define __mode(x)		__attribute__((__mode__(x)))
-#define __malloc		__attribute__((__malloc__))
-#define __used			__attribute__((__used__))
-#define __noreturn		__attribute__((__noreturn__))
-#define __packed		__attribute__((__packed__))
-#define __weak			__attribute__((__weak__))
-#define __alias(symbol)		__attribute__((__alias__(#symbol)))
-#define __cold			__attribute__((__cold__))
-#define __section(S)		__attribute__((__section__(#S)))
 
 #ifdef CONFIG_ENABLE_MUST_CHECK
 #define __must_check		__attribute__((__warn_unused_result__))
@@ -209,12 +155,6 @@ struct ftrace_likely_data {
 #define inline inline		__attribute__((__unused__)) notrace
 #define __inline__ __inline__	__attribute__((__unused__)) notrace
 #define __inline __inline	__attribute__((__unused__)) notrace
-#endif
-
-#define noinline	__attribute__((__noinline__))
-
-#ifndef __always_inline
-#define __always_inline inline __attribute__((__always_inline__))
 #endif
 
 /*
