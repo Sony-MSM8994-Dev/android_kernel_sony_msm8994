@@ -95,22 +95,8 @@ static struct dentry *binder_debugfs_dir_entry_proc;
 static atomic_t binder_last_id;
 static struct workqueue_struct *binder_deferred_workqueue;
 
-#define BINDER_DEBUG_ENTRY(name) \
-static int binder_##name##_open(struct inode *inode, struct file *file) \
-{ \
-	return single_open(file, binder_##name##_show, inode->i_private); \
-} \
-\
-static const struct file_operations binder_##name##_fops = { \
-	.owner = THIS_MODULE, \
-	.open = binder_##name##_open, \
-	.read = seq_read, \
-	.llseek = seq_lseek, \
-	.release = single_release, \
-}
-
-static int binder_proc_show(struct seq_file *m, void *unused);
-BINDER_DEBUG_ENTRY(proc);
+static int proc_show(struct seq_file *m, void *unused);
+DEFINE_SHOW_ATTRIBUTE(proc);
 
 /* This is only defined in include/asm-arm/sizes.h */
 #ifndef SZ_1K
@@ -4150,79 +4136,6 @@ static int binder_wait_for_work(struct binder_thread *thread,
 	return ret;
 }
 
-<<<<<<< HEAD
-=======
-/**
- * binder_apply_fd_fixups() - finish fd translation
- * @t:	binder transaction with list of fd fixups
- *
- * Now that we are in the context of the transaction target
- * process, we can allocate and install fds. Process the
- * list of fds to translate and fixup the buffer with the
- * new fds.
- *
- * If we fail to allocate an fd, then free the resources by
- * fput'ing files that have not been processed and ksys_close'ing
- * any fds that have already been allocated.
- */
-static int binder_apply_fd_fixups(struct binder_transaction *t)
-{
-	struct binder_txn_fd_fixup *fixup, *tmp;
-	int ret = 0;
-
-	list_for_each_entry(fixup, &t->fd_fixups, fixup_entry) {
-		int fd = get_unused_fd_flags(O_CLOEXEC);
-		u32 *fdp;
-
-		if (fd < 0) {
-			binder_debug(BINDER_DEBUG_TRANSACTION,
-				     "failed fd fixup txn %d fd %d\n",
-				     t->debug_id, fd);
-			ret = -ENOMEM;
-			break;
-		}
-		binder_debug(BINDER_DEBUG_TRANSACTION,
-			     "fd fixup txn %d fd %d\n",
-			     t->debug_id, fd);
-		trace_binder_transaction_fd_recv(t, fd, fixup->offset);
-		fd_install(fd, fixup->file);
-		fixup->file = NULL;
-		fdp = (u32 *)(t->buffer->data + fixup->offset);
-		/*
-		 * This store can cause problems for CPUs with a
-		 * VIVT cache (eg ARMv5) since the cache cannot
-		 * detect virtual aliases to the same physical cacheline.
-		 * To support VIVT, this address and the user-space VA
-		 * would both need to be flushed. Since this kernel
-		 * VA is not constructed via page_to_virt(), we can't
-		 * use flush_dcache_page() on it, so we'd have to use
-		 * an internal function. If devices with VIVT ever
-		 * need to run Android, we'll either need to go back
-		 * to patching the translated fd from the sender side
-		 * (using the non-standard kernel functions), or rework
-		 * how the kernel uses the buffer to use page_to_virt()
-		 * addresses instead of allocating in our own vm area.
-		 *
-		 * For now, we disable compilation if CONFIG_CPU_CACHE_VIVT.
-		 */
-		*fdp = fd;
-	}
-	list_for_each_entry_safe(fixup, tmp, &t->fd_fixups, fixup_entry) {
-		if (fixup->file) {
-			fput(fixup->file);
-		} else if (ret) {
-			u32 *fdp = (u32 *)(t->buffer->data + fixup->offset);
-
-			binder_deferred_fd_close(*fdp);
-		}
-		list_del(&fixup->fixup_entry);
-		kfree(fixup);
-	}
-
-	return ret;
-}
-
->>>>>>> 80cd795630d6 (binder: fix use-after-free due to ksys_close() during fdget())
 static int binder_thread_read(struct binder_proc *proc,
 			      struct binder_thread *thread,
 			      binder_uintptr_t binder_buffer, size_t size,
@@ -5485,7 +5398,7 @@ static int binder_open(struct inode *nodp, struct file *filp)
 		proc->debugfs_entry = debugfs_create_file(strbuf, 0444,
 			binder_debugfs_dir_entry_proc,
 			(void *)(unsigned long)proc->pid,
-			&binder_proc_fops);
+			&proc_fops);
 	}
 
 	if (binder_binderfs_dir_entry_proc) {
@@ -6240,7 +6153,7 @@ int binder_transactions_show(struct seq_file *m, void *unused)
 	return 0;
 }
 
-static int binder_proc_show(struct seq_file *m, void *unused)
+static int proc_show(struct seq_file *m, void *unused)
 {
 	struct binder_proc *itr;
 	int pid = (unsigned long)m->private;
@@ -6367,27 +6280,27 @@ static int __init binder_init(void)
 				    0444,
 				    binder_debugfs_dir_entry_root,
 				    NULL,
-				    &binder_state_fops);
+				    &state_fops);
 		debugfs_create_file("stats",
 				    0444,
 				    binder_debugfs_dir_entry_root,
 				    NULL,
-				    &binder_stats_fops);
+				    &stats_fops);
 		debugfs_create_file("transactions",
 				    0444,
 				    binder_debugfs_dir_entry_root,
 				    NULL,
-				    &binder_transactions_fops);
+				    &transactions_fops);
 		debugfs_create_file("transaction_log",
 				    0444,
 				    binder_debugfs_dir_entry_root,
 				    &binder_transaction_log,
-				    &binder_transaction_log_fops);
+				    &transaction_log_fops);
 		debugfs_create_file("failed_transaction_log",
 				    0444,
 				    binder_debugfs_dir_entry_root,
 				    &binder_transaction_log_failed,
-				    &binder_transaction_log_fops);
+				    &transaction_log_fops);
 	}
 
 	/*
