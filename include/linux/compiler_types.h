@@ -96,27 +96,6 @@ struct ftrace_likely_data {
 	unsigned long			constant;
 };
 
-#endif /* __KERNEL__ */
-
-#endif /* __ASSEMBLY__ */
-
-/*
- * The below symbols may be defined for one or more, but not ALL, of the above
- * compilers. We don't consider that to be an error, so set them to nothing.
- * For example, some of them are for compiler specific plugins.
- */
-#ifndef asm_volatile_goto
-#define asm_volatile_goto(x...) asm goto(x)
-#endif
-
-/* Are two types/vars the same type (ignoring qualifiers)? */
-#define __same_type(a, b) __builtin_types_compatible_p(typeof(a), typeof(b))
-
-/* Is this type a native word size -- useful for atomic operations */
-#define __native_word(t) \
-	(sizeof(t) == sizeof(char) || sizeof(t) == sizeof(short) || \
-	 sizeof(t) == sizeof(int) || sizeof(t) == sizeof(long))
-
 #ifdef CONFIG_ENABLE_MUST_CHECK
 #define __must_check		__attribute__((__warn_unused_result__))
 #else
@@ -165,5 +144,26 @@ struct ftrace_likely_data {
  * noinline_for_stack instead.  For documentation reasons.
  */
 #define noinline_for_stack noinline
+
+#endif /* __KERNEL__ */
+
+#endif /* __ASSEMBLY__ */
+
+/*
+ * The below symbols may be defined for one or more, but not ALL, of the above
+ * compilers. We don't consider that to be an error, so set them to nothing.
+ * For example, some of them are for compiler specific plugins.
+ */
+#ifndef asm_volatile_goto
+#define asm_volatile_goto(x...) asm goto(x)
+#endif
+
+/* Are two types/vars the same type (ignoring qualifiers)? */
+#define __same_type(a, b) __builtin_types_compatible_p(typeof(a), typeof(b))
+
+/* Is this type a native word size -- useful for atomic operations */
+#define __native_word(t) \
+	(sizeof(t) == sizeof(char) || sizeof(t) == sizeof(short) || \
+	 sizeof(t) == sizeof(int) || sizeof(t) == sizeof(long))
 
 #endif /* __LINUX_COMPILER_TYPES_H */
