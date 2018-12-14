@@ -73,6 +73,7 @@
 #include <linux/security.h>
 #include <linux/spinlock.h>
 #include <linux/ratelimit.h>
+#include <linux/task_work.h>
 
 #include "binder.h"
 #include "binder_alloc.h"
@@ -2333,6 +2334,64 @@ static bool binder_validate_fixup(struct binder_buffer *b,
 	return (fixup_offset >= last_min_offset);
 }
 
+/**
+ * struct binder_task_work_cb - for deferred close
+ *
+ * @twork:                callback_head for task work
+ * @fd:                   fd to close
+ *
+ * Structure to pass task work to be handled after
+ * returning from binder_ioctl() via task_work_add().
+ */
+struct binder_task_work_cb {
+	struct callback_head twork;
+	struct file *file;
+};
+
+/**
+ * binder_do_fd_close() - close list of file descriptors
+ * @twork:	callback head for task work
+ *
+ * It is not safe to call ksys_close() during the binder_ioctl()
+ * function if there is a chance that binder's own file descriptor
+ * might be closed. This is to meet the requirements for using
+ * fdget() (see comments for __fget_light()). Therefore use
+ * task_work_add() to schedule the close operation once we have
+ * returned from binder_ioctl(). This function is a callback
+ * for that mechanism and does the actual ksys_close() on the
+ * given file descriptor.
+ */
+static void binder_do_fd_close(struct callback_head *twork)
+{
+	struct binder_task_work_cb *twcb = container_of(twork,
+			struct binder_task_work_cb, twork);
+
+	fput(twcb->file);
+	kfree(twcb);
+}
+
+/**
+ * binder_deferred_fd_close() - schedule a close for the given file-descriptor
+ * @fd:		file-descriptor to close
+ *
+ * See comments in binder_do_fd_close(). This function is used to schedule
+ * a file-descriptor to be closed after returning from binder_ioctl().
+ */
+static void binder_deferred_fd_close(int fd)
+{
+	struct binder_task_work_cb *twcb;
+
+	twcb = kzalloc(sizeof(*twcb), GFP_KERNEL);
+	if (!twcb)
+		return;
+	init_task_work(&twcb->twork, binder_do_fd_close);
+	__close_fd_get_file(fd, &twcb->file);
+	if (twcb->file)
+		task_work_add(current, &twcb->twork, true);
+	else
+		kfree(twcb);
+}
+
 static void binder_transaction_buffer_release(struct binder_proc *proc,
 					      struct binder_buffer *buffer,
 					      binder_size_t *failed_at)
@@ -2459,7 +2518,7 @@ static void binder_transaction_buffer_release(struct binder_proc *proc,
 			fd_array = (u32 *)(uintptr_t)
 				(parent_buffer + fda->parent_offset);
 			for (fd_index = 0; fd_index < fda->num_fds; fd_index++)
-				task_close_fd(proc, fd_array[fd_index]);
+				binder_deferred_fd_close(fd_array[fd_index]);
 		} break;
 		default:
 			pr_err("transaction release %d bad object type %x\n",
@@ -4089,6 +4148,79 @@ static int binder_wait_for_work(struct binder_thread *thread,
 	return ret;
 }
 
+<<<<<<< HEAD
+=======
+/**
+ * binder_apply_fd_fixups() - finish fd translation
+ * @t:	binder transaction with list of fd fixups
+ *
+ * Now that we are in the context of the transaction target
+ * process, we can allocate and install fds. Process the
+ * list of fds to translate and fixup the buffer with the
+ * new fds.
+ *
+ * If we fail to allocate an fd, then free the resources by
+ * fput'ing files that have not been processed and ksys_close'ing
+ * any fds that have already been allocated.
+ */
+static int binder_apply_fd_fixups(struct binder_transaction *t)
+{
+	struct binder_txn_fd_fixup *fixup, *tmp;
+	int ret = 0;
+
+	list_for_each_entry(fixup, &t->fd_fixups, fixup_entry) {
+		int fd = get_unused_fd_flags(O_CLOEXEC);
+		u32 *fdp;
+
+		if (fd < 0) {
+			binder_debug(BINDER_DEBUG_TRANSACTION,
+				     "failed fd fixup txn %d fd %d\n",
+				     t->debug_id, fd);
+			ret = -ENOMEM;
+			break;
+		}
+		binder_debug(BINDER_DEBUG_TRANSACTION,
+			     "fd fixup txn %d fd %d\n",
+			     t->debug_id, fd);
+		trace_binder_transaction_fd_recv(t, fd, fixup->offset);
+		fd_install(fd, fixup->file);
+		fixup->file = NULL;
+		fdp = (u32 *)(t->buffer->data + fixup->offset);
+		/*
+		 * This store can cause problems for CPUs with a
+		 * VIVT cache (eg ARMv5) since the cache cannot
+		 * detect virtual aliases to the same physical cacheline.
+		 * To support VIVT, this address and the user-space VA
+		 * would both need to be flushed. Since this kernel
+		 * VA is not constructed via page_to_virt(), we can't
+		 * use flush_dcache_page() on it, so we'd have to use
+		 * an internal function. If devices with VIVT ever
+		 * need to run Android, we'll either need to go back
+		 * to patching the translated fd from the sender side
+		 * (using the non-standard kernel functions), or rework
+		 * how the kernel uses the buffer to use page_to_virt()
+		 * addresses instead of allocating in our own vm area.
+		 *
+		 * For now, we disable compilation if CONFIG_CPU_CACHE_VIVT.
+		 */
+		*fdp = fd;
+	}
+	list_for_each_entry_safe(fixup, tmp, &t->fd_fixups, fixup_entry) {
+		if (fixup->file) {
+			fput(fixup->file);
+		} else if (ret) {
+			u32 *fdp = (u32 *)(t->buffer->data + fixup->offset);
+
+			binder_deferred_fd_close(*fdp);
+		}
+		list_del(&fixup->fixup_entry);
+		kfree(fixup);
+	}
+
+	return ret;
+}
+
+>>>>>>> 80cd795630d6 (binder: fix use-after-free due to ksys_close() during fdget())
 static int binder_thread_read(struct binder_proc *proc,
 			      struct binder_thread *thread,
 			      binder_uintptr_t binder_buffer, size_t size,
