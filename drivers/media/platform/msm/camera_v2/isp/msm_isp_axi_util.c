@@ -1214,12 +1214,11 @@ static void msm_isp_get_done_buf(struct vfe_device *vfe_dev,
 				vfe_dev->axi_data.stream_info[i].state =
 					INACTIVE;
 
-				error_event.frame_id =
-					vfe_dev->axi_data.src_info[VFE_PIX_0].
-						frame_id;
+			error_event.frame_id =
+				vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id;
 
-				msm_isp_send_event(vfe_dev,
-					ISP_EVENT_IOMMU_P_FAULT, &error_event);
+			msm_isp_send_event(vfe_dev,
+				ISP_EVENT_IOMMU_P_FAULT, &error_event);
 
 			}
 		stream_info->sw_ping_pong_bit ^= 1;
