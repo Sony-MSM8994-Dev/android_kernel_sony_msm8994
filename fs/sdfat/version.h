@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2012-2013 Samsung Electronics Co., Ltd.
+ *  Copyright (C) 2012-2018 Samsung Electronics Co., Ltd.
  *
  *  This program is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU General Public License
@@ -22,4 +22,5 @@
 /*  PURPOSE : sdFAT File Manager                                        */
 /*                                                                      */
 /************************************************************************/
-#define SDFAT_VERSION	"2.0.8"
+
+#define SDFAT_VERSION	"2.1.8"
