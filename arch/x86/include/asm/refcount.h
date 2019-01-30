@@ -67,14 +67,40 @@ static __always_inline void refcount_dec(refcount_t *r)
 static __always_inline __must_check
 bool refcount_sub_and_test(unsigned int i, refcount_t *r)
 {
+<<<<<<< HEAD
 	GEN_BINARY_SUFFIXED_RMWcc(LOCK_PREFIX "subl", REFCOUNT_CHECK_LT_ZERO,
 				  r->refs.counter, "er", i, "%0", e, "cx");
+=======
+	bool ret = GEN_BINARY_SUFFIXED_RMWcc(LOCK_PREFIX "subl",
+					 REFCOUNT_CHECK_LT_ZERO,
+					 r->refs.counter, e, "er", i, "cx");
+
+	if (ret) {
+		smp_acquire__after_ctrl_dep();
+		return true;
+	}
+
+	return false;
+>>>>>>> 47b8f3ab9c49 (refcount_t: Add ACQUIRE ordering on success for dec(sub)_and_test() variants)
 }
 
 static __always_inline __must_check bool refcount_dec_and_test(refcount_t *r)
 {
+<<<<<<< HEAD
 	GEN_UNARY_SUFFIXED_RMWcc(LOCK_PREFIX "decl", REFCOUNT_CHECK_LT_ZERO,
 				 r->refs.counter, "%0", e, "cx");
+=======
+	bool ret = GEN_UNARY_SUFFIXED_RMWcc(LOCK_PREFIX "decl",
+					 REFCOUNT_CHECK_LT_ZERO,
+					 r->refs.counter, e, "cx");
+
+	if (ret) {
+		smp_acquire__after_ctrl_dep();
+		return true;
+	}
+
+	return false;
+>>>>>>> 47b8f3ab9c49 (refcount_t: Add ACQUIRE ordering on success for dec(sub)_and_test() variants)
 }
 
 static __always_inline __must_check
