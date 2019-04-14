@@ -2727,7 +2727,7 @@ static int s_show(struct seq_file *m, void *p)
 		seq_printf(m, " vpages");
 
 	if (v->flags & VM_LOWMEM)
-		seq_printf(m, " lowmem");
+		seq_puts(m, " lowmem");
 
 	show_numa_info(m, v);
 	seq_putc(m, '\n');
