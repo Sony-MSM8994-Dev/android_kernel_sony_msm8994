@@ -409,13 +409,13 @@ bool oom_killer_disabled __read_mostly;
 static DECLARE_RWSEM(oom_sem);
 
 /**
- * mark_oom_victim - mark the given task as OOM victim
+ * mark_tsk_oom_victim - marks the given taks as OOM victim.
  * @tsk: task to mark
  *
  * Has to be called with oom_sem taken for read and never after
  * oom has been disabled already.
  */
-void mark_oom_victim(struct task_struct *tsk)
+void mark_tsk_oom_victim(struct task_struct *tsk)
 {
 	WARN_ON(oom_killer_disabled);
 	/* OOM killer might race with memcg OOM */
@@ -432,9 +432,11 @@ void mark_oom_victim(struct task_struct *tsk)
 }
 
 /**
- * exit_oom_victim - note the exit of an OOM victim
+ * unmark_oom_victim - unmarks the current task as OOM victim.
+ *
+ * Wakes up all waiters in oom_killer_disable()
  */
-void exit_oom_victim(void)
+void unmark_oom_victim(void)
 {
 	if (!test_and_clear_thread_flag(TIF_MEMDIE))
 		return;
@@ -515,7 +517,7 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 	 */
 	task_lock(p);
 	if (p->mm && task_will_free_mem(p)) {
-		mark_oom_victim(p);
+		mark_tsk_oom_victim(p);
 		task_unlock(p);
 		put_task_struct(p);
 		return;
@@ -571,7 +573,7 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 	/* mm cannot safely be dereferenced after task_unlock(victim) */
 	mm = victim->mm;
 	victim_rss = get_mm_rss(victim->mm);
-	mark_oom_victim(victim);
+	mark_tsk_oom_victim(victim);
 	pr_err("Killed process %d (%s) total-vm:%lukB, anon-rss:%lukB, file-rss:%lukB\n",
 		task_pid_nr(victim), victim->comm, K(victim->mm->total_vm),
 		K(get_mm_counter(victim->mm, MM_ANONPAGES)),
@@ -602,15 +604,12 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 		}
 	rcu_read_unlock();
 
-<<<<<<< HEAD
 	trace_oom_sigkill(victim->pid,  victim->comm,
 			  victim_points,
 			  victim_rss,
 			  gfp_mask);
 
-=======
 	do_send_sig_info(SIGKILL, SEND_SIG_FORCED, victim, true);
->>>>>>> 220fd310143e... Revert "mm/oom_kill.c: reverse the order of setting TIF_MEMDIE and sending SIGKILL"
 	put_task_struct(victim);
 }
 #undef K
@@ -736,7 +735,7 @@ static void __out_of_memory(struct zonelist *zonelist, gfp_t gfp_mask,
 	 */
 	if (current->mm &&
 	    (fatal_signal_pending(current) || task_will_free_mem(current))) {
-		mark_oom_victim(current);
+		mark_tsk_oom_victim(current);
 		return;
 	}
 
