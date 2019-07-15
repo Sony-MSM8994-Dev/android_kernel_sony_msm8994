@@ -1,6 +1,6 @@
 config SDFAT_FS
 	tristate "sdFAT filesystem support"
-	default y
+	default n
 	select NLS
 	select NLS_UTF8
 	select NLS_CODEPAGE_437
@@ -108,26 +108,26 @@ config SDFAT_STATISTICS
 	default y
 
 config SDFAT_DFR
-	bool "enable sdfat defragger"
+	bool "Enable sdfat defragger"
 	depends on SDFAT_FS
 	default n
 
 config SDFAT_DELAY_ALLOC
-	bool "always enable delay allocation improvement"
+	bool "Always enable delay allocation improvement"
 	depends on SDFAT_FS
 	default n
 
 config SDFAT_SMART_ALLOC
-	bool "always enable smart allocation improvement"
+	bool "Always enable smart allocation improvement"
 	depends on SDFAT_FS
 	default n
 
 config SDFAT_EXFAT_WRAPPER
-	bool "enable wrapper for exfat"
+	bool "Enable wrapper for exfat"
 	depends on SDFAT_FS
 	default n
 
 config SDFAT_TEXFAT_WRAPPER
-	bool "enable wrapper for texfat"
+	bool "Enable wrapper for texfat"
 	depends on SDFAT_FS
 	default n
