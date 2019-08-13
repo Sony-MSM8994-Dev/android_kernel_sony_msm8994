@@ -626,8 +626,13 @@ out:
  */
 static void z3fold_destroy_pool(struct z3fold_pool *pool)
 {
-	destroy_workqueue(pool->release_wq);
+	/*
+	 * We need to destroy pool->compact_wq before pool->release_wq,
+	 * as any pending work on pool->compact_wq will call
+	 * queue_work(pool->release_wq, &pool->work).
+	 */
 	destroy_workqueue(pool->compact_wq);
+	destroy_workqueue(pool->release_wq);
 	kfree(pool);
 }
 
