@@ -261,8 +261,8 @@ static int binder_update_page_range(struct binder_alloc *alloc, int allocate,
 	return 0;
 
 free_range:
-	for (page_addr = end - PAGE_SIZE; page_addr >= start;
-	     page_addr -= PAGE_SIZE) {
+
+	for (page_addr = end - PAGE_SIZE; 1; page_addr -= PAGE_SIZE) {
 		page = &alloc->pages[(page_addr - alloc->buffer) / PAGE_SIZE];
 		if (vma)
 			zap_page_range(vma, (uintptr_t)page_addr +
@@ -273,7 +273,9 @@ err_map_kernel_failed:
 		__free_page(*page);
 		*page = NULL;
 err_alloc_page_failed:
-		;
+err_page_ptr_cleared:
+		if (page_addr == start)
+			break;
 	}
 err_no_vma:
 	if (mm) {
