@@ -147,7 +147,6 @@ static inline void bio_set_dev(struct bio *bio, struct block_device *bdev)
 }
 #endif
 
-
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
 #define CURRENT_TIME_SEC	timespec_trunc(current_kernel_time(), NSEC_PER_SEC)
 #endif
