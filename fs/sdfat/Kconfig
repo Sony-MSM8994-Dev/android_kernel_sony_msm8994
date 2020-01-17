@@ -138,3 +138,8 @@ config SDFAT_TEXFAT_WRAPPER
 	bool "Enable wrapper for texfat"
 	depends on SDFAT_FS
 	default n
+
+config SDFAT_UEVENT
+	bool "Enable uevent"
+	depends on SDFAT_FS
+	default y

@@ -98,6 +98,14 @@ typedef struct {
 /*  Type Definitions                                                    */
 /*----------------------------------------------------------------------*/
 /* should be merged it to DATE_TIME_T */
+typedef union {
+	struct {
+		u8 off : 7;
+		u8 valid : 1;
+	};
+	u8 value;
+} TIMEZONE_T;
+
 typedef struct {
 	u16      sec;        /* 0 ~ 59               */
 	u16      min;        /* 0 ~ 59               */
@@ -105,8 +113,8 @@ typedef struct {
 	u16      day;        /* 1 ~ 31               */
 	u16      mon;        /* 1 ~ 12               */
 	u16      year;       /* 0 ~ 127 (since 1980) */
+	TIMEZONE_T tz;
 } TIMESTAMP_T;
-
 
 typedef struct {
 	u16      Year;
@@ -116,6 +124,7 @@ typedef struct {
 	u16      Minute;
 	u16      Second;
 	u16      MilliSecond;
+	TIMEZONE_T Timezone;
 } DATE_TIME_T;
 
 typedef struct {
@@ -383,13 +392,11 @@ void fsapi_dfr_free_clus(struct super_block *sb, u32 clus);
 s32 fsapi_dfr_check_dfr_required(struct super_block *sb, int *totalau, int *cleanau, int *fullau);
 s32 fsapi_dfr_check_dfr_on(struct inode *inode, loff_t start, loff_t end, s32 cancel, const char *caller);
 
-
 #ifdef CONFIG_SDFAT_DFR_DEBUG
 void fsapi_dfr_spo_test(struct super_block *sb, int flag, const char *caller);
 #endif	/* CONFIG_SDFAT_DFR_DEBUG */
 
 #endif	/* CONFIG_SDFAT_DFR */
-
 
 #ifdef __cplusplus
 }

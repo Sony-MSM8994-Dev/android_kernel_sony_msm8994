@@ -245,7 +245,6 @@ static inline int __mark_delayed_dirty(struct super_block *sb, cache_ent_t *bp)
 #endif
 }
 
-
 s32 fcache_modify(struct super_block *sb, u64 sec)
 {
 	cache_ent_t *bp;
@@ -366,7 +365,6 @@ s32 fcache_release_all(struct super_block *sb)
 	return ret;
 }
 
-
 /* internal DIRTYBIT marked => bh dirty */
 s32 fcache_flush(struct super_block *sb, u32 sync)
 {
@@ -452,7 +450,6 @@ static void __fcache_insert_hash(struct super_block *sb, cache_ent_t *bp)
 	hp->hash.next->hash.prev = bp;
 	hp->hash.next = bp;
 }
-
 
 static void __fcache_remove_hash(cache_ent_t *bp)
 {
@@ -708,7 +705,6 @@ s32 dcache_release_all(struct super_block *sb)
 	DMSG("BD:Release / dirty buf cache: %d (err:%d)", dirtycnt, ret);
 	return ret;
 }
-
 
 s32 dcache_flush(struct super_block *sb, u32 sync)
 {

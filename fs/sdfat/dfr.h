@@ -20,6 +20,7 @@
 
 #ifdef	CONFIG_SDFAT_DFR
 
+
 /* Tuning parameters */
 #define	DFR_MIN_TIMEOUT		 (1 * HZ)	// Minimum timeout for forced-sync
 #define	DFR_DEFAULT_TIMEOUT	 (10 * HZ)	// Default timeout for forced-sync

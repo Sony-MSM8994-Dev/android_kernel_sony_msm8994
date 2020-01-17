@@ -28,6 +28,7 @@
 extern "C" {
 #endif /* __cplusplus */
 
+
 /*----------------------------------------------------------------------*/
 /*  Constant & Macro Definitions                                        */
 /*----------------------------------------------------------------------*/
@@ -45,12 +46,13 @@ extern "C" {
  */
 #define DIR_DELETED				0xFFFF0321
 
+
 /*----------------------------------------------------------------------*/
 /*  Type Definitions                                                    */
 /*----------------------------------------------------------------------*/
 #define ES_2_ENTRIES		2
 #define ES_3_ENTRIES		3
-#define ES_ALL_ENTRIES	0
+#define ES_ALL_ENTRIES		0
 
 typedef struct {
 	u64	sector;		// sector number that contains file_entry
@@ -59,7 +61,6 @@ typedef struct {
 	u32	num_entries;
 	void	*__buf;		// __buf should be the last member
 } ENTRY_SET_CACHE_T;
-
 
 
 /*----------------------------------------------------------------------*/
@@ -136,7 +137,6 @@ s32   dcache_release_all(struct super_block *sb);
 s32   dcache_flush(struct super_block *sb, u32 sync);
 s32   dcache_readahead(struct super_block *sb, u64 sec);
 
-
 /* fatent.c */
 s32 fat_ent_ops_init(struct super_block *sb);
 s32 fat_ent_get(struct super_block *sb, u32 loc, u32 *content);
@@ -179,7 +179,6 @@ s32 amap_get_freeclus(struct super_block *sb, u32 clu);
 /* amap_smart.c : stat AU */
 u32 amap_get_au_stat(struct super_block *sb, s32 mode);
 
-
 /* blkdev.c */
 s32 bdev_open_dev(struct super_block *sb);
 s32 bdev_close_dev(struct super_block *sb);
@@ -207,6 +206,7 @@ void extent_cache_init_inode(struct inode *inode);
 void extent_cache_inval_inode(struct inode *inode);
 s32 extent_get_clus(struct inode *inode, u32 cluster, u32 *fclus,
 		u32 *dclus, u32 *last_dclus, s32 allow_eof);
+
 /*----------------------------------------------------------------------*/
 /*  Wrapper Function                                                    */
 /*----------------------------------------------------------------------*/

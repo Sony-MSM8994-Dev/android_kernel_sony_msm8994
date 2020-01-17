@@ -142,9 +142,6 @@ static inline AU_INFO_T *amap_find_hot_au_partial(AMAP_T *amap)
 	return ret;
 }
 
-
-
-
 /*
  * Size-base AU management functions
  */
@@ -196,7 +193,6 @@ int amap_remove_cold_au(AMAP_T *amap, AU_INFO_T *au)
 	return 0;
 }
 
-
 /* "Find" best fit AU
  * returns NULL if there is no AU w/ enough free space.
  *
@@ -241,7 +237,6 @@ AU_INFO_T *amap_find_cold_au_bestfit(AMAP_T *amap, uint16_t free_clusters)
 	return au;
 }
 
-
 /* "Pop" best fit AU
  *
  * returns NULL if there is no AU w/ enough free space.
@@ -258,8 +253,6 @@ AU_INFO_T *amap_pop_cold_au_bestfit(AMAP_T *amap, uint16_t free_clusters)
 
 	return au;
 }
-
-
 
 /* Pop the AU with the largest free space
  *
@@ -306,8 +299,6 @@ AU_INFO_T *amap_pop_cold_au_largest(AMAP_T *amap, uint16_t start_fclu)
 
 	return au;
 }
-
-
 
 /*
  * ===============================================
@@ -540,7 +531,6 @@ int amap_create(struct super_block *sb, u32 pack_ratio, u32 sect_per_au, u32 hid
 
 	return 0;
 
-
 free_and_eio:
 	if (amap) {
 		if (amap->au_table) {
@@ -558,7 +548,6 @@ free_and_eio:
 	}
 	return -EIO;
 }
-
 
 /* Free AMAP related structure */
 void amap_destroy(struct super_block *sb)
@@ -588,7 +577,6 @@ void amap_destroy(struct super_block *sb)
 	kfree(amap);
 	SDFAT_SB(sb)->fsi.amap = NULL;
 }
-
 
 /*
  * Check status of FS
@@ -630,7 +618,6 @@ static inline int amap_update_dest(AMAP_T *amap, int ori_dest)
 	return ori_dest;
 }
 
-
 /*
  * Pick a packing AU if needed.
  * Otherwise just return NULL
@@ -670,7 +657,6 @@ static inline AU_INFO_T *amap_get_packing_au(AMAP_T *amap, int dest, int num_to_
 			return au;
 		}
 	}
-
 
 	/* Heuristic packing:
 	 * This will improve QoS greatly.
@@ -734,7 +720,6 @@ static inline AU_INFO_T *amap_get_packing_au(AMAP_T *amap, int dest, int num_to_
 	amap->n_need_packing++;
 	return NULL;
 }
-
 
 /* Pick a target AU:
  * This function should be called
@@ -838,7 +823,6 @@ retry:
 			goto retry;
 		}
 
-
 		/*
 		 * Check if packing is needed
 		 * (ALLOC_COLD_PACKING is treated by this function)
@@ -928,7 +912,6 @@ void amap_put_target_au(AMAP_T *amap, TARGET_AU_T *cur, unsigned int num_allocat
 
 }
 
-
 /* Reposition target->idx for packing (Heuristics):
  * Skip (num_to_skip) free clusters in (cur->au)
  */
@@ -975,7 +958,6 @@ static inline int amap_skip_cluster(struct super_block *sb, TARGET_AU_T *cur, in
 
 	return 0;
 }
-
 
 /* AMAP-based allocation function for FAT32 */
 s32 amap_fat_alloc_cluster(struct super_block *sb, u32 num_alloc, CHAIN_T *p_chain, s32 dest)
@@ -1105,13 +1087,11 @@ error:
 	return ret;
 }
 
-
 /* Free cluster for FAT32 (not implemented yet) */
 s32 amap_free_cluster(struct super_block *sb, CHAIN_T *p_chain, s32 do_relse)
 {
 	return -ENOTSUPP;
 }
-
 
 /*
  * This is called by fat_free_cluster()
@@ -1160,7 +1140,6 @@ s32 amap_release_cluster(struct super_block *sb, u32 clu)
 	return 0;
 }
 
-
 /*
  * Check if the cluster is in a working AU
  * The caller should hold sb lock.
@@ -1176,7 +1155,6 @@ s32 amap_check_working(struct super_block *sb, u32 clu)
 	return IS_AU_WORKING(au, amap);
 }
 
-
 /*
  * Return the # of free clusters in that AU
  */
@@ -1189,7 +1167,6 @@ s32 amap_get_freeclus(struct super_block *sb, u32 clu)
 	au = GET_AU(amap, i_AU_of_CLU(amap, clu));
 	return (s32)au->free_clusters;
 }
-
 
 /*
  * Add the AU containing 'clu' to the ignored AU list.
@@ -1225,7 +1202,6 @@ s32 amap_mark_ignore(struct super_block *sb, u32 clu)
 	MMSG("AMAP: Mark ignored AU (%d)\n", au->idx);
 	return 0;
 }
-
 
 /*
  * This function could be used only on IGNORED AUs.

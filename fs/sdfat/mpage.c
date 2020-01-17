@@ -212,7 +212,6 @@ static inline int __dfr_writepage_end_io(struct page *page)
 	return 0;
 }
 
-
 static inline unsigned int __calc_size_to_align(struct super_block *sb)
 {
 	struct block_device *bdev = sb->s_bdev;

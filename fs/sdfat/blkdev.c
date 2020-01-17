@@ -104,7 +104,6 @@ s32 bdev_check_bdi_valid(struct super_block *sb)
 	return 0;
 }
 
-
 /* Make a readahead request */
 s32 bdev_readahead(struct super_block *sb, u64 secno, u64 num_secs)
 {

@@ -68,7 +68,6 @@ defrag_get_info(
 	return 0;
 }
 
-
 static int
 __defrag_scan_dir(
 	IN struct super_block *sb,
@@ -129,7 +128,6 @@ __defrag_scan_dir(
 error:
 	return err;
 }
-
 
 /**
  * @fn		defrag_scan_dir
@@ -279,7 +277,6 @@ error:
 	return err;
 }
 
-
 static int
 __defrag_validate_cluster_prev(
 	IN struct super_block *sb,
@@ -327,7 +324,6 @@ error:
 	return err;
 }
 
-
 static int
 __defrag_validate_cluster_next(
 	IN struct super_block *sb,
@@ -349,7 +345,6 @@ __defrag_validate_cluster_next(
 error:
 	return err;
 }
-
 
 /**
  * @fn		__defrag_check_au
@@ -377,7 +372,6 @@ __defrag_check_au(
 #endif
 	return ((nr_free < limit) ? 1 : 0);
 }
-
 
 /**
  * @fn		defrag_validate_cluster
@@ -437,7 +431,6 @@ error:
 	return err;
 }
 
-
 /**
  * @fn		defrag_reserve_clusters
  * @brief	reserve clusters for defrag
@@ -473,7 +466,6 @@ defrag_reserve_clusters(
 	return 0;
 }
 
-
 /**
  * @fn		defrag_mark_ignore
  * @brief	mark corresponding AU to be ignored
@@ -497,7 +489,6 @@ defrag_mark_ignore(
 	return err;
 }
 
-
 /**
  * @fn		defrag_unmark_ignore_all
  * @brief	unmark all ignored AUs
@@ -511,7 +502,6 @@ defrag_unmark_ignore_all(struct super_block *sb)
 	if (SDFAT_SB(sb)->options.improved_allocation & SDFAT_ALLOC_SMART)
 		amap_unmark_ignore_all(sb);
 }
-
 
 /**
  * @fn		defrag_map_cluster
@@ -610,7 +600,6 @@ defrag_map_cluster(
 	return 0;
 }
 
-
 /**
  * @fn		defrag_writepage_end_io
  * @brief	check WB status of requested page
@@ -650,7 +639,6 @@ defrag_writepage_end_io(
 		}
 	}
 }
-
 
 /**
  * @fn		__defrag_check_wb
@@ -705,7 +693,6 @@ __defrag_check_wb(
 	return err;
 }
 
-
 static void
 __defrag_check_fat_old(
 	IN struct super_block *sb,
@@ -741,7 +728,6 @@ __defrag_check_fat_old(
 error:
 	return;
 }
-
 
 static void
 __defrag_check_fat_new(
@@ -801,7 +787,6 @@ error:
 	BUG_ON(err);
 }
 
-
 /**
  * @fn		__defrag_update_dirent
  * @brief	update DIR entry for defrag req
@@ -840,7 +825,6 @@ __defrag_update_dirent(
 
 	dcache_modify(sb, sector);
 }
-
 
 /**
  * @fn		defrag_update_fat_prev
@@ -1021,7 +1005,6 @@ out:
 	}
 }
 
-
 /**
  * @fn		defrag_update_fat_next
  * @brief	update FAT chain for defrag requests
@@ -1094,7 +1077,6 @@ out:
 	dfr_debug("%s done (nr_reqs %d, done %d)", __func__, sb_dfr->nr_chunks - 1, done);
 }
 
-
 /**
  * @fn		defrag_check_discard
  * @brief	check if we can send discard for this AU, if so, send discard
@@ -1164,7 +1146,6 @@ defrag_check_discard(
 	}
 }
 
-
 /**
  * @fn		defrag_free_cluster
  * @brief	free uneccessary cluster
@@ -1201,7 +1182,6 @@ defrag_free_cluster(
 
 	return 0;
 }
-
 
 /**
  * @fn		defrag_check_defrag_required
@@ -1268,7 +1248,6 @@ defrag_check_defrag_required(
 
 	return ret;
 }
-
 
 /**
  * @fn		defrag_check_defrag_required
@@ -1340,7 +1319,6 @@ error:
 	return ret;
 }
 
-
 #ifdef CONFIG_SDFAT_DFR_DEBUG
 /**
  * @fn		defrag_spo_test
@@ -1367,6 +1345,5 @@ defrag_spo_test(
 	}
 }
 #endif	/* CONFIG_SDFAT_DFR_DEBUG */
-
 
 #endif /* CONFIG_SDFAT_DFR */

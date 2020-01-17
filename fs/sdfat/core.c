@@ -33,11 +33,26 @@
 #include <linux/writeback.h>
 #include <linux/kernel.h>
 #include <linux/log2.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
+#include <linux/iversion.h>
+#endif
 
 #include "sdfat.h"
 #include "core.h"
 #include <asm/byteorder.h>
 #include <asm/unaligned.h>
+
+
+/*************************************************************************
+ * FUNCTIONS WHICH HAS KERNEL VERSION DEPENDENCY
+ *************************************************************************/
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
+static inline u64 inode_peek_iversion(struct inode *inode)
+{
+	return inode->i_version;
+}
+#endif
+
 
 /*----------------------------------------------------------------------*/
 /*  Constant & Macro Definitions                                        */
@@ -226,7 +241,6 @@ static s32 fs_sync(struct super_block *sb, s32 do_sync)
 /*
  *  Cluster Management Functions
  */
-
 static s32 __clear_cluster(struct inode *inode, u32 clu)
 {
 	u64 s, n;
@@ -300,7 +314,6 @@ static s32 __find_last_cluster(struct super_block *sb, CHAIN_T *p_chain, u32 *re
 	*ret_clu = clu;
 	return 0;
 }
-
 
 static s32 __count_num_clusters(struct super_block *sb, CHAIN_T *p_chain, u32 *ret_count)
 {
@@ -1792,6 +1805,7 @@ s32 fscore_mount(struct super_block *sb)
 		opts->defrag = 0;
 		ret = mount_fat16(sb, p_pbr);
 	}
+
 free_bh:
 	brelse(tmp_bh);
 	if (ret) {
@@ -1956,10 +1970,10 @@ s32 fscore_lookup(struct inode *inode, u8 *path, FILE_ID_T *fid)
 		return ret;
 
 	/* check the validation of hint_stat and initialize it if required */
-	if (dir_fid->version != (u32)(inode->i_version & 0xffffffff)) {
+	if (dir_fid->version != (u32)inode_peek_iversion(inode)) {
 		dir_fid->hint_stat.clu = dir.dir;
 		dir_fid->hint_stat.eidx = 0;
-		dir_fid->version = (u32)(inode->i_version & 0xffffffff);
+		dir_fid->version = (u32)inode_peek_iversion(inode);
 		dir_fid->hint_femp.eidx = -1;
 	}
 
@@ -2835,7 +2849,6 @@ s32 fscore_remove(struct inode *inode, FILE_ID_T *fid)
 	if (!ep)
 		return -EIO;
 
-
 #ifdef CONFIG_SDFAT_CHECK_RO_ATTR
 	if (fsi->fs_func->get_entry_attr(ep) & ATTR_READONLY)
 		return -EPERM;
@@ -2956,6 +2969,7 @@ s32 fscore_read_inode(struct inode *inode, DIR_ENTRY_T *info)
 	info->CreateTimestamp.Minute = tm.min;
 	info->CreateTimestamp.Second = tm.sec;
 	info->CreateTimestamp.MilliSecond = 0;
+	info->CreateTimestamp.Timezone.value = tm.tz.value;
 
 	fsi->fs_func->get_entry_time(ep, &tm, TM_MODIFY);
 	info->ModifyTimestamp.Year = tm.year;
@@ -2965,6 +2979,7 @@ s32 fscore_read_inode(struct inode *inode, DIR_ENTRY_T *info)
 	info->ModifyTimestamp.Minute = tm.min;
 	info->ModifyTimestamp.Second = tm.sec;
 	info->ModifyTimestamp.MilliSecond = 0;
+	info->ModifyTimestamp.Timezone.value = tm.tz.value;
 
 	memset((s8 *) &info->AccessTimestamp, 0, sizeof(DATE_TIME_T));
 
@@ -3063,10 +3078,10 @@ s32 fscore_write_inode(struct inode *inode, DIR_ENTRY_T *info, s32 sync)
 		ep2 = ep;
 	}
 
-
 	fsi->fs_func->set_entry_attr(ep, info->Attr);
 
 	/* set FILE_INFO structure using the acquired DENTRY_T */
+	tm.tz  = info->CreateTimestamp.Timezone;
 	tm.sec  = info->CreateTimestamp.Second;
 	tm.min  = info->CreateTimestamp.Minute;
 	tm.hour = info->CreateTimestamp.Hour;
@@ -3075,6 +3090,7 @@ s32 fscore_write_inode(struct inode *inode, DIR_ENTRY_T *info, s32 sync)
 	tm.year = info->CreateTimestamp.Year;
 	fsi->fs_func->set_entry_time(ep, &tm, TM_CREATE);
 
+	tm.tz  = info->ModifyTimestamp.Timezone;
 	tm.sec  = info->ModifyTimestamp.Second;
 	tm.min  = info->ModifyTimestamp.Minute;
 	tm.hour = info->ModifyTimestamp.Hour;
@@ -3235,7 +3251,6 @@ s32 fscore_map_clus(struct inode *inode, u32 clu_offset, u32 *clu, int dest)
 		if (SDFAT_SB(sb)->options.improved_allocation & SDFAT_ALLOC_DELAY) {
 			BUG_ON(reserved_clusters < num_to_be_allocated);
 			reserved_clusters -= num_to_be_allocated;
-
 		}
 
 		/* (2) append to the FAT chain */
@@ -3301,7 +3316,6 @@ s32 fscore_map_clus(struct inode *inode, u32 clu_offset, u32 *clu, int dest)
 
 		} /* end of if != DIR_DELETED */
 
-
 		/* add number of new blocks to inode (non-DA only) */
 		if (!(SDFAT_SB(sb)->options.improved_allocation & SDFAT_ALLOC_DELAY)) {
 			inode->i_blocks += num_to_be_allocated << (fsi->cluster_size_bits - sb->s_blocksize_bits);
@@ -3327,7 +3341,6 @@ s32 fscore_map_clus(struct inode *inode, u32 clu_offset, u32 *clu, int dest)
 				num_to_be_allocated--;
 			}
 		}
-
 	}
 
 	/* update reserved_clusters */

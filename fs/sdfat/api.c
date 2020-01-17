@@ -485,7 +485,6 @@ s32 fsapi_check_bdi_valid(struct super_block *sb)
 }
 EXPORT_SYMBOL(fsapi_check_bdi_valid);
 
-
 #ifdef	CONFIG_SDFAT_DFR
 /*----------------------------------------------------------------------*/
 /*  Defragmentation related                                             */
@@ -618,7 +617,6 @@ s32 fsapi_dfr_check_dfr_on(struct inode *inode, loff_t start, loff_t end, s32 ca
 }
 EXPORT_SYMBOL(fsapi_dfr_check_dfr_on);
 
-
 #ifdef CONFIG_SDFAT_DFR_DEBUG
 void fsapi_dfr_spo_test(struct super_block *sb, int flag, const char *caller)
 {
@@ -627,7 +625,6 @@ void fsapi_dfr_spo_test(struct super_block *sb, int flag, const char *caller)
 }
 EXPORT_SYMBOL(fsapi_dfr_spo_test);
 #endif
-
 
 #endif	/* CONFIG_SDFAT_DFR */
 

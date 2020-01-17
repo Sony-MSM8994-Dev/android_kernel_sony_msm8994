@@ -297,7 +297,6 @@ static s32 fat12_ent_set(struct super_block *sb, u32 loc, u32 content)
 	return fcache_modify(sb, sec);
 }
 
-
 static FATENT_OPS_T fat12_ent_ops = {
 	fat12_ent_get,
 	fat12_ent_set

@@ -132,7 +132,6 @@
 //}
 #endif /* CONFIG_SDFAT_DEBUG */
 
-
 #ifndef	CONFIG_SDFAT_TRACE_SB_LOCK
 //#define CONFIG_SDFAT_TRACE_SB_LOCK
 #endif
