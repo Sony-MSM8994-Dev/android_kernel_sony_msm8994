@@ -25,7 +25,7 @@ you probably needn't concern yourself with isdn4k-utils.
         Program        Minimal version       Command to check the version
 ====================== ===============  ========================================
 
-o  Gnu C                  4.6                     # gcc --version
+o  Gnu C                  4.8                     # gcc --version
 o  Gnu make               3.80                    # make --version
 o  binutils               2.12                    # ld -v
 o  util-linux             2.10o                   # fdformat --version
