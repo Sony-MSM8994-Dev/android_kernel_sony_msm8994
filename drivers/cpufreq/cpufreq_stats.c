@@ -235,7 +235,6 @@ void cpufreq_task_stats_init(struct task_struct *p)
 {
 	size_t alloc_size;
 
-	WRITE_ONCE(p->time_in_state, NULL);
 	WRITE_ONCE(p->max_states, 0);
 
 	if (!all_freq_table || !cpufreq_all_freq_init)
@@ -336,7 +335,6 @@ void acct_update_power(struct task_struct *task, cputime_t cputime) {
 		return;
 
 	all_freq_i = atomic_read(&stats->all_freq_i);
-	time_in_state = READ_ONCE(task->time_in_state);
 
 	/* This function is called from a different context
 	 * Interruptions in between reads/assignements are ok
