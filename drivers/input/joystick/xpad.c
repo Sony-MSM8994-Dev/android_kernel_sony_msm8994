@@ -1127,16 +1127,6 @@ static int xpad_init_input(struct usb_xpad *xpad)
 	struct input_dev *input_dev;
 	int i, error;
 
-	if (intf->cur_altsetting->desc.bNumEndpoints != 2)
-		return -ENODEV;
-
-	for (i = 0; xpad_device[i].idVendor; i++) {
-		if ((le16_to_cpu(udev->descriptor.idVendor) == xpad_device[i].idVendor) &&
-		    (le16_to_cpu(udev->descriptor.idProduct) == xpad_device[i].idProduct))
-			break;
-	}
-
-	xpad = kzalloc(sizeof(struct usb_xpad), GFP_KERNEL);
 	input_dev = input_allocate_device();
 	if (!input_dev)
 		return -ENOMEM;
@@ -1230,6 +1220,9 @@ static int xpad_probe(struct usb_interface *intf, const struct usb_device_id *id
 	struct usb_endpoint_descriptor *ep_irq_in;
 	int ep_irq_in_idx;
 	int i, error;
+
+	if (intf->cur_altsetting->desc.bNumEndpoints != 2)
+		return -ENODEV;
 
 	for (i = 0; xpad_device[i].idVendor; i++) {
 		if ((le16_to_cpu(udev->descriptor.idVendor) == xpad_device[i].idVendor) &&
