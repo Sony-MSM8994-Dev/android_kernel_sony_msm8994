@@ -20,7 +20,7 @@
  *      Notwithstanding the above, under no circumstances may you combine this
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
- * $Id: bcmevent.c 642536 2016-06-09 02:32:26Z $
+ * $Id: bcmevent.c 718508 2017-08-31 02:48:38Z $
  */
 
 #include <typedefs.h>
@@ -154,7 +154,6 @@ const bcmevent_name_t bcmevent_names[] = {
 	BCMEVENT_NAME(WLC_E_TXFAIL_THRESH),
 #ifdef GSCAN_SUPPORT
 	BCMEVENT_NAME(WLC_E_PFN_GSCAN_FULL_RESULT),
-	BCMEVENT_NAME(WLC_E_PFN_SWC),
 #endif /* GSCAN_SUPPORT */
 	BCMEVENT_NAME(WLC_E_RMC_EVENT),
 #ifdef GSCAN_SUPPORT
@@ -177,12 +176,14 @@ int
 is_wlc_event_frame(void *pktdata, uint pktlen, uint16 exp_usr_subtype,
 	bcm_event_msg_u_t *out_event)
 {
-	uint16 len;
+	uint16 evlen = 0;	/* length in bcmeth_hdr */
 	uint16 subtype;
 	uint16 usr_subtype;
 	bcm_event_t *bcm_event;
 	uint8 *pktend;
+	uint8 *evend;
 	int err = BCME_OK;
+	uint32 data_len = 0; /* data length in bcm_event */
 
 	pktend = (uint8 *)pktdata + pktlen;
 	bcm_event = (bcm_event_t *)pktdata;
@@ -203,8 +204,14 @@ is_wlc_event_frame(void *pktdata, uint pktlen, uint16 exp_usr_subtype,
 	}
 
 	/* check length in bcmeth_hdr */
-	len = ntoh16_ua((void *)&bcm_event->bcm_hdr.length);
-	if (((uint8 *)&bcm_event->bcm_hdr.version + len) > pktend) {
+
+	/* temporary - header length not always set properly. When the below
+	 * !BCMDONGLEHOST is in all branches that use trunk DHD, the code
+	 * under BCMDONGLEHOST can be removed.
+	 */
+	evlen = (uint16)(pktend - (uint8 *)&bcm_event->bcm_hdr.version);
+	evend = (uint8 *)&bcm_event->bcm_hdr.version + evlen;
+	if (evend > pktend) {
 		err = BCME_BADLEN;
 		goto done;
 	}
@@ -225,13 +232,16 @@ is_wlc_event_frame(void *pktdata, uint pktlen, uint16 exp_usr_subtype,
 	usr_subtype = ntoh16_ua((void *)&bcm_event->bcm_hdr.usr_subtype);
 	switch (usr_subtype) {
 	case BCMILCP_BCM_SUBTYPE_EVENT:
-		if (pktlen < sizeof(bcm_event_t)) {
+		/* check that header length and pkt length are sufficient */
+		if ((pktlen < sizeof(bcm_event_t)) ||
+			(evend < ((uint8 *)bcm_event + sizeof(bcm_event_t)))) {
 			err = BCME_BADLEN;
 			goto done;
 		}
 
-		len = sizeof(bcm_event_t) + ntoh32_ua((void *)&bcm_event->event.datalen);
-		if ((uint8 *)pktdata + len > pktend) {
+		/* ensure data length in event is not beyond the packet. */
+		data_len = ntoh32_ua((void *)&bcm_event->event.datalen);
+		if (data_len > (pktlen - sizeof(bcm_event_t))) {
 			err = BCME_BADLEN;
 			goto done;
 		}
@@ -248,14 +258,15 @@ is_wlc_event_frame(void *pktdata, uint pktlen, uint16 exp_usr_subtype,
 
 		break;
 	case BCMILCP_BCM_SUBTYPE_DNGLEVENT:
-		if (pktlen < sizeof(bcm_dngl_event_t)) {
+		if ((pktlen < sizeof(bcm_dngl_event_t)) ||
+			(evend < ((uint8 *)bcm_event + sizeof(bcm_dngl_event_t)))) {
 			err = BCME_BADLEN;
 			goto done;
 		}
 
-		len = sizeof(bcm_dngl_event_t) +
-			ntoh16_ua((void *)&((bcm_dngl_event_t *)pktdata)->dngl_event.datalen);
-		if ((uint8 *)pktdata + len > pktend) {
+		/* ensure data length in event is not beyond the packet. */
+		data_len = ntoh16_ua((void *)&((bcm_dngl_event_t *)pktdata)->dngl_event.datalen);
+		if (data_len > (pktlen - sizeof(bcm_dngl_event_t))) {
 			err = BCME_BADLEN;
 			goto done;
 		}
@@ -277,6 +288,7 @@ is_wlc_event_frame(void *pktdata, uint pktlen, uint16 exp_usr_subtype,
 		goto done;
 	}
 
+	BCM_REFERENCE(data_len);
 done:
 	return err;
 }

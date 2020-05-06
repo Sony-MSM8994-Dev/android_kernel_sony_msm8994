@@ -818,7 +818,7 @@ dhd_rtt_common_set_handler(dhd_pub_t *dhd, const ftm_subcmd_info_t *p_subcmd_inf
 		return BCME_NOMEM;
 
 	/* no TLV to pack, simply issue a set-proxd iovar */
-	ret = dhd_iovar(dhd, 0, "proxd", (void *) p_proxd_iov, proxd_iovsize, 1);
+	ret = dhd_iovar(dhd, 0, "proxd", (char *)p_proxd_iov, proxd_iovsize, NULL, 0, TRUE);
 #ifdef RTT_DEBUG
 	if (ret != BCME_OK) {
 		DHD_RTT(("error: IOVAR failed, status=%d\n", ret));
@@ -1069,7 +1069,7 @@ dhd_rtt_ftm_config(dhd_pub_t *dhd, wl_proxd_session_id_t session_id,
 		all_tlvsize = (bufsize - buf_space_left);
 		p_proxd_iov->len = htol16(all_tlvsize + WL_PROXD_IOV_HDR_SIZE);
 		ret = dhd_iovar(dhd, 0, "proxd", (char *)p_proxd_iov,
-			all_tlvsize + WL_PROXD_IOV_HDR_SIZE, 1);
+			all_tlvsize + WL_PROXD_IOV_HDR_SIZE, NULL, 0, TRUE);
 		if (ret != BCME_OK) {
 			DHD_ERROR(("%s : failed to set config\n", __FUNCTION__));
 		}
@@ -1213,7 +1213,7 @@ dhd_rtt_start(dhd_pub_t *dhd)
 	}
 	/* turn off mpc in case of non-associted */
 	if (!dhd_is_associated(dhd, NULL, NULL)) {
-		err = dhd_iovar(dhd, 0, "mpc", (char *)&mpc, sizeof(mpc), 1);
+		err = dhd_iovar(dhd, 0, "mpc", (char *)&mpc, sizeof(mpc), NULL, 0, TRUE);
 		if (err) {
 			DHD_ERROR(("%s : failed to set mpc\n", __FUNCTION__));
 			goto exit;
@@ -1322,7 +1322,7 @@ exit:
 			/* enable mpc again in case of error */
 			mpc = 1;
 			rtt_status->mpc = 0;
-			err = dhd_iovar(dhd, 0, "mpc", (char *)&mpc, sizeof(mpc), 1);
+			err = dhd_iovar(dhd, 0, "mpc", (char *)&mpc, sizeof(mpc), NULL, 0, TRUE);
 		}
 	}
 	return err;
@@ -1537,18 +1537,36 @@ dhd_rtt_event_handler(dhd_pub_t *dhd, wl_event_msg_t *event, void *event_data)
 	gfp_t kflags;
 	bool is_new = TRUE;
 
+	DHD_RTT(("Enter %s \n", __FUNCTION__));
 	NULL_CHECK(dhd, "dhd is NULL", ret);
+
+#ifdef WL_CFG80211
 	rtt_status = GET_RTTSTATE(dhd);
 	NULL_CHECK(rtt_status, "rtt_status is NULL", ret);
 
-	event_type = ntoh32_ua((void *)&event->event_type);
-
-	if (event_type != WLC_E_PROXD) {
-		goto exit;
-	}
 	if (RTT_IS_STOPPED(rtt_status)) {
 		/* Ignore the Proxd event */
+		DHD_RTT((" event handler rtt is stopped \n"));
 		goto exit;
+	}
+#endif /* WL_CFG80211 */
+	if (ntoh32_ua((void *)&event->datalen) < OFFSETOF(wl_proxd_event_t, tlvs)) {
+			DHD_RTT(("%s: wrong datalen:%d\n", __FUNCTION__,
+				ntoh32_ua((void *)&event->datalen)));
+			ret = -EINVAL;
+			goto exit;
+	}
+	event_type = ntoh32_ua((void *)&event->event_type);
+	if (event_type != WLC_E_PROXD) {
+			DHD_ERROR((" failed event \n"));
+			ret = -EINVAL;
+			goto exit;
+	}
+
+	if (!event_data) {
+			DHD_ERROR(("%s: event_data:NULL\n", __FUNCTION__));
+			ret = -EINVAL;
+			goto exit;
 	}
 	p_event = (wl_proxd_event_t *) event_data;
 	version = ltoh16(p_event->version);
@@ -1569,9 +1587,15 @@ dhd_rtt_event_handler(dhd_pub_t *dhd, wl_event_msg_t *event, void *event_data)
 	p_loginfo = ftm_get_event_type_loginfo(event_type);
 	if (p_loginfo == NULL) {
 		DHD_ERROR(("receive an invalid FTM event %d\n", event_type));
+		ret = -EINVAL;
 		goto exit;	/* ignore this event */
 	}
 	/* get TLVs len, skip over event header */
+	if (ltoh16(p_event->len) < OFFSETOF(wl_proxd_event_t, tlvs)) {
+		DHD_ERROR(("invalid FTM event length:%d\n", ltoh16(p_event->len)));
+		ret = -EINVAL;
+		goto exit;
+	}
 	tlvs_len = ltoh16(p_event->len) - OFFSETOF(wl_proxd_event_t, tlvs);
 	DHD_RTT(("receive '%s' event: version=0x%x len=%d method=%d sid=%d tlvs_len=%d\n",
 		p_loginfo->text,
