@@ -193,8 +193,7 @@ SUBARCH := $(shell uname -m | sed -e s/i.86/x86/ -e s/x86_64/x86/ \
 # Default value for CROSS_COMPILE is not to prefix executables
 # Note: Some architectures assign CROSS_COMPILE in their arch/*/Makefile
 ARCH		?= $(SUBARCH)
-#CROSS_COMPILE	?= $(CONFIG_CROSS_COMPILE:"%"=%)
-CROSS_COMPILE = /home/thread/dev/sdk/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-
+CROSS_COMPILE	?= $(CONFIG_CROSS_COMPILE:"%"=%)
 
 # Architecture as present in compile.h
 UTS_MACHINE 	:= $(ARCH)
@@ -376,24 +375,25 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -Wno-format-security \
 		   -fdiagnostics-color=always \
 		   -fno-delete-null-pointer-checks \
-	-fno-schedule-insns  -Os \
-	-flive-range-shrinkage \
-	-fira-loop-pressure -ftree-vectorize \
-	-ftree-loop-distribution -ftree-loop-distribute-patterns \
-	-ftree-loop-ivcanon \
-	-fshrink-wrap -fshrink-wrap-separate -mtune=cortex-a57.cortex-a53 \
-	-march=armv8-a+crc+crypto+simd -fmodulo-sched -fmodulo-sched-allow-regmoves \
-	-fivopts \
-	-finline-small-functions -fpartial-inlining -findirect-inlining \
-	-foptimize-sibling-calls \
-	-fdevirtualize -fdevirtualize-speculatively \
-	-fgcse -fgcse-lm -fgcse-sm -fgcse-las -fgcse-after-reload \
-	-ftree-loop-im -funswitch-loops \
-	-fpredictive-commoning \
-	-fipa-cp -fipa-bit-cp -fipa-vrp -fipa-sra -fipa-icf -fipa-ra \
-	-Wno-maybe-uninitialized -Wno-misleading-indentation \
-	-Wno-array-bounds -Wno-shift-overflow \
 		   -std=gnu89 $(call cc-option,-fno-PIE)
+#	-fno-schedule-insns  -Os \
+#	-flive-range-shrinkage \
+#	-fira-loop-pressure -ftree-vectorize \
+#	-ftree-loop-distribution -ftree-loop-distribute-patterns \
+#	-ftree-loop-ivcanon \
+#	-fshrink-wrap -fshrink-wrap-separate -mtune=cortex-a57.cortex-a53 \
+#	-march=armv8-a+crc+crypto+simd -fmodulo-sched -fmodulo-sched-allow-regmoves \
+#	-fivopts \
+#	-finline-small-functions -fpartial-inlining -findirect-inlining \
+#	-foptimize-sibling-calls \
+#	-fdevirtualize -fdevirtualize-speculatively \
+#	-fgcse -fgcse-lm -fgcse-sm -fgcse-las -fgcse-after-reload \
+#	-ftree-loop-im -funswitch-loops \
+#	-fpredictive-commoning \
+#	-fipa-cp -fipa-bit-cp -fipa-vrp -fipa-sra -fipa-icf -fipa-ra \
+#	-Wno-maybe-uninitialized -Wno-misleading-indentation \
+#	-Wno-array-bounds -Wno-shift-overflow \
+#		   -std=gnu89 $(call cc-option,-fno-PIE)
 # Not compatible with default linaro gcc 7.5 -fgraphite -fgraphite-identity -floop-strip-mine -floop-block
 # Not compatible with gcc4.7  -fipa-ra  -fipa-icf -fipa-vrp -fipa-bit-cp -fshrink-wrap-separate 
 
