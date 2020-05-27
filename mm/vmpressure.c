@@ -234,7 +234,6 @@ static void vmpressure_work_fn(struct work_struct *work)
 	unsigned long scanned;
 	unsigned long reclaimed;
 
-	spin_lock(&vmpr->sr_lock);
 	/*
 	 * Several contexts might be calling vmpressure(), so it is
 	 * possible that the work was rescheduled again before the old
@@ -243,12 +242,11 @@ static void vmpressure_work_fn(struct work_struct *work)
 	 * here. No need for any locks here since we don't care if
 	 * vmpr->reclaimed is in sync.
 	 */
-	scanned = vmpr->scanned;
-	if (!scanned) {
-		spin_unlock(&vmpr->sr_lock);
+	if (!vmpr->scanned)
 		return;
-	}
 
+	spin_lock(&vmpr->sr_lock);
+	scanned = vmpr->scanned;
 	reclaimed = vmpr->reclaimed;
 	vmpr->scanned = 0;
 	vmpr->reclaimed = 0;
