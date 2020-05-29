@@ -1,7 +1,6 @@
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/string.h>
-#include <linux/compiler.h>
 #include <linux/export.h>
 #include <linux/err.h>
 #include <linux/sched.h>
@@ -42,8 +41,6 @@ EXPORT_SYMBOL(kstrdup);
  * @s: the string to duplicate
  * @max: read at most @max chars from @s
  * @gfp: the GFP mask used in the kmalloc() call when allocating memory
- *
- * Note: Use kmemdup_nul() instead if the size is known exactly.
  */
 char *kstrndup(const char *s, size_t max, gfp_t gfp)
 {
@@ -80,28 +77,6 @@ void *kmemdup(const void *src, size_t len, gfp_t gfp)
 	return p;
 }
 EXPORT_SYMBOL(kmemdup);
-
-/**
- * kmemdup_nul - Create a NUL-terminated string from unterminated data
- * @s: The data to stringify
- * @len: The size of the data
- * @gfp: the GFP mask used in the kmalloc() call when allocating memory
- */
-char *kmemdup_nul(const char *s, size_t len, gfp_t gfp)
-{
-	char *buf;
-
-	if (!s)
-		return NULL;
-
-	buf = kmalloc_track_caller(len + 1, gfp);
-	if (buf) {
-		memcpy(buf, s, len);
-		buf[len] = '\0';
-	}
-	return buf;
-}
-EXPORT_SYMBOL(kmemdup_nul);
 
 /**
  * memdup_user - duplicate memory region from user space
@@ -327,7 +302,7 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
  * If the architecture not support this function, simply return with no
  * page pinned
  */
-int __weak __get_user_pages_fast(unsigned long start,
+int __attribute__((weak)) __get_user_pages_fast(unsigned long start,
 				 int nr_pages, int write, struct page **pages)
 {
 	return 0;
@@ -358,7 +333,7 @@ EXPORT_SYMBOL_GPL(__get_user_pages_fast);
  * callers need to carefully consider what to use. On many architectures,
  * get_user_pages_fast simply falls back to get_user_pages.
  */
-int __weak get_user_pages_fast(unsigned long start,
+int __attribute__((weak)) get_user_pages_fast(unsigned long start,
 				int nr_pages, int write, struct page **pages)
 {
 	struct mm_struct *mm = current->mm;

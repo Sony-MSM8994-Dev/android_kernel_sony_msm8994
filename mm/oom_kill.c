@@ -268,6 +268,8 @@ enum oom_scan_t oom_scan_process_thread(struct task_struct *task,
 	 * Don't allow any other task to have access to the reserves.
 	 */
 	if (test_tsk_thread_flag(task, TIF_MEMDIE)) {
+		if (unlikely(frozen(task)))
+			__thaw_task(task);
 		if (!force_kill)
 			return OOM_SCAN_ABORT;
 	}
@@ -281,9 +283,14 @@ enum oom_scan_t oom_scan_process_thread(struct task_struct *task,
 	if (oom_task_origin(task))
 		return OOM_SCAN_SELECT;
 
-	if (task_will_free_mem(task) && !force_kill)
-		return OOM_SCAN_ABORT;
-
+	if (task->flags & PF_EXITING && !force_kill) {
+		/*
+		 * If this task is not being ptraced on exit, then wait for it
+		 * to finish before killing some other task unnecessarily.
+		 */
+		if (!(task->group_leader->ptrace & PT_TRACE_EXIT))
+			return OOM_SCAN_ABORT;
+	}
 	return OOM_SCAN_OK;
 }
 
@@ -320,14 +327,10 @@ static struct task_struct *select_bad_process(unsigned int *ppoints,
 			break;
 		};
 		points = oom_badness(p, NULL, nodemask, totalpages);
-		if (!points || points < chosen_points)
-			continue;
-		/* Prefer thread group leaders for display purposes */
-		if (points == chosen_points && thread_group_leader(chosen))
-			continue;
-
-		chosen = p;
-		chosen_points = points;
+		if (points > chosen_points) {
+			chosen = p;
+			chosen_points = points;
+		}
 	}
 	if (chosen)
 		get_task_struct(chosen);
@@ -416,31 +419,6 @@ void note_oom_kill(void)
 	atomic_inc(&oom_kills);
 }
 
-/**
- * mark_tsk_oom_victim - marks the given taks as OOM victim.
- * @tsk: task to mark
- */
-void mark_tsk_oom_victim(struct task_struct *tsk)
-{
-	set_tsk_thread_flag(tsk, TIF_MEMDIE);
-
-	/*
-	 * Make sure that the task is woken up from uninterruptible sleep
-	 * if it is frozen because OOM killer wouldn't be able to free
-	 * any memory and livelock. freezing_slow_path will tell the freezer
-	 * that TIF_MEMDIE tasks should be ignored.
-	 */
-	__thaw_task(tsk);
-}
-
-/**
- * unmark_oom_victim - unmarks the current task as OOM victim.
- */
-void unmark_oom_victim(void)
-{
-	clear_thread_flag(TIF_MEMDIE);
-}
-
 #define K(x) ((x) << (PAGE_SHIFT-10))
 /*
  * Must be called while holding a reference to p, which will be released upon
@@ -455,7 +433,6 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 	struct task_struct *child;
 	struct task_struct *t;
 	struct mm_struct *mm;
-	unsigned long victim_rss;
 	unsigned int victim_points = 0;
 	static DEFINE_RATELIMIT_STATE(oom_rs, DEFAULT_RATELIMIT_INTERVAL,
 					      DEFAULT_RATELIMIT_BURST);
@@ -464,8 +441,8 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 	 * If the task is already exiting, don't alarm the sysadmin or kill
 	 * its children or threads, just set TIF_MEMDIE so it can die quickly
 	 */
-	if (task_will_free_mem(p)) {
-		mark_tsk_oom_victim(p);
+	if (p->flags & PF_EXITING) {
+		set_tsk_thread_flag(p, TIF_MEMDIE);
 		put_task_struct(p);
 		return;
 	}
@@ -518,8 +495,6 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 
 	/* mm cannot safely be dereferenced after task_unlock(victim) */
 	mm = victim->mm;
-	victim_rss = get_mm_rss(victim->mm);
-	mark_tsk_oom_victim(victim);
 	pr_err("Killed process %d (%s) total-vm:%lukB, anon-rss:%lukB, file-rss:%lukB\n",
 		task_pid_nr(victim), victim->comm, K(victim->mm->total_vm),
 		K(get_mm_counter(victim->mm, MM_ANONPAGES)),
@@ -551,11 +526,6 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 	rcu_read_unlock();
 
 	set_tsk_thread_flag(victim, TIF_MEMDIE);
-	trace_oom_sigkill(victim->pid,  victim->comm,
-			  victim_points,
-			  victim_rss,
-			  gfp_mask);
-
 	do_send_sig_info(SIGKILL, SEND_SIG_FORCED, victim, true);
 	put_task_struct(victim);
 }
@@ -602,25 +572,28 @@ EXPORT_SYMBOL_GPL(unregister_oom_notifier);
  * if a parallel OOM killing is already taking place that includes a zone in
  * the zonelist.  Otherwise, locks all zones in the zonelist and returns 1.
  */
-bool oom_zonelist_trylock(struct zonelist *zonelist, gfp_t gfp_mask)
+int try_set_zonelist_oom(struct zonelist *zonelist, gfp_t gfp_mask)
 {
 	struct zoneref *z;
 	struct zone *zone;
-	bool ret = true;
+	int ret = 1;
 
 	spin_lock(&zone_scan_lock);
-	for_each_zone_zonelist(zone, z, zonelist, gfp_zone(gfp_mask))
+	for_each_zone_zonelist(zone, z, zonelist, gfp_zone(gfp_mask)) {
 		if (zone_is_oom_locked(zone)) {
-			ret = false;
+			ret = 0;
 			goto out;
 		}
+	}
 
-	/*
-	 * Lock each zone in the zonelist under zone_scan_lock so a parallel
-	 * call to oom_zonelist_trylock() doesn't succeed when it shouldn't.
-	 */
-	for_each_zone_zonelist(zone, z, zonelist, gfp_zone(gfp_mask))
+	for_each_zone_zonelist(zone, z, zonelist, gfp_zone(gfp_mask)) {
+		/*
+		 * Lock each zone in the zonelist under zone_scan_lock so a
+		 * parallel invocation of try_set_zonelist_oom() doesn't succeed
+		 * when it shouldn't.
+		 */
 		zone_set_flag(zone, ZONE_OOM_LOCKED);
+	}
 
 out:
 	spin_unlock(&zone_scan_lock);
@@ -632,14 +605,15 @@ out:
  * allocation attempts with zonelists containing them may now recall the OOM
  * killer, if necessary.
  */
-void oom_zonelist_unlock(struct zonelist *zonelist, gfp_t gfp_mask)
+void clear_zonelist_oom(struct zonelist *zonelist, gfp_t gfp_mask)
 {
 	struct zoneref *z;
 	struct zone *zone;
 
 	spin_lock(&zone_scan_lock);
-	for_each_zone_zonelist(zone, z, zonelist, gfp_zone(gfp_mask))
+	for_each_zone_zonelist(zone, z, zonelist, gfp_zone(gfp_mask)) {
 		zone_clear_flag(zone, ZONE_OOM_LOCKED);
+	}
 	spin_unlock(&zone_scan_lock);
 }
 
@@ -676,13 +650,9 @@ void out_of_memory(struct zonelist *zonelist, gfp_t gfp_mask,
 	 * If current has a pending SIGKILL or is exiting, then automatically
 	 * select it.  The goal is to allow it to allocate so that it may
 	 * quickly exit and free its memory.
-	 *
-	 * But don't select if current has already released its mm and cleared
-	 * TIF_MEMDIE flag at exit_mm(), otherwise an OOM livelock may occur.
 	 */
-	if (current->mm &&
-	    (fatal_signal_pending(current) || task_will_free_mem(current))) {
-		mark_tsk_oom_victim(current);
+	if (fatal_signal_pending(current) || current->flags & PF_EXITING) {
+		set_thread_flag(TIF_MEMDIE);
 		return;
 	}
 
@@ -737,9 +707,9 @@ void pagefault_out_of_memory(void)
 	if (mem_cgroup_oom_synchronize(true))
 		return;
 
-	zonelist = node_zonelist(first_memory_node, GFP_KERNEL);
-	if (oom_zonelist_trylock(zonelist, GFP_KERNEL)) {
+	zonelist = node_zonelist(first_online_node, GFP_KERNEL);
+	if (try_set_zonelist_oom(zonelist, GFP_KERNEL)) {
 		out_of_memory(NULL, 0, 0, NULL, false);
-		oom_zonelist_unlock(zonelist, GFP_KERNEL);
+		clear_zonelist_oom(zonelist, GFP_KERNEL);
 	}
 }

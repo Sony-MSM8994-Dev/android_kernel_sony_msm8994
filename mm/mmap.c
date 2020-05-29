@@ -36,7 +36,6 @@
 #include <linux/sched/sysctl.h>
 #include <linux/notifier.h>
 #include <linux/memory.h>
-#include <linux/sched.h>
 
 #include <asm/uaccess.h>
 #include <asm/cacheflush.h>
@@ -1239,6 +1238,9 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
 
 	*populate = 0;
 
+	if (!len)
+		return -EINVAL;
+
 	/*
 	 * Does the application expect PROT_READ to imply PROT_EXEC?
 	 *
@@ -1248,9 +1250,6 @@ unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
 	if ((prot & PROT_READ) && (current->personality & READ_IMPLIES_EXEC))
 		if (!(file && (file->f_path.mnt->mnt_flags & MNT_NOEXEC)))
 			prot |= PROT_EXEC;
-
-	if (!len)
-		return -EINVAL;
 
 	if (!(flags & MAP_FIXED))
 		addr = round_hint_to_min(addr);
@@ -2084,17 +2083,14 @@ static int acct_stack_growth(struct vm_area_struct *vma,
 {
 	struct mm_struct *mm = vma->vm_mm;
 	struct rlimit *rlim = current->signal->rlim;
-	unsigned long new_start, actual_size;
+	unsigned long new_start;
 
 	/* address space limit tests */
 	if (!may_expand_vm(mm, grow))
 		return -ENOMEM;
 
 	/* Stack limit test */
-	actual_size = size;
-	if (size && (vma->vm_flags & (VM_GROWSUP | VM_GROWSDOWN)))
-		actual_size -= PAGE_SIZE;
-	if (actual_size > ACCESS_ONCE(rlim[RLIMIT_STACK].rlim_cur))
+	if (size > ACCESS_ONCE(rlim[RLIMIT_STACK].rlim_cur))
 		return -ENOMEM;
 
 	/* mlock limit tests */
@@ -2144,7 +2140,7 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 
 	/* Guard against exceeding limits of the address space. */
 	address &= PAGE_MASK;
-	if (address >= TASK_SIZE)
+	if (address >= (TASK_SIZE & PAGE_MASK))
 		return -ENOMEM;
 	address += PAGE_SIZE;
 
@@ -2156,7 +2152,8 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
 		gap_addr = TASK_SIZE;
 
 	next = vma->vm_next;
-	if (next && next->vm_start < gap_addr) {
+	if (next && next->vm_start < gap_addr &&
+			(next->vm_flags & (VM_WRITE|VM_READ|VM_EXEC))) {
 		if (!(next->vm_flags & VM_GROWSUP))
 			return -ENOMEM;
 		/* Check that both stack segments have the same anon_vma? */
@@ -2236,7 +2233,8 @@ int expand_downwards(struct vm_area_struct *vma,
 	if (gap_addr > address)
 		return -ENOMEM;
 	prev = vma->vm_prev;
-	if (prev && prev->vm_end > gap_addr) {
+	if (prev && prev->vm_end > gap_addr &&
+			(prev->vm_flags & (VM_WRITE|VM_READ|VM_EXEC))) {
 		if (!(prev->vm_flags & VM_GROWSDOWN))
 			return -ENOMEM;
 		/* Check that both stack segments have the same anon_vma? */
@@ -2324,8 +2322,7 @@ find_extend_vma(struct mm_struct *mm, unsigned long addr)
 	vma = find_vma_prev(mm, addr, &prev);
 	if (vma && (vma->vm_start <= addr))
 		return vma;
-	/* don't alter vm_end if the coredump is running */
-	if (!prev || !mmget_still_valid(mm) || expand_stack(prev, addr))
+	if (!prev || expand_stack(prev, addr))
 		return NULL;
 	if (prev->vm_flags & VM_LOCKED)
 		__mlock_vma_pages_range(prev, addr, prev->vm_end, NULL);
@@ -2350,9 +2347,6 @@ find_extend_vma(struct mm_struct * mm, unsigned long addr)
 	if (vma->vm_start <= addr)
 		return vma;
 	if (!(vma->vm_flags & VM_GROWSDOWN))
-		return NULL;
-	/* don't alter vm_start if the coredump is running */
-	if (!mmget_still_valid(mm))
 		return NULL;
 	start = vma->vm_start;
 	if (expand_stack(vma, addr))
