@@ -93,7 +93,7 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 	int other_file = global_page_state(NR_FILE_PAGES) -
 						global_page_state(NR_SHMEM) -
 						global_page_state(NR_UNEVICTABLE) -
-						total_swapcache_pages;
+						total_swapcache_pages();
 
 	if (lowmem_adj_size < array_size)
 		array_size = lowmem_adj_size;
