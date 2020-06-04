@@ -19,14 +19,6 @@
 #include <asm/tlbflush.h>
 #include "mm.h"
 
-void *kmap(struct page *page)
-{
-	might_sleep();
-	if (!PageHighMem(page))
-		return page_address(page);
-	return kmap_high(page);
-}
-EXPORT_SYMBOL(kmap);
 
 void kunmap(struct page *page)
 {

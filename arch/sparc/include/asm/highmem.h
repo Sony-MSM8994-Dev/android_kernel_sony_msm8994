@@ -49,7 +49,6 @@ extern void kmap_init(void) __init;
 
 #define PKMAP_END (PKMAP_ADDR(LAST_PKMAP))
 
-extern void *kmap_high(struct page *page);
 extern void kunmap_high(struct page *page);
 
 static inline void *kmap(struct page *page)
