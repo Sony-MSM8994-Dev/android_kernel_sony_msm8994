@@ -19,7 +19,8 @@
 #include <asm/tlbflush.h>
 #include "mm.h"
 
-void *kmap_atomic_high(struct page *page)
+
+void *kmap_atomic_high_prot(struct page *page, pgprot_t prot)
 {
 	unsigned int idx;
 	unsigned long vaddr;
@@ -56,10 +57,11 @@ void *kmap_atomic_high(struct page *page)
 	 * with the new mapping.
 	 */
 	set_top_pte(vaddr, mk_pte(page, kmap_prot));
+	//set_fixmap_pte(idx, mk_pte(page, prot));
 
 	return (void *)vaddr;
 }
-EXPORT_SYMBOL(kmap_atomic_high);
+EXPORT_SYMBOL(kmap_atomic_high_prot);
 
 void kunmap_atomic_high(void *kvaddr)
 {
