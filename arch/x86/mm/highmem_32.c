@@ -3,16 +3,6 @@
 #include <linux/swap.h> /* for totalram_pages */
 #include <linux/bootmem.h>
 
-void kunmap(struct page *page)
-{
-	if (in_interrupt())
-		BUG();
-	if (!PageHighMem(page))
-		return;
-	kunmap_high(page);
-}
-EXPORT_SYMBOL(kunmap);
-
 /*
  * kmap_atomic/kunmap_atomic is significantly faster than kmap/kunmap because
  * no global lock is needed and because the kmap code must perform a global TLB
