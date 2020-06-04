@@ -51,8 +51,6 @@ extern struct page *kmap_atomic_to_page(void *ptr);
 
 extern void kmap_init(void);
 
-#define kmap_prot PAGE_KERNEL
-
 #endif /* __KERNEL__ */
 
 #endif /* _ASM_HIGHMEM_H */
