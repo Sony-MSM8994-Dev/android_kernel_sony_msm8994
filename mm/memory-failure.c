@@ -970,7 +970,7 @@ static int hwpoison_user_mappings(struct page *p, unsigned long pfn,
 	if (kill)
 		collect_procs(ppage, &tokill, flags & MF_ACTION_REQUIRED);
 
-	ret = try_to_unmap(ppage, ttu, NULL);
+	ret = try_to_unmap(ppage, ttu);
 	if (ret != SWAP_SUCCESS)
 		printk(KERN_ERR "MCE %#lx: failed to unmap page (mapcount=%d)\n",
 				pfn, page_mapcount(ppage));
@@ -1659,8 +1659,6 @@ static int __soft_offline_page(struct page *page, int flags)
 			 * source page should be freed back to buddy before
 			 * setting PG_hwpoison.
 			 */
-			if (!is_free_buddy_page(page))
-				lru_add_drain_all();
 			if (!is_free_buddy_page(page))
 				drain_all_pages();
 			SetPageHWPoison(page);

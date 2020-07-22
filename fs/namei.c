@@ -197,6 +197,7 @@ recopy:
 		goto error;
 
 	result->uptr = filename;
+	result->aname = NULL;
 	audit_getname(result);
 	return result;
 
@@ -211,6 +212,35 @@ getname(const char __user * filename)
 	return getname_flags(filename, 0, NULL);
 }
 EXPORT_SYMBOL(getname);
+
+/*
+ * The "getname_kernel()" interface doesn't do pathnames longer
+ * than EMBEDDED_NAME_MAX. Deal with it - you're a kernel user.
+ */
+struct filename *
+getname_kernel(const char * filename)
+{
+	struct filename *result;
+	char *kname;
+	int len;
+
+	len = strlen(filename);
+	if (len >= EMBEDDED_NAME_MAX)
+		return ERR_PTR(-ENAMETOOLONG);
+
+	result = __getname();
+	if (unlikely(!result))
+		return ERR_PTR(-ENOMEM);
+
+	kname = (char *)result + sizeof(*result);
+	result->name = kname;
+	result->uptr = NULL;
+	result->aname = NULL;
+	result->separate = false;
+
+	strlcpy(kname, filename, EMBEDDED_NAME_MAX);
+	return result;
+}
 
 #ifdef CONFIG_AUDITSYSCALL
 void putname(struct filename *name)
@@ -2023,16 +2053,6 @@ static int path_lookupat(int dfd, const char *name,
 		if (!can_lookup(nd->inode)) {
 			path_put(&nd->path);
 			err = -ENOTDIR;
-		}
-	}
-
-	if (!err) {
-		struct super_block *sb = nd->inode->i_sb;
-		if (sb->s_flags & MS_RDONLY) {
-			if (d_is_su(nd->path.dentry) && !su_visible()) {
-				path_put(&nd->path);
-				err = -ENOENT;
-			}
 		}
 	}
 
