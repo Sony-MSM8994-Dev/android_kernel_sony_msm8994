@@ -65,7 +65,13 @@ static const match_table_t tokens = {
 	{ Opt_err, NULL     }
 };
 
-static inline struct binderfs_info *BINDERFS_I(const struct inode *inode)
+static const struct fs_parameter_spec binderfs_fs_parameters[] = {
+	fsparam_u32("max",	Opt_max),
+	fsparam_enum("stats",	Opt_stats_mode, binderfs_param_stats),
+	{}
+};
+
+static inline struct binderfs_info *BINDERFS_SB(const struct super_block *sb)
 {
 	return inode->i_sb->s_fs_info;
 }
