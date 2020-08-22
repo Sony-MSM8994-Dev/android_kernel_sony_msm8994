@@ -26,8 +26,9 @@
 
 #include "mdss_fb.h"
 #include "mdss_mdp.h"
-#include "splash.h"
 #include "mdss_mdp_splash_logo.h"
+
+#include "splash_480.h"
 
 #define INVALID_PIPE_INDEX 0xFFFF
 #define MAX_FRAME_DONE_COUNT_WAIT 2
