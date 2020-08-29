@@ -50,7 +50,7 @@
  */
 #define MIN_BCL_POLL_INTERVAL 10
 #define BATTERY_VOLTAGE_MIN 3400
-#define BTM_8084_FREQ_MITIG_LIMIT 2016000
+#define BTM_8084_FREQ_MITIG_LIMIT 1958400
 #define MAX_CPU_NAME 10
 
 #define BCL_FETCH_DT_U32(_dev, _key, _search_str, _ret, _out, _exit) do { \
