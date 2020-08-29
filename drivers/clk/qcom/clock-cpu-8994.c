@@ -1084,7 +1084,7 @@ static struct mux_clk cpu_debug_mux = {
 	},
 };
 
-#ifdef CONFIG_CPU_VOLTAGE_CONTROL
+#ifdef CONFIG_CPU_VOLTAGE_CONTROL_MSM8994
 extern int cpr_regulator_get_corner_voltage(struct regulator *regulator,
 		int corner);
 extern int cpr_regulator_set_corner_voltage(struct regulator *regulator,

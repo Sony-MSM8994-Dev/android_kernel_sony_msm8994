@@ -1121,7 +1121,7 @@ static struct regulator_ops cpr_corner_ops = {
 	.list_corner_voltage	= cpr_regulator_list_corner_voltage,
 };
 
-#ifdef CONFIG_CPU_VOLTAGE_CONTROL
+#ifdef CONFIG_CPU_VOLTAGE_CONTROL_MSM8994
 int cpr_regulator_get_corner_voltage(struct regulator *regulator,
 		int corner)
 {

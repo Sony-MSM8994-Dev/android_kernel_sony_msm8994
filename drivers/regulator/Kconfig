@@ -630,7 +630,7 @@ config SOMC_LCD_OCP_ENABLED
 	help
 	  Select this to enable SoMC LCD Over current protection function.
 	  
-config CPU_VOLTAGE_CONTROL
+config CPU_VOLTAGE_CONTROL_MSM8994
 	bool "Enable CPU voltage control"
 	help
 	  Enable CPU voltage control for MSM8994.
