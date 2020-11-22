@@ -136,6 +136,7 @@ exit_free:
  */
 static int mdss_livedisplay_set_rgb_locked(struct msm_fb_data_type *mfd)
 {
+	u32 copyback = 0;
 	static struct mdp_pcc_cfg_data pcc_cfg;
 	struct mdss_livedisplay_ctx *mlc;
 
@@ -158,7 +159,7 @@ static int mdss_livedisplay_set_rgb_locked(struct msm_fb_data_type *mfd)
 	pcc_cfg.g.g = mlc->g;
 	pcc_cfg.b.b = mlc->b;
 
-	return mdss_mdp_user_pcc_config(&pcc_cfg);
+	return mdss_mdp_pcc_config(&pcc_cfg, &copyback);
 }
 
 /*
