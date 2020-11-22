@@ -34,7 +34,6 @@
 
 #include "mdss_mdp.h"
 #include "mdss_dsi.h"
-#include "mdss_livedisplay.h"
 
 #define DT_CMD_HDR 6
 #define MIN_REFRESH_RATE 30
@@ -243,7 +242,7 @@ u32 mdss_dsi_panel_cmd_read(struct mdss_dsi_ctrl_pdata *ctrl, char cmd0,
 	return 0;
 }
 
-void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,
+static void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,
 			struct dsi_panel_cmds *pcmds, u32 flags)
 {
 	struct dcs_cmd_req cmdreq;
@@ -1338,7 +1337,6 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 			}
 		}
 	}
-
 end:
 	pinfo->blank_state = MDSS_PANEL_BLANK_UNBLANK;
 	pr_debug("%s:-\n", __func__);
@@ -1806,7 +1804,7 @@ static void mdss_dsi_parse_trigger(struct device_node *np, char *trigger,
 	}
 }
 
-int mdss_dsi_parse_dcs_cmds(struct device_node *np,
+static int mdss_dsi_parse_dcs_cmds(struct device_node *np,
 		struct dsi_panel_cmds *pcmds, char *cmd_key, char *link_key)
 {
 	const char *data;
@@ -2835,24 +2833,19 @@ static int mdss_dsi_panel_parse_display_timings(struct device_node *np,
 
 	timings_np = of_get_child_by_name(np, "qcom,mdss-dsi-display-timings");
 	if (!timings_np) {
-		struct dsi_panel_timing *pt;
-
-		pt = kzalloc(sizeof(*pt), GFP_KERNEL);
-		if (!pt)
-			return -ENOMEM;
+		struct dsi_panel_timing pt;
+		memset(&pt, 0, sizeof(struct dsi_panel_timing));
 
 		/*
 		 * display timings node is not available, fallback to reading
 		 * timings directly from root node instead
 		 */
 		pr_debug("reading display-timings from panel node\n");
-		rc = mdss_dsi_panel_timing_from_dt(np, pt);
+		rc = mdss_dsi_panel_timing_from_dt(np, &pt);
 		if (!rc) {
 			mdss_dsi_panel_config_res_properties(np,
-				panel_data->panel_info.sim_panel_mode, pt);
-			rc = mdss_dsi_panel_timing_switch(ctrl, &pt->timing);
-		} else {
-			kfree(pt);
+				panel_data->panel_info.sim_panel_mode, &pt);
+			rc = mdss_dsi_panel_timing_switch(ctrl, &pt.timing);
 		}
 		return rc;
 	}
@@ -3455,8 +3448,6 @@ static int mdss_panel_parse_dt(struct device_node *np,
 		rc = of_property_read_u32(np, "somc,poll-esd-reg-val", &tmp);
 		spec_pdata->polling.esd.correct_val = (!rc ? tmp : 0x9C);
 	}
-
-	mdss_livedisplay_parse_dt(np, pinfo);
 
 	return 0;
 
