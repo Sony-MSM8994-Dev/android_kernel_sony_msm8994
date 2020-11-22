@@ -2692,8 +2692,6 @@ static void pp_update_pcc_regs(char __iomem *addr,
 
 static u32 pcc_rescale(u32 raw, u32 user)
 {
-	int val = 0;
-
 	if (raw == 0 && user == 0)
 		return 0;
 	else if (raw == 0)
@@ -2701,8 +2699,9 @@ static u32 pcc_rescale(u32 raw, u32 user)
 	else if (user == 0)
 		return raw;
 
-	val = 32768 - ((32768 - raw) + (32768 - user));
-	return val < 100 ? 100 : val;
+	// no floats
+
+	return (u32)((((u64)raw << 15) * (u64)user) >> 30);
 }
 
 static void pcc_combine(struct mdp_pcc_cfg_data *raw,
