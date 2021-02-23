@@ -51,6 +51,18 @@ struct restart_block {
 extern long do_no_restart_syscall(struct restart_block *parm);
 
 #include <linux/bitops.h>
+
+/*
+ * For per-arch arch_within_stack_frames() implementations, defined in
+ * asm/thread_info.h.
+ */
+enum {
+	BAD_STACK = -1,
+	NOT_STACK = 0,
+	GOOD_FRAME,
+	GOOD_STACK,
+};
+
 #include <asm/thread_info.h>
 
 #ifdef __KERNEL__
@@ -149,6 +161,16 @@ static inline bool test_and_clear_restore_sigmask(void)
 #ifndef HAVE_SET_RESTORE_SIGMASK
 #error "no set_restore_sigmask() provided and default one won't work"
 #endif
+
+#ifndef CONFIG_HAVE_ARCH_WITHIN_STACK_FRAMES
+static inline int arch_within_stack_frames(const void * const stack,
+					   const void * const stackend,
+					   const void *obj, unsigned long len)
+{
+	return 0;
+}
+#endif
+
 #ifdef CONFIG_HARDENED_USERCOPY
 extern void __check_object_size(const void *ptr, unsigned long n,
 					bool to_user);
