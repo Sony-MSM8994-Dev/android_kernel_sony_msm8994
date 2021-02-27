@@ -2996,7 +2996,12 @@ static int wcd_cpe_cdc_lab_enable(void *core_handle)
 	struct wcd_cpe_core *core = (struct wcd_cpe_core *)core_handle;
 	int rc;
 
-	return ret;
+	rc = cpe_svc_toggle_lab(core->cpe_handle, true);
+	if (rc)
+		dev_err(core->dev,
+			"%s: lab enable failed, err = %d\n",
+			__func__, rc);
+	return rc;
 }
 
 static int slim_master_read_enable(void *core_handle,
