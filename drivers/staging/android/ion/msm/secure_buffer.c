@@ -172,8 +172,6 @@ int msm_ion_unsecure_table(struct sg_table *table)
 
 }
 
-<<<<<<< HEAD
-=======
 static struct info_list *get_info_list(struct sg_table *table)
 {
 	int i;
