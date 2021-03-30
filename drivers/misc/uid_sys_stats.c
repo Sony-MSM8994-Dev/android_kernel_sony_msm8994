@@ -100,7 +100,7 @@ static struct uid_entry *find_or_register_uid(uid_t uid)
 
 static int uid_cputime_show(struct seq_file *m, void *v)
 {
-	struct uid_entry *uid_entry;
+	struct uid_entry *uid_entry = NULL;
 	struct task_struct *task, *temp;
 	struct user_namespace *user_ns = current_user_ns();
 	cputime_t utime;
@@ -115,12 +115,13 @@ static int uid_cputime_show(struct seq_file *m, void *v)
 		uid_entry->active_utime = 0;
 	}
 
-	read_lock(&tasklist_lock);
+	rcu_read_lock();
 	do_each_thread(temp, task) {
 		uid = from_kuid_munged(user_ns, task_uid(task));
-		uid_entry = find_or_register_uid(uid);
+		if (!uid_entry || uid_entry->uid != uid)
+			uid_entry = find_or_register_uid(uid);
 		if (!uid_entry) {
-			read_unlock(&tasklist_lock);
+			rcu_read_unlock();
 			rt_mutex_unlock(&uid_lock);
 			pr_err("%s: failed to find the uid_entry for uid %d\n",
 				__func__, uid);
@@ -130,16 +131,18 @@ static int uid_cputime_show(struct seq_file *m, void *v)
 		uid_entry->active_utime += utime;
 		uid_entry->active_stime += stime;
 	} while_each_thread(temp, task);
-	read_unlock(&tasklist_lock);
+	rcu_read_unlock();
 
 	hash_for_each(hash_table, bkt, uid_entry, hash) {
 		cputime_t total_utime = uid_entry->utime +
 							uid_entry->active_utime;
 		cputime_t total_stime = uid_entry->stime +
 							uid_entry->active_stime;
-		seq_printf(m, "%d: %u %u\n", uid_entry->uid,
-						cputime_to_usecs(total_utime),
-						cputime_to_usecs(total_stime));
+		seq_printf(m, "%d: %llu %llu\n", uid_entry->uid,
+			(unsigned long long)jiffies_to_msecs(
+				cputime_to_jiffies(total_utime)) * USEC_PER_MSEC,
+			(unsigned long long)jiffies_to_msecs(
+				cputime_to_jiffies(total_stime)) * USEC_PER_MSEC);
 	}
 
 	rt_mutex_unlock(&uid_lock);
@@ -170,8 +173,7 @@ static ssize_t uid_remove_write(struct file *file,
 	struct hlist_node *tmp;
 	char uids[128];
 	char *start_uid, *end_uid = NULL;
-	long int start = 0, end = 0;
-	uid_t uid_start, uid_end;
+	long int uid_start = 0, uid_end = 0;
 
 	if (count >= sizeof(uids))
 		count = sizeof(uids) - 1;
@@ -186,32 +188,15 @@ static ssize_t uid_remove_write(struct file *file,
 	if (!start_uid || !end_uid)
 		return -EINVAL;
 
-	if (kstrtol(start_uid, 10, &start) != 0 ||
-		kstrtol(end_uid, 10, &end) != 0) {
+	if (kstrtol(start_uid, 10, &uid_start) != 0 ||
+		kstrtol(end_uid, 10, &uid_end) != 0) {
 		return -EINVAL;
 	}
-
-#define UID_T_MAX (((uid_t)~0U)-1)
-	if ((start < 0) || (end < 0) ||
-		(start > UID_T_MAX) || (end > UID_T_MAX)) {
-		return -EINVAL;
-	}
-
-	uid_start = start;
-	uid_end = end;
-
-	/* TODO need to unify uid_sys_stats interface with uid_time_in_state.
-	 * Here we are reusing remove_uid_range to reduce the number of
-	 * sys calls made by userspace clients, remove_uid_range removes uids
-	 * from both here as well as from cpufreq uid_time_in_state
-	 */
-	cpufreq_task_stats_remove_uids(uid_start, uid_end);
-
 	rt_mutex_lock(&uid_lock);
 
 	for (; uid_start <= uid_end; uid_start++) {
 		hash_for_each_possible_safe(hash_table, uid_entry, tmp,
-							hash, uid_start) {
+							hash, (uid_t)uid_start) {
 			if (uid_start == uid_entry->uid) {
 				hash_del(&uid_entry->hash);
 				kfree(uid_entry);
@@ -290,7 +275,7 @@ static void compute_uid_io_bucket_stats(struct io_stats *io_bucket,
 
 static void update_io_stats_all_locked(void)
 {
-	struct uid_entry *uid_entry;
+	struct uid_entry *uid_entry = NULL;
 	struct task_struct *task, *temp;
 	struct user_namespace *user_ns = current_user_ns();
 	unsigned long bkt;
@@ -303,7 +288,8 @@ static void update_io_stats_all_locked(void)
 	rcu_read_lock();
 	do_each_thread(temp, task) {
 		uid = from_kuid_munged(user_ns, task_uid(task));
-		uid_entry = find_or_register_uid(uid);
+		if (!uid_entry || uid_entry->uid != uid)
+			uid_entry = find_or_register_uid(uid);
 		if (!uid_entry)
 			continue;
 		add_uid_io_stats(uid_entry, task, UID_STATE_TOTAL_CURR);

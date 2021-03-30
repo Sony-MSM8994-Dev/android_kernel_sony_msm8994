@@ -52,6 +52,8 @@ enum {
  * notify_rxv:	Receive notification function for vector buffers (required if
  *		notify_rx is not provided)
  * notify_sig:	Signal-change notification (optional)
+ * notify_rx_tracer_pkt:	Receive notification for tracer packet
+ * notify_remote_rx_intent:	Receive notification for remote-queued RX intent
  *
  * This structure is passed into the glink_open() call to setup
  * configuration handles.  All unused fields should be set to 0.
@@ -85,6 +87,10 @@ struct glink_open_config {
 			const void *pkt_priv);
 	void (*notify_tx_abort)(void *handle, const void *priv,
 			const void *pkt_priv);
+	void (*notify_rx_tracer_pkt)(void *handle, const void *priv,
+			const void *pkt_priv, const void *ptr, size_t size);
+	void (*notify_remote_rx_intent)(void *handle, const void *priv,
+					size_t size);
 };
 
 enum glink_link_state {
@@ -121,6 +127,7 @@ struct glink_link_info {
 enum tx_flags {
 	GLINK_TX_REQ_INTENT = 0x1,
 	GLINK_TX_SINGLE_THREADED = 0x2,
+	GLINK_TX_TRACER_PKT = 0x4,
 };
 
 #ifdef CONFIG_MSM_GLINK
@@ -181,6 +188,17 @@ int glink_tx(void *handle, void *pkt_priv, void *data, size_t size,
 int glink_queue_rx_intent(void *handle, const void *pkt_priv, size_t size);
 
 /**
+ * glink_rx_intent_exists() - Check if an intent of size exists.
+ *
+ * @handle:	handle returned by glink_open()
+ * @size:	size of an intent to check or 0 for any intent
+ *
+ * Return:	TRUE if an intent exists with greater than or equal to the size
+ *		else FALSE
+ */
+bool glink_rx_intent_exists(void *handle, size_t size);
+
+/**
  * glink_rx_done() - Return receive buffer to remote side.
  *
  * @handle:	handle returned by glink_open()
@@ -230,19 +248,21 @@ int glink_sigs_set(void *handle, uint32_t sigs);
  * glink_sigs_local_get() - Get the local signals for the GLINK channel
  *
  * handle:	handle returned by glink_open()
+ * sigs:	Pointer to hold the signals
  *
- * Return: Local signal value or standard Linux error code for failure case
+ * Return: 0 for success; standard Linux error code for failure case
  */
-int glink_sigs_local_get(void *handle);
+int glink_sigs_local_get(void *handle, uint32_t *sigs);
 
 /**
  * glink_sigs_remote_get() - Get the Remote signals for the GLINK channel
  *
  * handle:	handle returned by glink_open()
+ * sigs:	Pointer to hold the signals
  *
- * Return: Remote signal value or standard Linux error code for failure case
+ * Return: 0 for success; standard Linux error code for failure case
  */
-int glink_sigs_remote_get(void *handle);
+int glink_sigs_remote_get(void *handle, uint32_t *sigs);
 
 /**
  * glink_register_link_state_cb() - Register for link state notification
@@ -290,6 +310,11 @@ static inline int glink_queue_rx_intent(void *handle, const void *pkt_priv,
 	return -ENODEV;
 }
 
+static inline bool glink_rx_intent_exists(void *handle, size_t size)
+{
+	return -ENODEV;
+}
+
 static inline int glink_rx_done(void *handle, const void *ptr, bool reuse)
 {
 	return -ENODEV;
@@ -309,12 +334,12 @@ static inline int glink_sigs_set(void *handle, uint32_t sigs)
 	return -ENODEV;
 }
 
-static inline int glink_sigs_local_get(void *handle)
+static inline int glink_sigs_local_get(void *handle, uint32_t *sigs)
 {
 	return -ENODEV;
 }
 
-static inline int glink_sigs_remote_get(void *handle)
+static inline int glink_sigs_remote_get(void *handle, uint32_t *sigs)
 {
 	return -ENODEV;
 }

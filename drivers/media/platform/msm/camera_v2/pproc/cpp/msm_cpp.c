@@ -658,10 +658,10 @@ static void msm_cpp_poll(void __iomem *cpp_base, u32 val)
 {
 	uint32_t tmp, retry = 0;
 	do {
-		usleep_range(1000, 2000);
 		tmp = msm_cpp_read(cpp_base);
 		if (tmp != 0xDEADBEEF)
 			CPP_LOW("poll: 0%x\n", tmp);
+		usleep_range(200, 250);
 	} while ((tmp != val) && (retry++ < MSM_CPP_POLL_RETRIES));
 	if (retry < MSM_CPP_POLL_RETRIES)
 		CPP_LOW("Poll finished\n");
@@ -2317,7 +2317,6 @@ static int msm_cpp_copy_from_ioctl_ptr(void *dst_ptr,
 }
 #endif
 
-
 static int msm_cpp_validate_ioctl_input(unsigned int cmd, void *arg,
 	struct msm_camera_v4l2_ioctl_t **ioctl_ptr)
 {
@@ -2449,9 +2448,10 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 	case VIDIOC_MSM_CPP_APPEND_STREAM_BUFF_INFO:
 	case VIDIOC_MSM_CPP_ENQUEUE_STREAM_BUFF_INFO: {
 		uint32_t j;
-		struct msm_cpp_stream_buff_info_t *u_stream_buff_info;
+		struct msm_cpp_stream_buff_info_t *u_stream_buff_info = NULL;
 		struct msm_cpp_stream_buff_info_t k_stream_buff_info;
-		struct msm_cpp_buff_queue_info_t *buff_queue_info;
+		struct msm_cpp_buff_queue_info_t *buff_queue_info = NULL;
+		memset(&k_stream_buff_info, 0, sizeof(k_stream_buff_info));
 		CPP_DBG("VIDIOC_MSM_CPP_ENQUEUE_STREAM_BUFF_INFO\n");
 		if (sizeof(struct msm_cpp_stream_buff_info_t) !=
 			ioctl_ptr->len) {
@@ -2474,13 +2474,6 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 			mutex_unlock(&cpp_dev->mutex);
 			return -EINVAL;
 		}
-		if (u_stream_buff_info->num_buffs == 0) {
-			pr_err("%s:%d: Invalid number of buffers\n", __func__,
-				__LINE__);
-			kfree(u_stream_buff_info);
-			mutex_unlock(&cpp_dev->mutex);
-			return -EINVAL;
-		}
 		k_stream_buff_info.num_buffs = u_stream_buff_info->num_buffs;
 		k_stream_buff_info.identity = u_stream_buff_info->identity;
 
@@ -2492,27 +2485,31 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 			return -EINVAL;
 		}
 
-		k_stream_buff_info.buffer_info =
-			kzalloc(k_stream_buff_info.num_buffs *
-			sizeof(struct msm_cpp_buffer_info_t), GFP_KERNEL);
-		if (ZERO_OR_NULL_PTR(k_stream_buff_info.buffer_info)) {
-			pr_err("%s:%d: malloc error\n", __func__, __LINE__);
-			kfree(u_stream_buff_info);
-			mutex_unlock(&cpp_dev->mutex);
-			return -EINVAL;
-		}
+		if (u_stream_buff_info->num_buffs != 0) {
+			k_stream_buff_info.buffer_info =
+				kzalloc(k_stream_buff_info.num_buffs *
+				sizeof(struct msm_cpp_buffer_info_t),
+				GFP_KERNEL);
+			if (ZERO_OR_NULL_PTR(k_stream_buff_info.buffer_info)) {
+				pr_err("%s:%d: malloc error\n",
+					__func__, __LINE__);
+				kfree(u_stream_buff_info);
+				mutex_unlock(&cpp_dev->mutex);
+				return -EINVAL;
+			}
 
-		rc = (copy_from_user(k_stream_buff_info.buffer_info,
+			rc = (copy_from_user(k_stream_buff_info.buffer_info,
 				(void __user *)u_stream_buff_info->buffer_info,
 				k_stream_buff_info.num_buffs *
 				sizeof(struct msm_cpp_buffer_info_t)) ?
 				-EFAULT : 0);
-		if (rc) {
-			ERR_COPY_FROM_USER();
-			kfree(k_stream_buff_info.buffer_info);
-			kfree(u_stream_buff_info);
-			mutex_unlock(&cpp_dev->mutex);
-			return -EINVAL;
+			if (rc) {
+				ERR_COPY_FROM_USER();
+				kfree(k_stream_buff_info.buffer_info);
+				kfree(u_stream_buff_info);
+				mutex_unlock(&cpp_dev->mutex);
+				return -EINVAL;
+			}
 		}
 
 		buff_queue_info = msm_cpp_get_buff_queue_entry(cpp_dev,
@@ -2534,6 +2531,14 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 				cpp_dev->state = CPP_STATE_ACTIVE;
 				msm_cpp_clear_timer(cpp_dev);
 				msm_cpp_clean_queue(cpp_dev);
+
+				disable_irq(cpp_dev->irq->start);
+				cpp_load_fw(cpp_dev, cpp_dev->fw_name_bin);
+				enable_irq(cpp_dev->irq->start);
+				msm_camera_io_w_mb(0x7C8, cpp_dev->base +
+					MSM_CPP_MICRO_IRQGEN_MASK);
+				msm_camera_io_w_mb(0xFFFF, cpp_dev->base +
+					MSM_CPP_MICRO_IRQGEN_CLR);
 			}
 			cpp_dev->stream_cnt++;
 			CPP_DBG("stream_cnt:%d\n", cpp_dev->stream_cnt);
@@ -2565,8 +2570,10 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 		}
 
 STREAM_BUFF_END:
-		kfree(k_stream_buff_info.buffer_info);
-		kfree(u_stream_buff_info);
+		if (k_stream_buff_info.buffer_info)
+			kfree(k_stream_buff_info.buffer_info);
+		if (u_stream_buff_info)
+			kfree(u_stream_buff_info);
 
 		break;
 	}
@@ -2798,11 +2805,9 @@ STREAM_BUFF_END:
 		}
 		break;
 	}
-	default:
-		pr_err_ratelimited("invalid value: cmd=0x%x\n", cmd);
-		break;
 	case VIDIOC_MSM_CPP_IOMMU_ATTACH: {
-		if (cpp_dev->iommu_state == CPP_IOMMU_STATE_DETACHED) {
+		if ((cpp_dev->iommu_state == CPP_IOMMU_STATE_DETACHED) &&
+			(cpp_dev->stream_cnt == 0)) {
 			rc = iommu_attach_device(cpp_dev->domain,
 				cpp_dev->iommu_ctx);
 			if (rc < 0) {
@@ -2838,6 +2843,9 @@ STREAM_BUFF_END:
 		}
 		break;
 	}
+	default:
+		pr_err_ratelimited("invalid value: cmd=0x%x\n", cmd);
+		break;
 	}
 	mutex_unlock(&cpp_dev->mutex);
 	CPP_DBG("X\n");

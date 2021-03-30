@@ -2,7 +2,7 @@
  * Gadget Driver for Android
  *
  * Copyright (C) 2008 Google, Inc.
- *.Copyright (c) 2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
  * Author: Mike Lockwood <lockwood@android.com>
  *         Benoit Goby <benoit@android.com>
  *
@@ -77,6 +77,9 @@ static void eject_cdrom_timer_work(struct work_struct *w);
 #include "f_ccid.c"
 #include "f_mtp.c"
 #include "f_accessory.c"
+#include "f_hid.h"
+#include "f_hid_android_keyboard.c"
+#include "f_hid_android_mouse.c"
 #include "f_rndis.c"
 #include "rndis.c"
 #include "f_qc_ecm.c"
@@ -172,6 +175,8 @@ struct android_usb_function_holder {
 *    Used for controlling ADB userspace disable/enable requests.
 * @mutex: Internal mutex for protecting device member fields.
 * @pdata: Platform data fetched from the kernel device platfrom data.
+* @last_disconnect : Time of the last disconnect. Used to enforce minimum
+*    delay before next connect.
 * @connected: True if got connect notification from the gadget UDC.
 *    False if got disconnect notification from the gadget UDC.
 * @sw_connected: Equal to 'connected' only after the connect
@@ -207,6 +212,8 @@ struct android_dev {
 	int disable_depth;
 	struct mutex mutex;
 	struct android_usb_platform_data *pdata;
+
+	ktime_t last_disconnect;
 
 	bool connected;
 	bool sw_connected;
@@ -501,10 +508,13 @@ static void android_work(struct work_struct *data)
 	}
 }
 
+#define MIN_DISCONNECT_DELAY_MS	30
+
 static int android_enable(struct android_dev *dev)
 {
 	struct usb_composite_dev *cdev = dev->cdev;
 	struct android_configuration *conf;
+	ktime_t diff;
 	int err = 0;
 
 	if (WARN_ON(!dev->disable_depth))
@@ -522,6 +532,17 @@ static int android_enable(struct android_dev *dev)
 				return err;
 			}
 		}
+
+		/*
+		 * Some controllers need a minimum delay between removing and
+		 * re-applying the pullups in order for the host to properly
+		 * detect a soft disconnect. Check here if enough time has
+		 * elapsed since the last disconnect.
+		 */
+		diff = ktime_sub(ktime_get(), dev->last_disconnect);
+		if (ktime_to_ms(diff) < MIN_DISCONNECT_DELAY_MS)
+			msleep(MIN_DISCONNECT_DELAY_MS - ktime_to_ms(diff));
+
 		usb_gadget_connect(cdev->gadget);
 	}
 
@@ -535,6 +556,8 @@ static void android_disable(struct android_dev *dev)
 
 	if (dev->disable_depth++ == 0) {
 		usb_gadget_disconnect(cdev->gadget);
+		dev->last_disconnect = ktime_get();
+
 		/* Cancel pending control requests */
 		usb_ep_dequeue(cdev->gadget->ep0, cdev->req);
 
@@ -930,7 +953,6 @@ static int rmnet_function_bind_config(struct android_usb_function *f,
 	static int rmnet_initialized, ports;
 
 	if (!rmnet_initialized) {
-		rmnet_initialized = 1;
 		strlcpy(buf, rmnet_transports, sizeof(buf));
 		b = strim(buf);
 
@@ -959,8 +981,11 @@ static int rmnet_function_bind_config(struct android_usb_function *f,
 		err = rmnet_gport_setup();
 		if (err) {
 			pr_err("rmnet: Cannot setup transports");
+			frmnet_deinit_port();
+			ports = 0;
 			goto out;
 		}
+		rmnet_initialized = 1;
 	}
 
 	for (i = 0; i < ports; i++) {
@@ -1798,14 +1823,10 @@ static int serial_function_bind_config(struct android_usb_function *f,
 {
 	char *name, *xport_name = NULL;
 	char buf[32], *b, xport_name_buf[32], *tb;
-	int err = -1, i;
-	static int serial_initialized = 0, ports = 0;
+	int err = -1, i, ports = 0;
+	static int serial_initialized;
 	struct serial_function_config *config = f->config;
 
-	if (serial_initialized)
-		goto bind_config;
-
-	serial_initialized = 1;
 	strlcpy(buf, serial_transports, sizeof(buf));
 	b = strim(buf);
 
@@ -1818,10 +1839,15 @@ static int serial_function_bind_config(struct android_usb_function *f,
 		if (name) {
 			if (tb)
 				xport_name = strsep(&tb, ",");
-			err = gserial_init_port(ports, name, xport_name);
-			if (err) {
-				pr_err("serial: Cannot open port '%s'", name);
-				goto out;
+			if (!serial_initialized) {
+				err = gserial_init_port(ports, name,
+						xport_name);
+				if (err) {
+					pr_err("serial: Cannot open port '%s'",
+							name);
+					goto out;
+				}
+				config->instances_on++;
 			}
 			ports++;
 			if (ports >= MAX_SERIAL_INSTANCES) {
@@ -1830,13 +1856,34 @@ static int serial_function_bind_config(struct android_usb_function *f,
 			}
 		}
 	}
+	/*
+	 * Make sure we always have two serials ports initialized to allow
+	 * switching composition from 1 serial function to 2 serial functions.
+	 * Mark 2nd port to use tty if user didn't specify transport.
+	 */
+	if ((config->instances_on == 1) && !serial_initialized) {
+		err = gserial_init_port(ports, "tty", "serial_tty");
+		if (err) {
+			pr_err("serial: Cannot open port '%s'", "tty");
+			goto out;
+		}
+		config->instances_on++;
+	}
+
+	/* limit the serial ports init only for boot ports */
+	if (ports > config->instances_on)
+		ports = config->instances_on;
+
+	if (serial_initialized)
+		goto bind_config;
+
 	err = gport_setup(c);
 	if (err) {
 		pr_err("serial: Cannot setup transports");
 		goto out;
 	}
 
-	for (i = 0; i < ports; i++) {
+	for (i = 0; i < config->instances_on; i++) {
 		config->f_serial_inst[i] = usb_get_function_instance("gser");
 		if (IS_ERR(config->f_serial_inst[i])) {
 			err = PTR_ERR(config->f_serial_inst[i]);
@@ -1848,7 +1895,8 @@ static int serial_function_bind_config(struct android_usb_function *f,
 			goto err_gser_usb_get_function;
 		}
 	}
-	config->instances_on = ports;
+
+	serial_initialized = 1;
 
 bind_config:
 	for (i = 0; i < ports; i++) {
@@ -2464,6 +2512,10 @@ static int mass_storage_function_init(struct android_usb_function *f,
 	config->fsg.nluns = 1;
 	snprintf(name[0], MAX_LUN_NAME, "lun");
 	config->fsg.luns[0].removable = 1;
+	config->fsg.luns[0].ro = 1;
+	config->fsg.luns[0].cdrom = 1;
+	config->fsg.cdrom_vendor_name = "SONY";
+	config->fsg.cdrom_product_name = "CD-ROM";
 
 	if (dev->pdata && dev->pdata->cdrom) {
 		config->fsg.luns[config->fsg.nluns].cdrom = 1;
@@ -2607,8 +2659,8 @@ static void mass_storage_function_enable(struct android_usb_function *f)
 			if (lun_type)
 				number_of_luns =
 					mass_storage_lun_init(f, lun_type);
-				if (number_of_luns <= 0)
-					return;
+			if (number_of_luns <= 0)
+				return;
 		}
 	} else {
 		pr_debug("No extra msc lun required.\n");
@@ -3034,6 +3086,42 @@ static struct android_usb_function midi_function = {
 	.attributes	= midi_function_attributes,
 };
 #endif
+
+static int hid_function_init(struct android_usb_function *f, struct usb_composite_dev *cdev)
+{
+	return ghid_setup(cdev->gadget, 2);
+}
+
+static void hid_function_cleanup(struct android_usb_function *f)
+{
+	ghid_cleanup();
+}
+
+static int hid_function_bind_config(struct android_usb_function *f, struct usb_configuration *c)
+{
+	int ret;
+	printk(KERN_INFO "hid keyboard\n");
+	ret = hidg_bind_config(c, &ghid_device_android_keyboard, 0);
+	if (ret) {
+		pr_info("%s: hid_function_bind_config keyboard failed: %d\n", __func__, ret);
+		return ret;
+	}
+	printk(KERN_INFO "hid mouse\n");
+	ret = hidg_bind_config(c, &ghid_device_android_mouse, 1);
+	if (ret) {
+		pr_info("%s: hid_function_bind_config mouse failed: %d\n", __func__, ret);
+		return ret;
+	}
+	return 0;
+}
+
+static struct android_usb_function hid_function = {
+	.name		= "hid",
+	.init		= hid_function_init,
+	.cleanup	= hid_function_cleanup,
+	.bind_config	= hid_function_bind_config,
+};
+
 static struct android_usb_function *supported_functions[] = {
 	&ffs_function,
 	&mbim_function,
@@ -3061,6 +3149,7 @@ static struct android_usb_function *supported_functions[] = {
 #ifdef CONFIG_SND_PCM
 	&audio_source_function,
 #endif
+	&hid_function,
 	&uasp_function,
 	&charger_function,
 #ifdef CONFIG_SND_RAWMIDI
@@ -3424,6 +3513,8 @@ functions_store(struct device *pdev, struct device_attribute *attr,
 		}
 	}
 
+	/* HID driver always enabled, it's the whole point of this kernel patch */
+	android_enable_function(dev, conf, "hid");
 	/* Free uneeded configurations if exists */
 	while (curr_conf->next != &dev->configs) {
 		conf = list_entry(curr_conf->next,
@@ -3812,7 +3903,12 @@ static int android_bind(struct usb_composite_dev *cdev)
 	strlcpy(product_string, "Android", sizeof(product_string) - 1);
 	strlcpy(serial_string, "0123456789ABCDEF", sizeof(serial_string) - 1);
 
+#ifdef CONFIG_USB_ANDROID_PRODUCTION
+	/* Set id to 0 to comply with Sony production tools */
+	id = 0;
+#else
 	id = usb_string_id(cdev);
+#endif
 	if (id < 0)
 		return id;
 	strings_dev[STRING_SERIAL_IDX].id = id;

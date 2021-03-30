@@ -6,7 +6,7 @@
  * of the License, or (at your option) any later version.
  */
 /*
- * Copyright (C) 2014 Sony Mobile Communications Inc.
+ * Copyright (C) 2014, 2016 Sony Mobile Communications Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2, as
@@ -30,8 +30,13 @@
 #include <linux/mutex.h>
 #include <linux/of_gpio.h>
 #include <linux/platform_device.h>
+#include <linux/regulator/consumer.h>
 #include <linux/sched.h>
+#include <linux/seq_file.h>
 #include <linux/slab.h>
+#include <linux/spi/spi.h>
+#include <linux/spi/spidev.h>
+#include <linux/string.h>
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
@@ -43,6 +48,7 @@
 #define D_ONESEG_CONFIG_PLATFORM_DRIVER_NAME "onesegtuner_pdev"
 #define D_ONESEG_CONFIG_SYSFS_DEV_NAME       "onesegtuner_pdev"
 #define D_ONESEG_CONFIG_CLASS_NAME           "onesegtuner"
+
 #ifdef CONFIG_ONESEG_TUNER_SMTVJ19X
 #define D_ONESEG_CONFIG_MATCH_TABLE          "sony,vj190"
 
@@ -55,6 +61,7 @@
 #define D_ONESEG_RESET_OFF_WAIT_US           1000
 #define D_ONESEG_RESET_OFF_WAIT_RANGE_US     1100
 #define D_ONESEG_I2C_ADAPTER_ID                 5
+
 #else
 #define D_ONESEG_CONFIG_MATCH_TABLE          "sony,vj180"
 
@@ -70,6 +77,9 @@
 #define D_ONESEG_POWER_OFF_WAIT_RANGE_US     5100
 #define D_ONESEG_I2C_ADAPTER_ID                 5
 #endif
+
+#define D_SPI_PLATFORM_DRIVER_NAME           "oneseg_tuner_spi_dev"
+#define D_SPI_CONFIG_MATCH_TABLE             "sony,oneseg-tuner"
 
 enum oneseg_gpio_id {
 	ONESEG_POWER_PIN = 0,

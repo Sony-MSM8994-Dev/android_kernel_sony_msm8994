@@ -177,6 +177,7 @@ enum smb_version {
 	Smb_20,
 	Smb_21,
 	Smb_30,
+	Smb_302,
 };
 
 struct mid_q_entry;
@@ -343,6 +344,8 @@ struct smb_version_operations {
 	unsigned int (*calc_smb_size)(void *);
 	/* check for STATUS_PENDING and process it in a positive case */
 	bool (*is_status_pending)(char *, struct TCP_Server_Info *, int);
+	/* check for STATUS_NETWORK_SESSION_EXPIRED */
+	bool (*is_session_expired)(char *);
 	/* send oplock break response */
 	int (*oplock_response)(struct cifs_tcon *, struct cifs_fid *,
 			       struct cifsInodeInfo *);
@@ -1504,4 +1507,7 @@ extern struct smb_version_values smb21_values;
 #define SMB30_VERSION_STRING	"3.0"
 extern struct smb_version_operations smb30_operations;
 extern struct smb_version_values smb30_values;
+#define SMB302_VERSION_STRING	"3.02"
+/*extern struct smb_version_operations smb302_operations;*/ /* not needed yet */
+extern struct smb_version_values smb302_values;
 #endif	/* _CIFS_GLOB_H */

@@ -214,6 +214,41 @@ struct adreno_gpu_core {
 	unsigned int shader_size;
 };
 
+/**
+ * struct adreno_device - The mothership structure for all adreno related info
+ * @dev: Reference to struct kgsl_device
+ * @priv: Holds the private flags specific to the adreno_device
+ * @chipid: Chip ID specific to the GPU
+ * @gmem_base: Base physical address of GMEM
+ * @gmem_size: GMEM size
+ * @gpucore: Pointer to the adreno_gpu_core structure
+ * @pfp_fw: Buffer which holds the pfp ucode
+ * @pfp_fw_size: Size of pfp ucode buffer
+ * @pfp_fw_version: Version of pfp ucode
+ * @pm4_fw: Buffer which holds the pm4 ucode
+ * @pm4_fw_size: Size of pm4 ucode buffer
+ * @pm4_fw_version: Version of pm4 ucode
+ * @ringbuffers: Array of pointers to adreno_ringbuffers
+ * @num_ringbuffers: Number of ringbuffers for the GPU
+ * @cur_rb: Pointer to the current ringbuffer
+ * @fast_hang_detect: Software fault detection availability
+ * @ft_policy: Defines the fault tolerance policy
+ * @long_ib_detect: Long IB detection availability
+ * @ft_pf_policy: Defines the fault policy for page faults
+ * @ocmem_hdl: Handle to the ocmem allocated buffer
+ * @profile: Container for adreno profiler information
+ * @dispatcher: Container for adreno GPU dispatcher
+ * @pwron_fixup: Command buffer to run a post-power collapse shader workaround
+ * @pwron_fixup_dwords: Number of dwords in the command buffer
+ * @input_work: Work struct for turning on the GPU after a touch event
+ * @busy_data: Struct holding GPU VBIF busy stats
+ * @ram_cycles_lo: Number of DDR clock cycles for the monitor session
+ * @halt: Atomic variable to check whether the GPU is currently halted
+ * @ctx_d_debugfs: Context debugfs node
+ * @pwrctrl_flag: Flag to hold adreno specific power attributes
+ * @cmdbatch_profile_buffer: Memdesc holding the cmdbatch profiling buffer
+ * @cmdbatch_profile_index: Index to store the start/stop ticks in the profiling buffer
+ */
 struct adreno_device {
 	struct kgsl_device dev;    /* Must be first field in this struct */
 	unsigned long priv;

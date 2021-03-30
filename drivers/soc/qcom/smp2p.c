@@ -214,6 +214,7 @@ static struct smp2p_interrupt_config smp2p_int_cfgs[SMP2P_NUM_PROCS] = {
 	[SMP2P_AUDIO_PROC].name = "lpass",
 	[SMP2P_SENSOR_PROC].name = "dsps",
 	[SMP2P_WIRELESS_PROC].name = "wcnss",
+	[SMP2P_TZ_PROC].name = "tz",
 	[SMP2P_REMOTE_MOCK_PROC].name = "mock",
 };
 
@@ -334,6 +335,9 @@ static int smp2p_get_smem_item_id(int write_pid, int read_pid)
 		break;
 	case SMP2P_POWER_PROC:
 		ret = SMEM_SMP2P_POWER_BASE + read_pid;
+		break;
+	case SMP2P_TZ_PROC:
+		ret = SMEM_SMP2P_TZ_BASE + read_pid;
 		break;
 	}
 

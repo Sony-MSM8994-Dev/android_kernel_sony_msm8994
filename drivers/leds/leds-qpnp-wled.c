@@ -1,4 +1,5 @@
-/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+/*
+ * Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -37,6 +38,8 @@
 #define QPNP_WLED_SINK_BASE		"qpnp-wled-sink-base"
 
 /* ctrl registers */
+#define QPNP_WLED_INT_EN_SET(b)		(b + 0x15)
+#define QPNP_WLED_INT_EN_CLR(b)		(b + 0x16)
 #define QPNP_WLED_EN_REG(b)		(b + 0x46)
 #define QPNP_WLED_FDBK_OP_REG(b)	(b + 0x48)
 #define QPNP_WLED_VREF_REG(b)		(b + 0x49)
@@ -66,14 +69,17 @@
 #define QPNP_WLED_BOOST_DUTY_MIN_NS	26
 #define QPNP_WLED_BOOST_DUTY_MAX_NS	156
 #define QPNP_WLED_DEF_BOOST_DUTY_NS	104
-#define QPNP_WLED_SWITCH_FREQ_MASK	0xF0
+#define QPNP_WLED_SWITCH_FREQ_MASK	0x70
 #define QPNP_WLED_SWITCH_FREQ_800_KHZ	800
 #define QPNP_WLED_SWITCH_FREQ_1600_KHZ	1600
+#define QPNP_WLED_SWITCH_FREQ_OVERWRITE 0x80
 #define QPNP_WLED_OVP_MASK		0xFC
 #define QPNP_WLED_OVP_17800_MV		17800
 #define QPNP_WLED_OVP_19400_MV		19400
 #define QPNP_WLED_OVP_29500_MV		29500
 #define QPNP_WLED_OVP_31000_MV		31000
+#define QPNP_WLED_INT_EN_SET_OVP_EN	0x02
+#define QPNP_WLED_OVP_FLT_SLEEP_US	10
 
 /* sink registers */
 #define QPNP_WLED_CURR_SINK_REG(b)	(b + 0x46)
@@ -374,6 +380,15 @@ static int qpnp_wled_module_en(struct qpnp_wled *wled,
 	int rc;
 	u8 reg;
 
+	/* disable OVP fault interrupt */
+	if (state) {
+		reg = QPNP_WLED_INT_EN_SET_OVP_EN;
+		rc = qpnp_wled_write_reg(wled, &reg,
+				QPNP_WLED_INT_EN_CLR(base_addr));
+		if (rc)
+			return rc;
+	}
+
 	rc = qpnp_wled_read_reg(wled, &reg,
 			QPNP_WLED_MODULE_EN_REG(base_addr));
 	if (rc < 0)
@@ -384,6 +399,16 @@ static int qpnp_wled_module_en(struct qpnp_wled *wled,
 			QPNP_WLED_MODULE_EN_REG(base_addr));
 	if (rc)
 		return rc;
+
+	/* enable OVP fault interrupt */
+	if (state && (wled->ovp_irq > 0)) {
+		udelay(QPNP_WLED_OVP_FLT_SLEEP_US);
+		reg = QPNP_WLED_INT_EN_SET_OVP_EN;
+		rc = qpnp_wled_write_reg(wled, &reg,
+				QPNP_WLED_INT_EN_SET(base_addr));
+		if (rc)
+			return rc;
+	}
 
 	return 0;
 }
@@ -936,7 +961,7 @@ static int qpnp_wled_config(struct qpnp_wled *wled)
 	if (rc < 0)
 		return rc;
 	reg &= QPNP_WLED_SWITCH_FREQ_MASK;
-	reg |= temp;
+	reg |= (temp | QPNP_WLED_SWITCH_FREQ_OVERWRITE);
 	rc = qpnp_wled_write_reg(wled, &reg,
 			QPNP_WLED_SWITCH_FREQ_REG(wled->ctrl_base));
 	if (rc)

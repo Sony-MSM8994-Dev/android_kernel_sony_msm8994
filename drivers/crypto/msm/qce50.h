@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -22,8 +22,8 @@
 		((uintptr_t)pce_dev->coh_vmem +			\
 		((uintptr_t)x - (uintptr_t)pce_dev->coh_pmem))
 #define GET_PHYS_ADDR(x)  \
-		((uintptr_t)pce_dev->coh_pmem +			\
-		((uintptr_t)x - (uintptr_t)pce_dev->coh_vmem))
+		(phys_addr_t)(((uintptr_t)pce_dev->coh_pmem +	\
+		((uintptr_t)x - (uintptr_t)pce_dev->coh_vmem)))
 
 #define CRYPTO_REG_SIZE 4
 #define NUM_OF_CRYPTO_AUTH_IV_REG 16
@@ -179,6 +179,7 @@ struct ce_sps_data {
 	struct scatterlist		*dst;
 	uint32_t			ce_device;
 	uint32_t			ce_hw_instance;
+	uint32_t			bam_ee;
 	unsigned int			pipe_pair_index;
 	unsigned int			src_pipe_index;
 	unsigned int			dest_pipe_index;

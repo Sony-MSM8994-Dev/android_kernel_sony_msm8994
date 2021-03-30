@@ -80,7 +80,9 @@ int mdss_mdp_rot_mgr_init(void)
 	mutex_init(&rot_mgr->pipe_lock);
 	mutex_init(&rot_mgr->req_lock);
 	INIT_LIST_HEAD(&rot_mgr->queue);
-	rot_mgr->rot_work_queue = create_workqueue("rot_commit_workq");
+	rot_mgr->rot_work_queue = alloc_workqueue("rot_commit_workq",
+			WQ_UNBOUND | WQ_HIGHPRI | WQ_MEM_RECLAIM,
+						MAX_ROTATOR_PIPE_COUNT);
 	if (!rot_mgr->rot_work_queue) {
 		pr_err("fail to create rot commit work queue\n");
 		kfree(rot_mgr);
@@ -607,6 +609,10 @@ static int mdss_mdp_rotator_queue_sub(struct mdss_mdp_rotator_session *rot,
 	ATRACE_BEGIN("rotator_kickoff");
 	ret = mdss_mdp_rotator_kickoff(rot_ctl, rot, dst_data);
 	ATRACE_END("rotator_kickoff");
+	if (ret) {
+		pr_err("mdss_mdp_rotator_kickoff error : %d\n", ret);
+		goto error;
+	}
 
 	return ret;
 error:

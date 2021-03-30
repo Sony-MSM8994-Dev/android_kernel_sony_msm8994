@@ -618,7 +618,10 @@ static int proc_sys_link_fill_cache(struct file *filp, void *dirent,
 				    struct ctl_table *table)
 {
 	int err, ret = 0;
+
 	head = sysctl_head_grab(head);
+	if (IS_ERR(head))
+		return false;
 
 	if (S_ISLNK(table->mode)) {
 		/* It is not an error if we can not follow the link ignore it */
@@ -1009,7 +1012,7 @@ static int sysctl_check_table(const char *path, struct ctl_table *table)
 	int err = 0;
 	for (; table->procname; table++) {
 		if (table->child)
-			err = sysctl_err(path, table, "Not a file");
+			err |= sysctl_err(path, table, "Not a file");
 
 		if ((table->proc_handler == proc_dostring) ||
 		    (table->proc_handler == proc_dointvec) ||
@@ -1020,15 +1023,15 @@ static int sysctl_check_table(const char *path, struct ctl_table *table)
 		    (table->proc_handler == proc_doulongvec_minmax) ||
 		    (table->proc_handler == proc_doulongvec_ms_jiffies_minmax)) {
 			if (!table->data)
-				err = sysctl_err(path, table, "No data");
+				err |= sysctl_err(path, table, "No data");
 			if (!table->maxlen)
-				err = sysctl_err(path, table, "No maxlen");
+				err |= sysctl_err(path, table, "No maxlen");
 		}
 		if (!table->proc_handler)
-			err = sysctl_err(path, table, "No proc_handler");
+			err |= sysctl_err(path, table, "No proc_handler");
 
 		if ((table->mode & (S_IRUGO|S_IWUGO)) != table->mode)
-			err = sysctl_err(path, table, "bogus .mode 0%o",
+			err |= sysctl_err(path, table, "bogus .mode 0%o",
 				table->mode);
 	}
 	return err;
@@ -1528,8 +1531,11 @@ static void drop_sysctl_table(struct ctl_table_header *header)
 	if (--header->nreg)
 		return;
 
-	put_links(header);
-	start_unregistering(header);
+	if (parent) {
+		put_links(header);
+		start_unregistering(header);
+	}
+
 	if (!--header->count)
 		kfree_rcu(header, rcu);
 

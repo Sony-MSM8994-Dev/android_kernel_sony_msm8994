@@ -499,6 +499,7 @@ config PM8921_BMS
 
 config BATTERY_BCL
 	tristate "Battery Current Limit driver"
+	depends on THERMAL_MONITOR
 	help
 	  Say Y here to enable support for battery current limit
 	  device. The BCL driver will poll BMS if
@@ -584,6 +585,15 @@ config MSM_BCL_SOMC_CTL
 	depends on BATTERY_BCL
 	help
 	  Say Y here to enable new condition.
+
+config QNS_SYSTEM
+	bool "Qnovo QNS wrapper implementation"
+	default n
+	help
+	  Say Y here to enable support for QNS system.
+	  QNS is a battery charging controller and it necessary to access a
+	  kernel driver for a battery charging.
+	  This adds sysfs interface which enables QNS daemon to access it.
 
 source "drivers/power/reset/Kconfig"
 

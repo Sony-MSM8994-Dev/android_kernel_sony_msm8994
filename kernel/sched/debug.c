@@ -158,12 +158,12 @@ static void print_rq(struct seq_file *m, struct rq *rq, int rq_cpu)
 
 	read_lock_irqsave(&tasklist_lock, flags);
 
-	do_each_thread(g, p) {
+	for_each_process_thread(g, p) {
 		if (!p->on_rq || task_cpu(p) != rq_cpu)
 			continue;
 
 		print_task(m, rq, p);
-	} while_each_thread(g, p);
+	}
 
 	read_unlock_irqrestore(&tasklist_lock, flags);
 }
@@ -241,6 +241,14 @@ void print_cfs_rq(struct seq_file *m, int cpu, struct cfs_rq *cfs_rq)
 	SEQ_printf(m, "  .%-30s: %llu\n", "cumulative_runnable_avg",
 			cfs_rq->hmp_stats.cumulative_runnable_avg);
 #endif
+#endif
+#ifdef CONFIG_CFS_BANDWIDTH
+	SEQ_printf(m, "  .%-30s: %d\n", "tg->cfs_bandwidth.timer_active",
+			cfs_rq->tg->cfs_bandwidth.timer_active);
+	SEQ_printf(m, "  .%-30s: %d\n", "throttled",
+			cfs_rq->throttled);
+	SEQ_printf(m, "  .%-30s: %d\n", "throttle_count",
+			cfs_rq->throttle_count);
 #endif
 
 	print_cfs_group_stats(m, cpu, cfs_rq->tg);

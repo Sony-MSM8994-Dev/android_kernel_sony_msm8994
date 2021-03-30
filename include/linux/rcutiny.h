@@ -140,6 +140,14 @@ static inline long rcu_batches_completed_bh(void)
 	return 0;
 }
 
+/*
+ * Return the number of sched grace periods.
+ */
+static inline unsigned long rcu_batches_completed_sched(void)
+{
+	return 0;
+}
+
 static inline void rcu_force_quiescent_state(void)
 {
 }
@@ -156,6 +164,10 @@ static inline void rcu_cpu_stall_reset(void)
 {
 }
 
+static inline void exit_rcu(void)
+{
+}
+
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 extern int rcu_scheduler_active __read_mostly;
 extern void rcu_scheduler_starting(void);
@@ -164,5 +176,22 @@ static inline void rcu_scheduler_starting(void)
 {
 }
 #endif /* #else #ifdef CONFIG_DEBUG_LOCK_ALLOC */
+
+#if defined(CONFIG_DEBUG_LOCK_ALLOC) || defined(CONFIG_RCU_TRACE)
+
+static inline bool rcu_is_watching(void)
+{
+	return __rcu_is_watching();
+}
+
+#else /* defined(CONFIG_DEBUG_LOCK_ALLOC) || defined(CONFIG_RCU_TRACE) */
+
+static inline bool rcu_is_watching(void)
+{
+	return true;
+}
+
+
+#endif /* #else defined(CONFIG_DEBUG_LOCK_ALLOC) || defined(CONFIG_RCU_TRACE) */
 
 #endif /* __LINUX_RCUTINY_H */

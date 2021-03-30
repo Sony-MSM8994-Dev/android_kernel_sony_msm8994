@@ -220,6 +220,7 @@ struct msm_mdp_interface {
 	int (*stop_histogram)(struct msm_fb_data_type *mfd);
 	int (*ad_calc_bl)(struct msm_fb_data_type *mfd, int bl_in,
 		int *bl_out, bool *bl_out_notify);
+	int (*ad_work_setup)(struct msm_fb_data_type *mfd);
 	int (*ad_shutdown_cleanup)(struct msm_fb_data_type *mfd);
 	int (*panel_register_done)(struct mdss_panel_data *pdata);
 	u32 (*fb_stride)(u32 fb_index, u32 xres, int bpp);
@@ -299,7 +300,7 @@ struct msm_fb_data_type {
 	u32 bl_scale;
 	u32 bl_min_lvl;
 	u32 unset_bl_level;
-	u32 bl_updated;
+	bool allow_bl_update;
 	u32 bl_level_scaled;
 	struct mutex bl_lock;
 
@@ -380,7 +381,7 @@ static inline void mdss_fb_update_notify_update(struct msm_fb_data_type *mfd)
 		if (mfd->no_update.timer.function)
 			del_timer(&(mfd->no_update.timer));
 
-		mfd->no_update.timer.expires = jiffies + (2 * HZ);
+		mfd->no_update.timer.expires = jiffies + msecs_to_jiffies(2000);
 		add_timer(&mfd->no_update.timer);
 		mutex_unlock(&mfd->no_update.lock);
 	}

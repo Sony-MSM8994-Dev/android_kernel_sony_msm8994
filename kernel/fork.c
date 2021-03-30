@@ -28,6 +28,8 @@
 #include <linux/mman.h>
 #include <linux/mmu_notifier.h>
 #include <linux/fs.h>
+#include <linux/mm.h>
+#include <linux/vmacache.h>
 #include <linux/nsproxy.h>
 #include <linux/capability.h>
 #include <linux/cpu.h>
@@ -72,6 +74,7 @@
 #include <linux/uprobes.h>
 #include <linux/aio.h>
 #include <linux/cpufreq.h>
+#include <linux/oom_score_notifier.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -250,6 +253,17 @@ int task_free_unregister(struct notifier_block *n)
 }
 EXPORT_SYMBOL(task_free_unregister);
 
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+static void cpufreq_stats_tsk_free(struct task_struct *tsk)
+{
+	int cpu;
+	for (cpu = 0; cpu < NR_CPUS; cpu++) {
+		kfree(tsk->cpufreq_stats[cpu].time_in_state);
+		kfree(tsk->cpufreq_stats[cpu].cumulative_time_in_state);
+	}
+}
+#endif
+
 void __put_task_struct(struct task_struct *tsk)
 {
 	WARN_ON(!tsk->exit_state);
@@ -259,6 +273,9 @@ void __put_task_struct(struct task_struct *tsk)
 	security_task_free(tsk);
 	exit_creds(tsk);
 	delayacct_tsk_free(tsk);
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+	cpufreq_stats_tsk_free(tsk);
+#endif
 	put_signal_struct(tsk->signal);
 
 	atomic_notifier_call_chain(&task_free_notifier, 0, tsk);
@@ -310,14 +327,15 @@ int __attribute__((weak)) arch_dup_task_struct(struct task_struct *dst,
 	return 0;
 }
 
-static struct task_struct *dup_task_struct(struct task_struct *orig)
+static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 {
 	struct task_struct *tsk;
 	struct thread_info *ti;
 	unsigned long *stackend;
-	int node = tsk_fork_get_node(orig);
 	int err;
 
+	if (node == NUMA_NO_NODE)
+		node = tsk_fork_get_node(orig);
 	tsk = alloc_task_struct_node(node);
 	if (!tsk)
 		return NULL;
@@ -348,7 +366,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
 	*stackend = STACK_END_MAGIC;	/* for overflow detection */
 
 #ifdef CONFIG_CC_STACKPROTECTOR
-	tsk->stack_canary = get_random_int();
+	tsk->stack_canary = get_random_long();
 #endif
 
 	/*
@@ -392,7 +410,7 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 
 	mm->locked_vm = 0;
 	mm->mmap = NULL;
-	mm->mmap_cache = NULL;
+	mm->vmacache_seqnum = 0;
 	mm->map_count = 0;
 	cpumask_clear(mm_cpumask(mm));
 	mm->mm_rb = RB_ROOT;
@@ -566,7 +584,7 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p)
 	spin_lock_init(&mm->page_table_lock);
 	mm_init_aio(mm);
 	mm_init_owner(mm, p);
-	clear_tlb_flush_pending(mm);
+	init_tlb_flush_pending(mm);
 
 	if (likely(!mm_alloc_pgd(mm))) {
 		mm->def_flags = 0;
@@ -912,6 +930,9 @@ static int copy_mm(unsigned long clone_flags, struct task_struct *tsk)
 	if (!oldmm)
 		return 0;
 
+	/* initialize the new vmacache entries */
+	vmacache_flush(tsk);
+
 	if (clone_flags & CLONE_VM) {
 		atomic_inc(&oldmm->mm_users);
 		mm = oldmm;
@@ -1183,6 +1204,35 @@ static void posix_cpu_timers_init(struct task_struct *tsk)
 	INIT_LIST_HEAD(&tsk->cpu_timers[2]);
 }
 
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+/*
+ * Initialize cpufreq_stats for a given task.
+ */
+
+static void cpufreq_stats_tsk_init(struct task_struct *tsk)
+{
+	int cpu, i, max_state = 0;
+	for (cpu = 0; cpu < NR_CPUS; cpu++) {
+		tsk->cpufreq_stats[cpu].max_state = 0;
+		tsk->cpufreq_stats[cpu].time_in_state = NULL;
+		tsk->cpufreq_stats[cpu].cumulative_time_in_state = NULL;
+		max_state = cpufreq_stats_get_max_state(cpu);
+		tsk->cpufreq_stats[cpu].max_state = max_state;
+		if (max_state > 0) {
+			tsk->cpufreq_stats[cpu].time_in_state =
+				kzalloc((max_state * sizeof(u64)), GFP_KERNEL);
+			tsk->cpufreq_stats[cpu].cumulative_time_in_state =
+				kzalloc((max_state * sizeof(u64)), GFP_KERNEL);
+			for (i = 0; i < max_state; i++) {
+				tsk->cpufreq_stats[cpu].time_in_state[i] = 0;
+				tsk->cpufreq_stats[cpu].cumulative_time_in_state[i]
+					= 0;
+			}
+		}
+	}
+}
+#endif
+
 /*
  * This creates a new process as a copy of the old one,
  * but does not actually start it yet.
@@ -1196,7 +1246,8 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 					unsigned long stack_size,
 					int __user *child_tidptr,
 					struct pid *pid,
-					int trace)
+					int trace,
+					int node)
 {
 	int retval;
 	struct task_struct *p;
@@ -1246,7 +1297,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 		goto fork_out;
 
 	retval = -ENOMEM;
-	p = dup_task_struct(current);
+	p = dup_task_struct(current, node);
 	if (!p)
 		goto fork_out;
 
@@ -1421,7 +1472,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	p->tgid = p->pid;
 	if (clone_flags & CLONE_THREAD)
 		p->tgid = current->tgid;
-
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+	cpufreq_stats_tsk_init(p);
+#endif
 	p->set_child_tid = (clone_flags & CLONE_CHILD_SETTID) ? child_tidptr : NULL;
 	/*
 	 * Clear TID on mm_release()?
@@ -1523,6 +1576,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 				ns_of_pid(pid)->child_reaper = p;
 				p->signal->flags |= SIGNAL_UNKILLABLE;
 			}
+			retval = oom_score_notify_new(p);
+			if (retval)
+				goto bad_fork_free_pid;
 
 			p->signal->leader_pid = pid;
 			p->signal->tty = tty_kref_get(current->signal->tty);
@@ -1594,6 +1650,9 @@ bad_fork_cleanup_threadgroup_lock:
 	if (clone_flags & CLONE_THREAD)
 		threadgroup_change_end(current);
 	delayacct_tsk_free(p);
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+	cpufreq_stats_tsk_free(p);
+#endif
 	module_put(task_thread_info(p)->exec_domain->module);
 bad_fork_cleanup_count:
 	atomic_dec(&p->cred->user->processes);
@@ -1614,10 +1673,11 @@ static inline void init_idle_pids(struct pid_link *links)
 	}
 }
 
-struct task_struct * __cpuinit fork_idle(int cpu)
+struct task_struct * fork_idle(int cpu)
 {
 	struct task_struct *task;
-	task = copy_process(CLONE_VM, 0, 0, NULL, &init_struct_pid, 0);
+	task = copy_process(CLONE_VM, 0, 0, NULL, &init_struct_pid, 0,
+			    cpu_to_node(cpu));
 	if (!IS_ERR(task)) {
 		init_idle_pids(task->pids);
 		init_idle(task, cpu);
@@ -1670,7 +1730,7 @@ long do_fork(unsigned long clone_flags,
 	}
 
 	p = copy_process(clone_flags, stack_start, stack_size,
-			 child_tidptr, NULL, trace);
+			 child_tidptr, NULL, trace, NUMA_NO_NODE);
 	/*
 	 * Do this prior waking up the new thread - the thread pointer
 	 * might get invalid after that point, if the thread exits quickly.

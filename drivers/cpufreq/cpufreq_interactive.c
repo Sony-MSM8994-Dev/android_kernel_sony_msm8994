@@ -392,13 +392,13 @@ static u64 update_load(int cpu)
 		ppol->policy->governor_data;
 	u64 now;
 	u64 now_idle;
-	unsigned int delta_idle;
-	unsigned int delta_time;
+	u64 delta_idle;
+	u64 delta_time;
 	u64 active_time;
 
 	now_idle = get_cpu_idle_time(cpu, &now, tunables->io_is_busy);
-	delta_idle = (unsigned int)(now_idle - pcpu->time_in_idle);
-	delta_time = (unsigned int)(now - pcpu->time_in_idle_timestamp);
+	delta_idle = (now_idle - pcpu->time_in_idle);
+	delta_time = (now - pcpu->time_in_idle_timestamp);
 
 	if (delta_time <= delta_idle)
 		active_time = 0;
@@ -467,7 +467,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 		tmploadadjfreq = (unsigned int)cputime_speedadj * 100;
 		pcpu->loadadjfreq = tmploadadjfreq;
 		trace_cpufreq_interactive_cpuload(i, tmploadadjfreq /
-						  ppol->policy->cur);
+						  ppol->target_freq);
 
 		if (tmploadadjfreq > loadadjfreq) {
 			loadadjfreq = tmploadadjfreq;
@@ -493,11 +493,11 @@ static void cpufreq_interactive_timer(unsigned long data)
 	}
 
 	spin_lock_irqsave(&ppol->target_freq_lock, flags);
-	cpu_load = loadadjfreq / ppol->policy->cur;
+	cpu_load = loadadjfreq / ppol->target_freq;
 	tunables->boosted = tunables->boost_val || now < tunables->boostpulse_endtime;
 
 	if (cpu_load >= tunables->go_hispeed_load || tunables->boosted) {
-		if (ppol->policy->cur < tunables->hispeed_freq &&
+		if (ppol->target_freq < tunables->hispeed_freq &&
 		    cpu_load <= max_local_load) {
 			new_freq = tunables->hispeed_freq;
 		} else {
@@ -508,13 +508,16 @@ static void cpufreq_interactive_timer(unsigned long data)
 		}
 	} else {
 		new_freq = choose_freq(ppol, loadadjfreq);
+		if (new_freq > tunables->hispeed_freq &&
+				ppol->target_freq < tunables->hispeed_freq)
+			new_freq = tunables->hispeed_freq;
 	}
 
 	if (cpu_load <= max_local_load &&
-	    ppol->policy->cur >= tunables->hispeed_freq &&
-	    new_freq > ppol->policy->cur &&
+	    ppol->target_freq >= tunables->hispeed_freq &&
+	    new_freq > ppol->target_freq &&
 	    now - ppol->hispeed_validate_time <
-	    freq_to_above_hispeed_delay(tunables, ppol->policy->cur)) {
+	    freq_to_above_hispeed_delay(tunables, ppol->target_freq)) {
 		trace_cpufreq_interactive_notyet(
 			max_cpu, cpu_load, ppol->target_freq,
 			ppol->policy->cur, new_freq);
@@ -589,7 +592,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 	spin_lock_irqsave(&speedchange_cpumask_lock, flags);
 	cpumask_set_cpu(max_cpu, &speedchange_cpumask);
 	spin_unlock_irqrestore(&speedchange_cpumask_lock, flags);
-	wake_up_process(speedchange_task);
+	wake_up_process_no_notif(speedchange_task);
 
 rearm:
 	if (!timer_pending(&ppol->policy_timer))
@@ -690,7 +693,7 @@ static void cpufreq_interactive_boost(struct cpufreq_interactive_tunables *tunab
 	spin_unlock_irqrestore(&speedchange_cpumask_lock, flags[0]);
 
 	if (anyboost)
-		wake_up_process(speedchange_task);
+		wake_up_process_no_notif(speedchange_task);
 }
 
 static int load_change_callback(struct notifier_block *nb, unsigned long val,
@@ -738,7 +741,7 @@ static int cpufreq_interactive_notifier(
 	int cpu;
 	unsigned long flags;
 
-	if (val == CPUFREQ_POSTCHANGE) {
+	if (val == CPUFREQ_PRECHANGE) {
 		ppol = per_cpu(polinfo, freq->cpu);
 		if (!ppol)
 			return 0;
@@ -905,7 +908,7 @@ static ssize_t store_hispeed_freq(struct cpufreq_interactive_tunables *tunables,
 	int ret;
 	long unsigned int val;
 
-	ret = strict_strtoul(buf, 0, &val);
+	ret = kstrtoul(buf, 0, &val);
 	if (ret < 0)
 		return ret;
 	tunables->hispeed_freq = val;
@@ -946,7 +949,7 @@ static ssize_t store_go_hispeed_load(struct cpufreq_interactive_tunables
 	int ret;
 	unsigned long val;
 
-	ret = strict_strtoul(buf, 0, &val);
+	ret = kstrtoul(buf, 0, &val);
 	if (ret < 0)
 		return ret;
 	tunables->go_hispeed_load = val;
@@ -965,7 +968,7 @@ static ssize_t store_min_sample_time(struct cpufreq_interactive_tunables
 	int ret;
 	unsigned long val;
 
-	ret = strict_strtoul(buf, 0, &val);
+	ret = kstrtoul(buf, 0, &val);
 	if (ret < 0)
 		return ret;
 	tunables->min_sample_time = val;
@@ -986,7 +989,7 @@ static ssize_t store_timer_rate(struct cpufreq_interactive_tunables *tunables,
 	struct cpufreq_interactive_tunables *t;
 	int cpu;
 
-	ret = strict_strtoul(buf, 0, &val);
+	ret = kstrtoul(buf, 0, &val);
 	if (ret < 0)
 		return ret;
 
@@ -1524,7 +1527,8 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 	else
 		tunables = common_tunables;
 
-	BUG_ON(!tunables && (event != CPUFREQ_GOV_POLICY_INIT));
+	if (WARN_ON(!tunables && (event != CPUFREQ_GOV_POLICY_INIT)))
+		return -EINVAL;
 
 	switch (event) {
 	case CPUFREQ_GOV_POLICY_INIT:
@@ -1686,6 +1690,7 @@ struct cpufreq_governor cpufreq_gov_interactive = {
 static int __init cpufreq_interactive_init(void)
 {
 	struct sched_param param = { .sched_priority = MAX_RT_PRIO-1 };
+	int ret = 0;
 
 	spin_lock_init(&speedchange_cpumask_lock);
 	mutex_init(&gov_lock);
@@ -1700,9 +1705,14 @@ static int __init cpufreq_interactive_init(void)
 	get_task_struct(speedchange_task);
 
 	/* NB: wake up so the thread does not look hung to the freezer */
-	wake_up_process(speedchange_task);
+	wake_up_process_no_notif(speedchange_task);
 
-	return cpufreq_register_governor(&cpufreq_gov_interactive);
+	ret = cpufreq_register_governor(&cpufreq_gov_interactive);
+	if (ret) {
+		kthread_stop(speedchange_task);
+		put_task_struct(speedchange_task);
+	}
+	return ret;
 }
 
 #ifdef CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE

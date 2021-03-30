@@ -195,6 +195,7 @@ uvc_video_complete(struct usb_ep *ep, struct usb_request *req)
 		printk(KERN_INFO "Failed to queue request (%d).\n", ret);
 		usb_ep_set_halt(ep);
 		spin_unlock_irqrestore(&video->queue.irqlock, flags);
+		uvc_queue_cancel(queue, 0);
 		goto requeue;
 	}
 	spin_unlock_irqrestore(&video->queue.irqlock, flags);
@@ -236,7 +237,11 @@ uvc_video_alloc_requests(struct uvc_video *video)
 	unsigned int i;
 	int ret = -ENOMEM;
 
-	BUG_ON(video->req_size);
+	if (video->req_size) {
+		pr_err("%s: close the video node and reopen it\n",
+				__func__);
+		return -EBUSY;
+	}
 
 	req_size = video->ep->maxpacket
 		 * max_t(unsigned int, video->ep->maxburst, 1)
@@ -281,6 +286,7 @@ error:
 static int
 uvc_video_pump(struct uvc_video *video)
 {
+	struct uvc_video_queue *queue = &video->queue;
 	struct usb_request *req;
 	struct uvc_buffer *buf;
 	unsigned long flags;
@@ -322,6 +328,7 @@ uvc_video_pump(struct uvc_video *video)
 			printk(KERN_INFO "Failed to queue request (%d)\n", ret);
 			usb_ep_set_halt(video->ep);
 			spin_unlock_irqrestore(&video->queue.irqlock, flags);
+			uvc_queue_cancel(queue, 0);
 			break;
 		}
 		spin_unlock_irqrestore(&video->queue.irqlock, flags);
@@ -350,7 +357,8 @@ uvc_video_enable(struct uvc_video *video, int enable)
 
 	if (!enable) {
 		for (i = 0; i < UVC_NUM_REQUESTS; ++i)
-			usb_ep_dequeue(video->ep, video->req[i]);
+			if (video->req[i])
+				usb_ep_dequeue(video->ep, video->req[i]);
 
 		uvc_video_free_requests(video);
 		uvc_queue_enable(&video->queue, 0);

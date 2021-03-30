@@ -900,6 +900,41 @@ static void xhci_clear_command_ring(struct xhci_hcd *xhci)
 	xhci_set_cmd_ring_deq(xhci);
 }
 
+static bool xhci_pending_portevent(struct xhci_hcd *xhci)
+{
+	__le32 __iomem		**port_array;
+	int			port_index;
+	u32			status;
+	u32			portsc;
+
+	status = readl(&xhci->op_regs->status);
+	if (status & STS_EINT)
+		return true;
+	/*
+	 * Checking STS_EINT is not enough as there is a lag between a change
+	 * bit being set and the Port Status Change Event that it generated
+	 * being written to the Event Ring. See note in xhci 1.1 section 4.19.2.
+	 */
+
+	port_index = xhci->num_usb2_ports;
+	port_array = xhci->usb2_ports;
+	while (port_index--) {
+		portsc = readl(port_array[port_index]);
+		if (portsc & PORT_CHANGE_MASK ||
+		    (portsc & PORT_PLS_MASK) == XDEV_RESUME)
+			return true;
+	}
+	port_index = xhci->num_usb3_ports;
+	port_array = xhci->usb3_ports;
+	while (port_index--) {
+		portsc = readl(port_array[port_index]);
+		if (portsc & PORT_CHANGE_MASK ||
+		    (portsc & PORT_PLS_MASK) == XDEV_RESUME)
+			return true;
+	}
+	return false;
+}
+
 /*
  * Stop HC (not bus-specific)
  *
@@ -911,6 +946,9 @@ int xhci_suspend(struct xhci_hcd *xhci)
 	int			rc = 0;
 	struct usb_hcd		*hcd = xhci_to_hcd(xhci);
 	u32			command;
+
+	if (!hcd->state)
+		return 0;
 
 	if (hcd->state != HC_STATE_SUSPENDED ||
 			xhci->shared_hcd->state != HC_STATE_SUSPENDED)
@@ -982,11 +1020,14 @@ int xhci_suspend(struct xhci_hcd *xhci)
  */
 int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 {
-	u32			command, temp = 0, status;
+	u32			command, temp = 0;
 	struct usb_hcd		*hcd = xhci_to_hcd(xhci);
 	struct usb_hcd		*secondary_hcd;
 	int			retval = 0;
 	bool			comp_timer_running = false;
+
+	if (!hcd->state)
+		return 0;
 
 	/* Wait a bit if either of the roothubs need to settle from the
 	 * transition into bus suspend.
@@ -1013,8 +1054,13 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 		command = xhci_readl(xhci, &xhci->op_regs->command);
 		command |= CMD_CRS;
 		xhci_writel(xhci, command, &xhci->op_regs->command);
+		/*
+		 * Some controllers take up to 55+ ms to complete the controller
+		 * restore so setting the timeout to 100ms. Xhci specification
+		 * doesn't mention any timeout value.
+		 */
 		if (xhci_handshake(xhci, &xhci->op_regs->status,
-			      STS_RESTORE, 0, 10 * 1000)) {
+			      STS_RESTORE, 0, 100 * 1000)) {
 			xhci_warn(xhci, "WARN: xHC restore state timeout\n");
 			spin_unlock_irq(&xhci->lock);
 			return -ETIMEDOUT;
@@ -1107,10 +1153,9 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
  done:
 	if (retval == 0) {
 		/* Resume root hubs only when have pending events. */
-		status = readl(&xhci->op_regs->status);
-		if (status & STS_EINT) {
-			usb_hcd_resume_root_hub(hcd);
+		if (xhci_pending_portevent(xhci)) {
 			usb_hcd_resume_root_hub(xhci->shared_hcd);
+			usb_hcd_resume_root_hub(hcd);
 		}
 	}
 
@@ -1125,10 +1170,10 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 
 	/* Re-enable port polling. */
 	xhci_dbg(xhci, "%s: starting port polling.\n", __func__);
-	set_bit(HCD_FLAG_POLL_RH, &hcd->flags);
-	usb_hcd_poll_rh_status(hcd);
 	set_bit(HCD_FLAG_POLL_RH, &xhci->shared_hcd->flags);
 	usb_hcd_poll_rh_status(xhci->shared_hcd);
+	set_bit(HCD_FLAG_POLL_RH, &hcd->flags);
+	usb_hcd_poll_rh_status(hcd);
 
 	return retval;
 }
@@ -1514,19 +1559,32 @@ int xhci_urb_dequeue(struct usb_hcd *hcd, struct urb *urb, int status)
 	unsigned int ep_index;
 	struct xhci_ring *ep_ring;
 	struct xhci_virt_ep *ep;
+	struct xhci_virt_device *vdev;
 
 	xhci = hcd_to_xhci(hcd);
 	spin_lock_irqsave(&xhci->lock, flags);
 	/* Make sure the URB hasn't completed or been unlinked already */
 	ret = usb_hcd_check_unlink_urb(hcd, urb, status);
-	if (ret || !urb->hcpriv)
+	if (ret)
 		goto done;
+
+	/* give back URB now if we can't queue it for cancel */
+	vdev = xhci->devs[urb->dev->slot_id];
+	urb_priv = urb->hcpriv;
+	if (!vdev || !urb_priv)
+		goto err_giveback;
+
+	ep_index = xhci_get_endpoint_index(&urb->ep->desc);
+	ep = &vdev->eps[ep_index];
+	ep_ring = xhci_urb_to_transfer_ring(xhci, urb);
+	if (!ep || !ep_ring)
+		goto err_giveback;
+
 	temp = xhci_readl(xhci, &xhci->op_regs->status);
 	if (temp == 0xffffffff || (xhci->xhc_state & XHCI_STATE_HALTED)) {
 		xhci_dbg(xhci, "HW died, freeing TD.\n");
-		urb_priv = urb->hcpriv;
 		for (i = urb_priv->td_cnt;
-		     i < urb_priv->length && xhci->devs[urb->dev->slot_id];
+		     i < urb_priv->length;
 		     i++) {
 			td = urb_priv->td[i];
 			if (!list_empty(&td->td_list))
@@ -1534,12 +1592,7 @@ int xhci_urb_dequeue(struct usb_hcd *hcd, struct urb *urb, int status)
 			if (!list_empty(&td->cancelled_td_list))
 				list_del_init(&td->cancelled_td_list);
 		}
-
-		usb_hcd_unlink_urb_from_ep(hcd, urb);
-		spin_unlock_irqrestore(&xhci->lock, flags);
-		usb_hcd_giveback_urb(hcd, urb, -ESHUTDOWN);
-		xhci_urb_free_priv(xhci, urb_priv);
-		return ret;
+		goto err_giveback;
 	}
 	if ((xhci->xhc_state & XHCI_STATE_DYING) ||
 			(xhci->xhc_state & XHCI_STATE_HALTED)) {
@@ -1554,15 +1607,6 @@ int xhci_urb_dequeue(struct usb_hcd *hcd, struct urb *urb, int status)
 		goto done;
 	}
 
-	ep_index = xhci_get_endpoint_index(&urb->ep->desc);
-	ep = &xhci->devs[urb->dev->slot_id]->eps[ep_index];
-	ep_ring = xhci_urb_to_transfer_ring(xhci, urb);
-	if (!ep_ring) {
-		ret = -EINVAL;
-		goto done;
-	}
-
-	urb_priv = urb->hcpriv;
 	i = urb_priv->td_cnt;
 	if (i < urb_priv->length)
 		xhci_dbg(xhci, "Cancel URB %pK, dev %s, ep 0x%x, "
@@ -1592,6 +1636,14 @@ int xhci_urb_dequeue(struct usb_hcd *hcd, struct urb *urb, int status)
 	}
 done:
 	spin_unlock_irqrestore(&xhci->lock, flags);
+	return ret;
+
+err_giveback:
+	if (urb_priv)
+		xhci_urb_free_priv(xhci, urb_priv);
+	usb_hcd_unlink_urb_from_ep(hcd, urb);
+	spin_unlock_irqrestore(&xhci->lock, flags);
+	usb_hcd_giveback_urb(hcd, urb, -ESHUTDOWN);
 	return ret;
 }
 
@@ -3443,7 +3495,7 @@ int xhci_discover_or_reset_device(struct usb_hcd *hcd, struct usb_device *udev)
 	/* Wait for the Reset Device command to finish */
 	timeleft = wait_for_completion_interruptible_timeout(
 			reset_device_cmd->completion,
-			USB_CTRL_SET_TIMEOUT);
+			XHCI_CMD_DEFAULT_TIMEOUT);
 	if (timeleft <= 0) {
 		xhci_warn(xhci, "%s while waiting for reset device command\n",
 				timeleft == 0 ? "Timeout" : "Signal");

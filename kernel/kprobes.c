@@ -591,7 +591,7 @@ static __kprobes void kprobe_optimizer(struct work_struct *work)
 }
 
 /* Wait for completing optimization and unoptimization */
-static __kprobes void wait_for_kprobe_optimizer(void)
+__kprobes void wait_for_kprobe_optimizer(void)
 {
 	mutex_lock(&kprobe_mutex);
 
@@ -2083,7 +2083,7 @@ static int __init init_kprobes(void)
 {
 	int i, err = 0;
 	unsigned long offset = 0, size = 0;
-	char *modname, namebuf[128];
+	char *modname, namebuf[KSYM_NAME_LEN];
 	const char *symbol_name;
 	void *addr;
 	struct kprobe_blackpoint *kb;
@@ -2209,7 +2209,7 @@ static int __kprobes show_kprobe_addr(struct seq_file *pi, void *v)
 	const char *sym = NULL;
 	unsigned int i = *(loff_t *) v;
 	unsigned long offset = 0;
-	char *modname, namebuf[128];
+	char *modname, namebuf[KSYM_NAME_LEN];
 
 	head = &kprobe_table[i];
 	preempt_disable();
@@ -2332,6 +2332,7 @@ static ssize_t write_enabled_file_bool(struct file *file,
 	if (copy_from_user(buf, user_buf, buf_size))
 		return -EFAULT;
 
+	buf[buf_size] = '\0';
 	switch (buf[0]) {
 	case 'y':
 	case 'Y':
@@ -2343,6 +2344,8 @@ static ssize_t write_enabled_file_bool(struct file *file,
 	case '0':
 		disarm_all_kprobes();
 		break;
+	default:
+		return -EINVAL;
 	}
 
 	return count;

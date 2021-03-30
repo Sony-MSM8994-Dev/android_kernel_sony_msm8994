@@ -40,7 +40,20 @@
 
 #include <trace/events/exception.h>
 
-static const char *fault_name(unsigned int esr);
+struct fault_info {
+	int	(*fn)(unsigned long addr, unsigned int esr,
+		      struct pt_regs *regs);
+	int	sig;
+	int	code;
+	const char *name;
+};
+
+static const struct fault_info fault_info[];
+
+static inline const struct fault_info *esr_to_fault_info(unsigned int esr)
+{
+	return fault_info + (esr & 63);
+}
 
 /*
  * Dump out the page tables associated with 'addr' in mm 'mm'.
@@ -116,13 +129,15 @@ static void __do_user_fault(struct task_struct *tsk, unsigned long addr,
 			    struct pt_regs *regs)
 {
 	struct siginfo si;
+	const struct fault_info *inf;
 
 	trace_user_fault(tsk, addr, esr);
 
 	if (show_unhandled_signals && unhandled_signal(tsk, sig) &&
 	    printk_ratelimit()) {
+		inf = esr_to_fault_info(esr);
 		pr_info("%s[%d]: unhandled %s (%d) at 0x%08lx, esr 0x%03x\n",
-			tsk->comm, task_pid_nr(tsk), fault_name(esr), sig,
+			tsk->comm, task_pid_nr(tsk), inf->name, sig,
 			addr, esr);
 		show_pte(tsk->mm, addr);
 		show_regs(regs);
@@ -141,14 +156,16 @@ static void do_bad_area(unsigned long addr, unsigned int esr, struct pt_regs *re
 {
 	struct task_struct *tsk = current;
 	struct mm_struct *mm = tsk->active_mm;
+	const struct fault_info *inf;
 
 	/*
 	 * If we are in kernel mode at this point, we have no context to
 	 * handle this fault with.
 	 */
-	if (user_mode(regs))
-		__do_user_fault(tsk, addr, esr, SIGSEGV, SEGV_MAPERR, regs);
-	else
+	if (user_mode(regs)) {
+		inf = esr_to_fault_info(esr);
+		__do_user_fault(tsk, addr, esr, inf->sig, inf->code, regs);
+	} else
 		__do_kernel_fault(mm, addr, esr, regs);
 }
 
@@ -258,8 +275,11 @@ retry:
 	 * signal first. We do not need to release the mmap_sem because it
 	 * would already be released in __lock_page_or_retry in mm/filemap.c.
 	 */
-	if ((fault & VM_FAULT_RETRY) && fatal_signal_pending(current))
+	if ((fault & VM_FAULT_RETRY) && fatal_signal_pending(current)) {
+		if (!user_mode(regs))
+			goto no_context;
 		return 0;
+	}
 
 	/*
 	 * Major/minor page fault accounting is only done on the initial
@@ -368,6 +388,13 @@ static int __kprobes do_translation_fault(unsigned long addr,
 	return 0;
 }
 
+static int do_alignment_fault(unsigned long addr, unsigned int esr,
+			      struct pt_regs *regs)
+{
+	do_bad_area(addr, esr, regs);
+	return 0;
+}
+
 /*
  * This abort handler always returns "fault".
  */
@@ -377,12 +404,7 @@ static int do_bad(unsigned long addr, unsigned int esr, struct pt_regs *regs)
 	return 1;
 }
 
-static struct fault_info {
-	int	(*fn)(unsigned long addr, unsigned int esr, struct pt_regs *regs);
-	int	sig;
-	int	code;
-	const char *name;
-} fault_info[] = {
+static const struct fault_info fault_info[] = {
 	{ do_bad,		SIGBUS,  0,		"ttbr address size fault"	},
 	{ do_bad,		SIGBUS,  0,		"level 1 address size fault"	},
 	{ do_bad,		SIGBUS,  0,		"level 2 address size fault"	},
@@ -390,7 +412,7 @@ static struct fault_info {
 	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"input address range fault"	},
 	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"level 1 translation fault"	},
 	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"level 2 translation fault"	},
-	{ do_page_fault,	SIGSEGV, SEGV_MAPERR,	"level 3 translation fault"	},
+	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"level 3 translation fault"	},
 	{ do_bad,		SIGBUS,  0,		"reserved access flag fault"	},
 	{ do_page_fault,	SIGSEGV, SEGV_ACCERR,	"level 1 access flag fault"	},
 	{ do_page_fault,	SIGSEGV, SEGV_ACCERR,	"level 2 access flag fault"	},
@@ -416,7 +438,7 @@ static struct fault_info {
 	{ do_bad,		SIGBUS,  0,		"synchronous parity error (translation table walk" },
 	{ do_bad,		SIGBUS,  0,		"synchronous parity error (translation table walk" },
 	{ do_bad,		SIGBUS,  0,		"unknown 32"			},
-	{ do_bad,		SIGBUS,  BUS_ADRALN,	"alignment fault"		},
+	{ do_alignment_fault,	SIGBUS,  BUS_ADRALN,	"alignment fault"		},
 	{ do_bad,		SIGBUS,  0,		"debug event"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 35"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 36"			},
@@ -449,19 +471,13 @@ static struct fault_info {
 	{ do_bad,		SIGBUS,  0,		"unknown 63"			},
 };
 
-static const char *fault_name(unsigned int esr)
-{
-	const struct fault_info *inf = fault_info + (esr & 63);
-	return inf->name;
-}
-
 /*
  * Dispatch a data abort to the relevant handler.
  */
 asmlinkage void __exception do_mem_abort(unsigned long addr, unsigned int esr,
 					 struct pt_regs *regs)
 {
-	const struct fault_info *inf = fault_info + (esr & 63);
+	const struct fault_info *inf = esr_to_fault_info(esr);
 	struct siginfo info;
 
 	if (!inf->fn(addr, esr, regs))

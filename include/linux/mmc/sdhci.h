@@ -185,8 +185,21 @@ struct sdhci_host {
  * the bounce buffer logic when preparing data
  */
 #define SDHCI_QUIRK2_ADMA_SKIP_DATA_ALIGNMENT             (1<<13)
+/* Some controllers doesn't have have any LED control */
+#define SDHCI_QUIRK2_BROKEN_LED_CONTROL	(1 << 14)
 /* Use reset workaround in case sdhci reset timeouts */
 #define SDHCI_QUIRK2_USE_RESET_WORKAROUND (1 << 15)
+/*
+ * Some controllers doesn't follow the tuning procedure as defined in spec.
+ * The tuning data has to be compared from SW driver to validate the correct
+ * phase.
+ */
+#define SDHCI_QUIRK2_NON_STANDARD_TUNING (1 << 16)
+/*
+ * Some controllers may use PIO mode to workaround HW issues in ADMA for
+ * eMMC tuning commands.
+ */
+#define SDHCI_QUIRK2_USE_PIO_FOR_EMMC_TUNING (1 << 17)
 
 	int irq;		/* Device IRQ */
 	void __iomem *ioaddr;	/* Mapped address */
@@ -290,6 +303,9 @@ struct sdhci_host {
 	struct mutex ios_mutex;
 	enum sdhci_power_policy power_policy;
 
+	bool is_crypto_en;
+	bool crypto_reset_reqd;
+
 	bool irq_enabled; /* host irq status flag */
 	bool async_int_supp;  /* async support to rxv int, when clks are off */
 	bool disable_sdio_irq_deferred; /* status of disabling sdio irq */
@@ -298,6 +314,7 @@ struct sdhci_host {
 	int reset_wa_applied; /* reset workaround status */
 	ktime_t reset_wa_t; /* time when the reset workaround is applied */
 	int reset_wa_cnt; /* total number of times workaround is used */
+	struct cmdq_host *cq_host;
 
 	unsigned long private[0] ____cacheline_aligned;
 };

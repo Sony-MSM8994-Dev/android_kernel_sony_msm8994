@@ -841,7 +841,12 @@ static int wdm_probe(struct usb_interface *intf, const struct usb_device_id *id)
 
 	if (!buffer)
 		goto err;
-	while (buflen > 2) {
+	while (buflen > 0) {
+	        if ((buflen < buffer[0]) || (buffer[0] < 3)) {
+	                dev_err(&intf->dev, "invalid descriptor buffer length\n");
+	                goto err;
+	        }
+
 		if (buffer[1] != USB_DT_CS_INTERFACE) {
 			dev_err(&intf->dev, "skipping garbage\n");
 			goto next_desc;
@@ -851,6 +856,8 @@ static int wdm_probe(struct usb_interface *intf, const struct usb_device_id *id)
 		case USB_CDC_HEADER_TYPE:
 			break;
 		case USB_CDC_DMM_TYPE:
+			if (buflen < sizeof(struct usb_cdc_dmm_desc))
+				break;
 			dmhd = (struct usb_cdc_dmm_desc *)buffer;
 			maxcom = le16_to_cpu(dmhd->wMaxCommand);
 			dev_dbg(&intf->dev,

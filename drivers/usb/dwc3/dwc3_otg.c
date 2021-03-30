@@ -236,12 +236,6 @@ static int dwc3_otg_start_host(struct usb_otg *otg, int on)
 		 */
 		wake_lock(&dotg->host_wakelock);
 
-		/*
-		 * WORKAROUND: currently host mode suspend isn't working well.
-		 * Disable xHCI's runtime PM for now.
-		 */
-		pm_runtime_disable(&dwc->xhci->dev);
-
 		if (no_device_timeout_enable) {
 			dotg->no_device_timeout_enabled = 1;
 			dotg->device_count = 0;

@@ -1545,7 +1545,7 @@ static int w_after_conn_state_ch(struct drbd_work *w, int unused)
 		old_conf = tconn->net_conf;
 		tconn->my_addr_len = 0;
 		tconn->peer_addr_len = 0;
-		rcu_assign_pointer(tconn->net_conf, NULL);
+		RCU_INIT_POINTER(tconn->net_conf, NULL);
 		conn_free_crypto(tconn);
 		mutex_unlock(&tconn->conf_update);
 

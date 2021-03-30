@@ -1,9 +1,8 @@
 /*
-
  * drivers/staging/android/ion/ion.c
  *
  * Copyright (C) 2011 Google, Inc.
- * Copyright (c) 2011-2015,2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -21,8 +20,6 @@
  * and licensed under the license of the file.
  */
 
-#include <linux/atomic.h>
-#include <linux/err.h>
 #include <linux/file.h>
 #include <linux/freezer.h>
 #include <linux/fs.h>
@@ -734,8 +731,8 @@ int ion_phys(struct ion_client *client, struct ion_handle *handle,
 	buffer = handle->buffer;
 
 	if (!buffer->heap->ops->phys) {
-		pr_err("%s: ion_phys is not implemented by this heap.\n",
-		       __func__);
+		pr_err("%s: ion_phys is not implemented by this heap (name=%s, type=%d).\n",
+			__func__, buffer->heap->name, buffer->heap->type);
 		mutex_unlock(&client->lock);
 		return -ENODEV;
 	}
@@ -1591,7 +1588,7 @@ static long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		struct ion_handle *handle;
 
 		mutex_lock(&client->lock);
-		handle = ion_handle_get_by_id_nolock(client, 
+		handle = ion_handle_get_by_id_nolock(client,
 							data.handle.handle);
 		if (IS_ERR(handle)) {
 			mutex_unlock(&client->lock);

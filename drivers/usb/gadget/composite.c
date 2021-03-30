@@ -26,6 +26,18 @@
 #include <linux/usb/composite.h>
 #include <asm/unaligned.h>
 
+#define SSUSB_GADGET_VBUS_DRAW		900 /* in mA */
+#define SSUSB_GADGET_VBUS_DRAW_UNITS	8
+#define HSUSB_GADGET_VBUS_DRAW_UNITS	2
+
+/*
+ * Based on enumerated USB speed, draw power with set_config and resume
+ * HSUSB: 500mA, SSUSB: 900mA
+ */
+#define USB_VBUS_DRAW(speed)\
+	(speed == USB_SPEED_SUPER ?\
+	SSUSB_GADGET_VBUS_DRAW : CONFIG_USB_GADGET_VBUS_DRAW)
+
 /*
  * The code in this file is utility code, used to build a gadget driver
  * from one or more "function" drivers, one or more "configuration"
@@ -90,7 +102,6 @@ int config_ep_by_speed(struct usb_gadget *g,
 			struct usb_function *f,
 			struct usb_ep *_ep)
 {
-	struct usb_composite_dev	*cdev = get_gadget_data(g);
 	struct usb_endpoint_descriptor *chosen_desc = NULL;
 	struct usb_descriptor_header **speed_desc = NULL;
 
@@ -162,8 +173,12 @@ ep_found:
 			_ep->maxburst = comp_desc->bMaxBurst + 1;
 			break;
 		default:
-			if (comp_desc->bMaxBurst != 0)
+			if (comp_desc->bMaxBurst != 0) {
+				struct usb_composite_dev *cdev;
+
+				cdev = get_gadget_data(g);
 				ERROR(cdev, "ep0 bMaxBurst must be 0\n");
+			}
 			_ep->maxburst = 1;
 			break;
 		}
@@ -199,6 +214,7 @@ int usb_add_function(struct usb_configuration *config,
 		goto done;
 
 	function->config = config;
+	function->intf_id = -EINVAL;
 	list_add_tail(&function->list, &config->functions);
 
 	/* REVISIT *require* function->bind? */
@@ -341,7 +357,8 @@ int usb_interface_id(struct usb_configuration *config,
 
 	if (id < MAX_CONFIG_INTERFACES) {
 		config->interface[id] = function;
-		function->intf_id = id;
+		if (function->intf_id < 0)
+			function->intf_id = id;
 		config->next_interface_id = id + 1;
 		return id;
 	}
@@ -352,9 +369,7 @@ EXPORT_SYMBOL_GPL(usb_interface_id);
 static int usb_func_wakeup_int(struct usb_function *func)
 {
 	int ret;
-	unsigned long flags;
 	struct usb_gadget *gadget;
-	struct usb_composite_dev *cdev;
 
 
 	if (!func || !func->config || !func->config->cdev ||
@@ -374,11 +389,7 @@ static int usb_func_wakeup_int(struct usb_function *func)
 		return -ENOTSUPP;
 	}
 
-	cdev = get_gadget_data(gadget);
-
-	spin_lock_irqsave(&cdev->lock, flags);
 	ret = usb_gadget_func_wakeup(gadget, func->intf_id);
-	spin_unlock_irqrestore(&cdev->lock, flags);
 
 	return ret;
 }
@@ -386,10 +397,12 @@ static int usb_func_wakeup_int(struct usb_function *func)
 int usb_func_wakeup(struct usb_function *func)
 {
 	int ret;
+	unsigned long flags;
 
 	pr_debug("%s function wakeup\n",
 		func->name ? func->name : "");
 
+	spin_lock_irqsave(&func->config->cdev->lock, flags);
 	ret = usb_func_wakeup_int(func);
 	if (ret == -EAGAIN) {
 		DBG(func->config->cdev,
@@ -402,25 +415,22 @@ int usb_func_wakeup(struct usb_function *func)
 			func->name ? func->name : "", ret);
 	}
 
+	spin_unlock_irqrestore(&func->config->cdev->lock, flags);
 	return ret;
 }
 
 static u8 encode_bMaxPower(enum usb_device_speed speed,
 		struct usb_configuration *c)
 {
-	unsigned val;
+	unsigned val = CONFIG_USB_GADGET_VBUS_DRAW;
 
-	if (c->MaxPower)
-		val = c->MaxPower;
-	else
-		val = CONFIG_USB_GADGET_VBUS_DRAW;
-	if (!val)
-		return 0;
 	switch (speed) {
 	case USB_SPEED_SUPER:
-		return DIV_ROUND_UP(val, 8);
+		/* with super-speed report 900mA */
+		val = SSUSB_GADGET_VBUS_DRAW;
+		return (u8)(val / SSUSB_GADGET_VBUS_DRAW_UNITS);
 	default:
-		return DIV_ROUND_UP(val, 2);
+		return DIV_ROUND_UP(val, HSUSB_GADGET_VBUS_DRAW_UNITS);
 	};
 }
 
@@ -679,7 +689,6 @@ static int set_config(struct usb_composite_dev *cdev,
 	struct usb_gadget	*gadget = cdev->gadget;
 	struct usb_configuration *c = NULL;
 	int			result = -EINVAL;
-	unsigned		power = gadget_is_otg(gadget) ? 8 : 100;
 	int			tmp;
 
 	/*
@@ -792,10 +801,8 @@ static int set_config(struct usb_composite_dev *cdev,
 		}
 	}
 
-	/* when we return, be sure our power usage is valid */
-	power = c->MaxPower ? c->MaxPower : CONFIG_USB_GADGET_VBUS_DRAW;
 done:
-	usb_gadget_vbus_draw(gadget, power);
+	usb_gadget_vbus_draw(gadget, USB_VBUS_DRAW(gadget->speed));
 	if (result >= 0 && cdev->delayed_status)
 		result = USB_GADGET_DELAYED_STATUS;
 	return result;
@@ -1358,6 +1365,12 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 		case USB_DT_DEVICE:
 			cdev->desc.bNumConfigurations =
 				count_configs(cdev, USB_DT_DEVICE);
+			if (cdev->desc.bNumConfigurations == 0) {
+				pr_err("%s:config is not active. send stall\n",
+								__func__);
+				break;
+			}
+
 			cdev->desc.bMaxPacketSize0 =
 				cdev->gadget->ep0->maxpacket;
 			if (gadget_is_superspeed(gadget)) {
@@ -1379,7 +1392,9 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 			if (!gadget_is_dualspeed(gadget) ||
 			    gadget->speed >= USB_SPEED_SUPER)
 				break;
+			spin_lock(&cdev->lock);
 			device_qual(cdev);
+			spin_unlock(&cdev->lock);
 			value = min_t(int, w_length,
 				sizeof(struct usb_qualifier_descriptor));
 			break;
@@ -1389,7 +1404,9 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 				break;
 			/* FALLTHROUGH */
 		case USB_DT_CONFIG:
+			spin_lock(&cdev->lock);
 			value = config_desc(cdev, w_value);
+			spin_unlock(&cdev->lock);
 			if (value >= 0)
 				value = min(w_length, (u16) value);
 			break;
@@ -1405,8 +1422,10 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 						USB_DT_OTG);
 			break;
 		case USB_DT_STRING:
+			spin_lock(&cdev->lock);
 			value = get_string(cdev, req->buf,
 					w_index, w_value & 0xff);
+			spin_unlock(&cdev->lock);
 			if (value >= 0)
 				value = min(w_length, (u16) value);
 			break;
@@ -1472,6 +1491,8 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 			value = 0;
 			break;
 		}
+
+		spin_lock(&cdev->lock);
 		value = f->set_alt(f, w_index, w_value);
 		if (value == USB_GADGET_DELAYED_STATUS) {
 			DBG(cdev,
@@ -1481,6 +1502,7 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 			DBG(cdev, "delayed_status count %d\n",
 					cdev->delayed_status);
 		}
+		spin_unlock(&cdev->lock);
 		break;
 	case USB_REQ_GET_INTERFACE:
 		if (ctrl->bRequestType != (USB_DIR_IN|USB_RECIP_INTERFACE))
@@ -1580,6 +1602,8 @@ unknown:
 			break;
 
 		case USB_RECIP_ENDPOINT:
+			if (!cdev->config)
+				break;
 			endp = ((w_index & 0x80) >> 3) | (w_index & 0x0f);
 			list_for_each_entry(f, &cdev->config->functions, list) {
 				if (test_bit(endp, f->endpoints))
@@ -1854,11 +1878,13 @@ composite_suspend(struct usb_gadget *gadget)
 {
 	struct usb_composite_dev	*cdev = get_gadget_data(gadget);
 	struct usb_function		*f;
+	unsigned long			flags;
 
 	/* REVISIT:  should we have config level
 	 * suspend/resume callbacks?
 	 */
 	DBG(cdev, "suspend\n");
+	spin_lock_irqsave(&cdev->lock, flags);
 	if (cdev->config) {
 		list_for_each_entry(f, &cdev->config->functions, list) {
 			if (f->suspend)
@@ -1869,6 +1895,7 @@ composite_suspend(struct usb_gadget *gadget)
 		cdev->driver->suspend(cdev);
 
 	cdev->suspended = 1;
+	spin_unlock_irqrestore(&cdev->lock, flags);
 
 	usb_gadget_vbus_draw(gadget, 2);
 }
@@ -1878,8 +1905,8 @@ composite_resume(struct usb_gadget *gadget)
 {
 	struct usb_composite_dev	*cdev = get_gadget_data(gadget);
 	struct usb_function		*f;
-	u8				maxpower;
 	int ret;
+	unsigned long			flags;
 
 	/* REVISIT:  should we have config level
 	 * suspend/resume callbacks?
@@ -1888,6 +1915,7 @@ composite_resume(struct usb_gadget *gadget)
 	if (cdev->driver->resume)
 		cdev->driver->resume(cdev);
 
+	spin_lock_irqsave(&cdev->lock, flags);
 	if (cdev->config) {
 		list_for_each_entry(f, &cdev->config->functions, list) {
 			ret = usb_func_wakeup_int(f);
@@ -1909,12 +1937,10 @@ composite_resume(struct usb_gadget *gadget)
 				f->resume(f);
 		}
 
-		maxpower = cdev->config->MaxPower;
-
-		usb_gadget_vbus_draw(gadget, maxpower ?
-			maxpower : CONFIG_USB_GADGET_VBUS_DRAW);
+		usb_gadget_vbus_draw(gadget, USB_VBUS_DRAW(gadget->speed));
 	}
 
+	spin_unlock_irqrestore(&cdev->lock, flags);
 	cdev->suspended = 0;
 }
 

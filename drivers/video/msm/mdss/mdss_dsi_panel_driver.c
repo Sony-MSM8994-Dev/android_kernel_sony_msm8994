@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -35,6 +35,12 @@
 #include "mdss_mdp.h"
 #include "mdss_dsi.h"
 #include "mdss_livedisplay.h"
+
+#include <linux/display_state.h>
+
+#ifdef CONFIG_POWERSUSPEND
+#include <linux/powersuspend.h>
+#endif
 
 #define DT_CMD_HDR 6
 #define MIN_REFRESH_RATE 30
@@ -89,6 +95,11 @@ static bool display_onoff_state;
 static bool gpio_req;
 static int mdss_dsi_panel_pcc_setup(struct mdss_panel_data *pdata);
 static void vsync_handler(struct mdss_mdp_ctl *ctl, ktime_t t);
+
+bool is_display_on()
+{
+	return display_onoff_state;
+}
 
 struct mdss_mdp_vsync_handler vs_handle;
 
@@ -243,7 +254,7 @@ u32 mdss_dsi_panel_cmd_read(struct mdss_dsi_ctrl_pdata *ctrl, char cmd0,
 	return 0;
 }
 
-void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,
+static void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,
 			struct dsi_panel_cmds *pcmds, u32 flags)
 {
 	struct dcs_cmd_req cmdreq;
@@ -475,8 +486,8 @@ static char paset[] = {0x2b, 0x00, 0x00, 0x05, 0x00};	/* DTYPE_DCS_LWRITE */
 
 /* pack into one frame before sent */
 static struct dsi_cmd_desc set_col_page_addr_cmd[] = {
-	{{DTYPE_DCS_LWRITE, 0, 0, 0, 1, sizeof(caset)}, caset},	/* packed */
-	{{DTYPE_DCS_LWRITE, 1, 0, 0, 1, sizeof(paset)}, paset},
+	{{DTYPE_DCS_LWRITE, 0, 0, 0, 0, sizeof(caset)}, caset},	/* packed */
+	{{DTYPE_DCS_LWRITE, 1, 0, 0, 0, sizeof(paset)}, paset},
 };
 
 static void mdss_dsi_send_col_page_addr(struct mdss_dsi_ctrl_pdata *ctrl,
@@ -1270,6 +1281,10 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 		return -EINVAL;
 	}
 
+#ifdef CONFIG_POWERSUSPEND
+	set_power_suspend_state_panel_hook(POWER_SUSPEND_INACTIVE);
+#endif
+
 	pinfo = &pdata->panel_info;
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
@@ -1338,7 +1353,6 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 			}
 		}
 	}
-
 end:
 	pinfo->blank_state = MDSS_PANEL_BLANK_UNBLANK;
 	pr_debug("%s:-\n", __func__);
@@ -1401,6 +1415,10 @@ static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 		pr_info("%s: vsyncs_per_ksecs is invalid\n", __func__);
 	}
 
+#ifdef CONFIG_POWERSUSPEND
+	set_power_suspend_state_panel_hook(POWER_SUSPEND_ACTIVE);
+#endif
+
 end:
 	pinfo->blank_state = MDSS_PANEL_BLANK_BLANK;
 	pdata->resume_started = true;
@@ -1422,7 +1440,7 @@ static int mdss_dsi_panel_low_power_config(struct mdss_panel_data *pdata,
 	ctrl = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
-	pr_debug("%s: ctrl=%p ndx=%d enable=%d\n", __func__, ctrl, ctrl->ndx,
+	pr_debug("%s: ctrl=%pK ndx=%d enable=%d\n", __func__, ctrl, ctrl->ndx,
 		enable);
 
 	/* Any panel specific low power commands/config */
@@ -1806,7 +1824,7 @@ static void mdss_dsi_parse_trigger(struct device_node *np, char *trigger,
 	}
 }
 
-int mdss_dsi_parse_dcs_cmds(struct device_node *np,
+static int mdss_dsi_parse_dcs_cmds(struct device_node *np,
 		struct dsi_panel_cmds *pcmds, char *cmd_key, char *link_key)
 {
 	const char *data;
@@ -2229,14 +2247,18 @@ static int mdss_dsi_parse_reset_seq(struct device_node *np,
 
 static int mdss_dsi_gen_read_status(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
-	if (!mdss_dsi_cmp_panel_reg(ctrl_pdata->status_buf,
-		ctrl_pdata->status_value, 0)) {
-		pr_err("%s: Read back value from panel is incorrect\n",
-							__func__);
-		return -EINVAL;
-	} else {
-		return 1;
+	int i;
+
+	for (i = 0; i < ctrl_pdata->status_cmds_rlen; i++) {
+		if (!mdss_dsi_cmp_panel_reg(ctrl_pdata->status_buf,
+					ctrl_pdata->status_value, i)) {
+			pr_err("%s: Read back value from panel is incorrect\n",
+					__func__);
+			return -EINVAL;
+		}
 	}
+
+	return 1;
 }
 
 static int mdss_dsi_nt35596_read_status(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
@@ -2289,8 +2311,8 @@ static void mdss_dsi_parse_roi_alignment(struct device_node *np,
 					__func__);
 		else {
 			pinfo->xstart_pix_align = value[0];
-			pinfo->width_pix_align = value[1];
-			pinfo->ystart_pix_align = value[2];
+			pinfo->ystart_pix_align = value[1];
+			pinfo->width_pix_align = value[2];
 			pinfo->height_pix_align = value[3];
 			pinfo->min_width = value[4];
 			pinfo->min_height = value[5];
@@ -2793,7 +2815,7 @@ static int mdss_dsi_panel_timing_from_dt(struct device_node *np,
 
 	if (np->name) {
 		pt->timing.name = kstrdup(np->name, GFP_KERNEL);
-		pr_info("%s: found new timing \"%s\" (%p)\n", __func__,
+		pr_info("%s: found new timing \"%s\" (%pK)\n", __func__,
 				np->name, &pt->timing);
 	}
 
@@ -2940,6 +2962,12 @@ int mdss_dsi_panel_timing_switch(struct mdss_dsi_ctrl_pdata *ctrl,
 	mdss_dsi_clk_refresh(&ctrl->panel_data);
 
 	return 0;
+}
+
+void mdss_dsi_unregister_bl_settings(struct mdss_dsi_ctrl_pdata *ctrl_pdata)
+{
+	if (ctrl_pdata->bklt_ctrl == BL_WLED)
+		led_trigger_unregister_simple(bl_led_trigger);
 }
 
 static int mdss_panel_parse_dt(struct device_node *np,
@@ -3203,6 +3231,9 @@ static int mdss_panel_parse_dt(struct device_node *np,
 					"qcom,mdss-dsi-lp11-init");
 	rc = of_property_read_u32(np, "qcom,mdss-dsi-init-delay-us", &tmp);
 	pinfo->mipi.init_delay = (!rc ? tmp : 0);
+
+	rc = of_property_read_u32(np, "qcom,mdss-dsi-post-init-delay", &tmp);
+	pinfo->mipi.post_init_delay = (!rc ? tmp : 0);
 
 	data = of_get_property(np,
 		"somc,platform-regulator-settings", &len);

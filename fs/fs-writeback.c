@@ -123,7 +123,8 @@ __bdi_start_writeback(struct backing_dev_info *bdi, long nr_pages,
 	 * This is WB_SYNC_NONE writeback, so if allocation fails just
 	 * wakeup the thread for old dirty data writeback
 	 */
-	work = kzalloc(sizeof(*work), GFP_ATOMIC);
+	work = kzalloc(sizeof(*work),
+		       GFP_NOWAIT | __GFP_NOMEMALLOC | __GFP_NOWARN);
 	if (!work) {
 		trace_writeback_nowork(bdi);
 		bdi_wakeup_thread(bdi);
@@ -701,6 +702,21 @@ static long writeback_sb_inodes(struct super_block *sb,
 
 		work->nr_pages -= write_chunk - wbc.nr_to_write;
 		wrote += write_chunk - wbc.nr_to_write;
+
+		if (need_resched()) {
+			/*
+			 * We're trying to balance between building up a nice
+			 * long list of IOs to improve our merge rate, and
+			 * getting those IOs out quickly for anyone throttling
+			 * in balance_dirty_pages().  cond_resched() doesn't
+			 * unplug, so get our IOs out the door before we
+			 * give up the CPU.
+			 */
+			blk_flush_plug(current);
+			cond_resched();
+		}
+
+
 		spin_lock(&wb->list_lock);
 		spin_lock(&inode->i_lock);
 		if (!(inode->i_state & I_DIRTY))
@@ -708,7 +724,7 @@ static long writeback_sb_inodes(struct super_block *sb,
 		requeue_inode(inode, wb, &wbc);
 		inode_sync_complete(inode);
 		spin_unlock(&inode->i_lock);
-		cond_resched_lock(&wb->list_lock);
+
 		/*
 		 * bail out to wb_writeback() often enough to check
 		 * background threshold and other termination conditions.
@@ -757,7 +773,7 @@ static long __writeback_inodes_wb(struct bdi_writeback *wb,
 	return wrote;
 }
 
-long writeback_inodes_wb(struct bdi_writeback *wb, long nr_pages,
+static long writeback_inodes_wb(struct bdi_writeback *wb, long nr_pages,
 				enum wb_reason reason)
 {
 	struct wb_writeback_work work = {
@@ -766,12 +782,15 @@ long writeback_inodes_wb(struct bdi_writeback *wb, long nr_pages,
 		.range_cyclic	= 1,
 		.reason		= reason,
 	};
+	struct blk_plug plug;
 
+	blk_start_plug(&plug);
 	spin_lock(&wb->list_lock);
 	if (list_empty(&wb->b_io))
 		queue_io(wb, &work);
 	__writeback_inodes_wb(wb, &work);
 	spin_unlock(&wb->list_lock);
+	blk_finish_plug(&plug);
 
 	return nr_pages - work.nr_pages;
 }
@@ -826,10 +845,12 @@ static long wb_writeback(struct bdi_writeback *wb,
 	unsigned long oldest_jif;
 	struct inode *inode;
 	long progress;
+	struct blk_plug plug;
 
 	oldest_jif = jiffies;
 	work->older_than_this = &oldest_jif;
 
+	blk_start_plug(&plug);
 	spin_lock(&wb->list_lock);
 	for (;;) {
 		/*
@@ -909,6 +930,7 @@ static long wb_writeback(struct bdi_writeback *wb,
 		}
 	}
 	spin_unlock(&wb->list_lock);
+	blk_finish_plug(&plug);
 
 	return nr_pages - work->nr_pages;
 }
@@ -997,7 +1019,7 @@ static long wb_check_old_data_flush(struct bdi_writeback *wb)
 /*
  * Retrieve work items and do the writeback they describe
  */
-static long wb_do_writeback(struct bdi_writeback *wb)
+static long wb_do_writeback(struct bdi_writeback *wb, int force_wait)
 {
 	struct backing_dev_info *bdi = wb->bdi;
 	struct wb_writeback_work *work;
@@ -1005,6 +1027,12 @@ static long wb_do_writeback(struct bdi_writeback *wb)
 
 	set_bit(BDI_writeback_running, &wb->bdi->state);
 	while ((work = get_next_work_item(bdi)) != NULL) {
+		/*
+		 * Override sync mode, in case we must wait for completion
+		 * because this thread is exiting now.
+		 */
+		if (force_wait)
+			work->sync_mode = WB_SYNC_ALL;
 
 		trace_writeback_exec(bdi, work);
 
@@ -1082,6 +1110,12 @@ void bdi_writeback_workfn(struct work_struct *work)
 void wakeup_flusher_threads(long nr_pages, enum wb_reason reason)
 {
 	struct backing_dev_info *bdi;
+
+	/*
+	 * If we are expecting writeback progress we must submit plugged IO.
+	 */
+	if (blk_needs_flush_plug(current))
+		blk_schedule_flush_plug(current);
 
 	if (!nr_pages)
 		nr_pages = get_nr_dirty_pages();
@@ -1278,7 +1312,12 @@ static void wait_sb_inodes(struct super_block *sb)
 		iput(old_inode);
 		old_inode = inode;
 
-		filemap_fdatawait(mapping);
+		/*
+		 * We keep the error status of individual mapping so that
+		 * applications can catch the writeback error using fsync(2).
+		 * See filemap_fdatawait_keep_errors() for details.
+		 */
+		filemap_fdatawait_keep_errors(mapping);
 
 		cond_resched();
 

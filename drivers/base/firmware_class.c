@@ -94,7 +94,8 @@ static int loading_timeout = 60;	/* In seconds */
 
 static inline long firmware_loading_timeout(void)
 {
-	return loading_timeout > 0 ? loading_timeout * HZ : MAX_SCHEDULE_TIMEOUT;
+	return loading_timeout > 0 ? msecs_to_jiffies(loading_timeout * 1000) :
+	        MAX_SCHEDULE_TIMEOUT;
 }
 
 struct firmware_cache {
@@ -241,6 +242,7 @@ static int fw_lookup_and_allocate_buf(const char *fw_name,
 	return tmp ? 0 : -ENOMEM;
 }
 
+#ifdef CONFIG_FW_CACHE
 static struct firmware_buf *fw_lookup_buf(const char *fw_name)
 {
 	struct firmware_buf *tmp;
@@ -252,6 +254,7 @@ static struct firmware_buf *fw_lookup_buf(const char *fw_name)
 
 	return tmp;
 }
+#endif
 
 static void __fw_free_buf(struct kref *ref)
 {
@@ -297,7 +300,8 @@ static const char * const fw_path[] = {
 	"/lib/firmware/updates/" UTS_RELEASE,
 	"/lib/firmware/updates",
 	"/lib/firmware/" UTS_RELEASE,
-	"/lib/firmware"
+	"/lib/firmware",
+	"/firmware/image"
 };
 
 /*
@@ -361,6 +365,8 @@ static bool fw_get_filesystem_firmware(struct device *device,
 	int i;
 	bool success = false;
 	char *path = __getname();
+	if (!path)
+		return false;
 
 	for (i = 0; i < ARRAY_SIZE(fw_path); i++) {
 		struct file *file;
@@ -1497,6 +1503,9 @@ request_firmware_nowait_direct(
 					map_data);
 }
 
+#ifdef CONFIG_FW_CACHE
+static ASYNC_DOMAIN_EXCLUSIVE(fw_cache_domain);
+
 /**
  * cache_firmware - cache one firmware image in kernel memory space
  * @fw_name: the firmware image name
@@ -1556,9 +1565,6 @@ int uncache_firmware(const char *fw_name)
 
 	return -EINVAL;
 }
-
-#ifdef CONFIG_FW_CACHE
-static ASYNC_DOMAIN_EXCLUSIVE(fw_cache_domain);
 
 static struct fw_cache_entry *alloc_fw_cache_entry(const char *name)
 {

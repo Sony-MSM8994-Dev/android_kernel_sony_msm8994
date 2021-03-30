@@ -387,17 +387,23 @@ __internal_add_timer(struct tvec_base *base, struct timer_list *timer)
 	list_add_tail(&timer->entry, vec);
 }
 
-static void internal_add_timer(struct tvec_base *base, struct timer_list *timer)
+static int internal_add_timer(struct tvec_base *base, struct timer_list *timer)
 {
+	int leftmost = 0;
+
 	__internal_add_timer(base, timer);
 	/*
 	 * Update base->active_timers and base->next_timer
 	 */
 	if (!tbase_get_deferrable(timer->base)) {
-		if (time_before(timer->expires, base->next_timer))
+		if (time_before(timer->expires, base->next_timer)) {
+			leftmost = 1;
 			base->next_timer = timer->expires;
+		}
 		base->active_timers++;
 	}
+
+	return leftmost;
 }
 
 #ifdef CONFIG_DEBUG_OBJECTS_TIMERS
@@ -707,7 +713,7 @@ __mod_timer(struct timer_list *timer, unsigned long expires,
 {
 	struct tvec_base *base, *new_base;
 	unsigned long flags;
-	int ret = 0 , cpu;
+	int ret = 0, cpu, leftmost;
 
 	BUG_ON(!timer->function);
 
@@ -719,14 +725,15 @@ __mod_timer(struct timer_list *timer, unsigned long expires,
 
 	debug_activate(timer, expires);
 
+	cpu = smp_processor_id();
+
 #ifdef CONFIG_SMP
 	if (base != tvec_base_deferral) {
 #endif
-		 cpu = smp_processor_id();
 
 #if defined(CONFIG_NO_HZ_COMMON) && defined(CONFIG_SMP)
-		if (!pinned && get_sysctl_timer_migration() && idle_cpu(cpu))
-			cpu = get_nohz_timer_target();
+	if (!pinned && get_sysctl_timer_migration())
+		cpu = get_nohz_timer_target();
 #endif
 		new_base = per_cpu(tvec_bases, cpu);
 
@@ -752,7 +759,23 @@ __mod_timer(struct timer_list *timer, unsigned long expires,
 #endif
 
 	timer->expires = expires;
-	internal_add_timer(base, timer);
+	leftmost = internal_add_timer(base, timer);
+
+#ifdef CONFIG_SCHED_HMP
+	/*
+	 * Check whether the other CPU is in dynticks mode and needs
+	 * to be triggered to reevaluate the timer wheel.
+	 * We are protected against the other CPU fiddling
+	 * with the timer by holding the timer base lock. This also
+	 * makes sure that a CPU on the way to stop its tick can not
+	 * evaluate the timer wheel.
+	 *
+	 * This test is needed for only CONFIG_SCHED_HMP, as !CONFIG_SCHED_HMP
+	 * selects non-idle cpu as target of timer migration.
+	 */
+	if (cpu != smp_processor_id() && leftmost)
+		wake_up_nohz_cpu(cpu);
+#endif
 
 out_unlock:
 	spin_unlock_irqrestore(&base->lock, flags);
@@ -912,6 +935,7 @@ void add_timer_on(struct timer_list *timer, int cpu)
 	struct tvec_base *new_base = per_cpu(tvec_bases, cpu);
 	struct tvec_base *base;
 	unsigned long flags;
+	int leftmost;
 
 	BUG_ON(timer_pending(timer) || !timer->function);
 
@@ -929,7 +953,8 @@ void add_timer_on(struct timer_list *timer, int cpu)
 		timer_set_base(timer, base);
 	}
 	debug_activate(timer, timer->expires);
-	internal_add_timer(base, timer);
+	leftmost = internal_add_timer(base, timer);
+
 	/*
 	 * Check whether the other CPU is in dynticks mode and needs
 	 * to be triggered to reevaluate the timer wheel.
@@ -938,7 +963,8 @@ void add_timer_on(struct timer_list *timer, int cpu)
 	 * makes sure that a CPU on the way to stop its tick can not
 	 * evaluate the timer wheel.
 	 */
-	wake_up_nohz_cpu(cpu);
+	if (leftmost)
+		wake_up_nohz_cpu(cpu);
 	spin_unlock_irqrestore(&base->lock, flags);
 }
 EXPORT_SYMBOL_GPL(add_timer_on);
@@ -1088,7 +1114,7 @@ static int cascade(struct tvec_base *base, struct tvec *tv, int index)
 static void call_timer_fn(struct timer_list *timer, void (*fn)(unsigned long),
 			  unsigned long data)
 {
-	int preempt_count = preempt_count();
+	int count = preempt_count();
 
 #ifdef CONFIG_LOCKDEP
 	/*
@@ -1115,16 +1141,16 @@ static void call_timer_fn(struct timer_list *timer, void (*fn)(unsigned long),
 
 	lock_map_release(&lockdep_map);
 
-	if (preempt_count != preempt_count()) {
+	if (count != preempt_count()) {
 		WARN_ONCE(1, "timer: %pF preempt leak: %08x -> %08x\n",
-			  fn, preempt_count, preempt_count());
+			  fn, count, preempt_count());
 		/*
 		 * Restore the preempt count. That gives us a decent
 		 * chance to survive and extract information. If the
 		 * callback kept a lock held, bad luck, but not worse
 		 * than the BUG() we had.
 		 */
-		preempt_count() = preempt_count;
+		preempt_count_set(count);
 	}
 }
 
@@ -1375,7 +1401,7 @@ void update_process_times(int user_tick)
 	rcu_check_callbacks(cpu, user_tick);
 #ifdef CONFIG_IRQ_WORK
 	if (in_irq())
-		irq_work_run();
+		irq_work_tick();
 #endif
 	scheduler_tick();
 	run_posix_cpu_timers(p);
@@ -1533,11 +1559,11 @@ signed long __sched schedule_timeout_uninterruptible(signed long timeout)
 }
 EXPORT_SYMBOL(schedule_timeout_uninterruptible);
 
-static int __cpuinit init_timers_cpu(int cpu)
+static int init_timers_cpu(int cpu)
 {
 	int j;
 	struct tvec_base *base;
-	static char __cpuinitdata tvec_base_done[NR_CPUS + 1];
+	static char tvec_base_done[NR_CPUS + 1];
 
 	if (!tvec_base_done[cpu]) {
 		static char boot_done;
@@ -1620,7 +1646,7 @@ static void migrate_timer_list(struct tvec_base *new_base, struct list_head *hea
 	}
 }
 
-static void __cpuinit migrate_timers(int cpu)
+static void migrate_timers(int cpu)
 {
 	struct tvec_base *old_base;
 	struct tvec_base *new_base;
@@ -1653,7 +1679,7 @@ static void __cpuinit migrate_timers(int cpu)
 }
 #endif /* CONFIG_HOTPLUG_CPU */
 
-static int __cpuinit timer_cpu_notify(struct notifier_block *self,
+static int timer_cpu_notify(struct notifier_block *self,
 				unsigned long action, void *hcpu)
 {
 	long cpu = (long)hcpu;
@@ -1678,7 +1704,7 @@ static int __cpuinit timer_cpu_notify(struct notifier_block *self,
 	return NOTIFY_OK;
 }
 
-static struct notifier_block __cpuinitdata timers_nb = {
+static struct notifier_block timers_nb = {
 	.notifier_call	= timer_cpu_notify,
 };
 

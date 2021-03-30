@@ -79,7 +79,7 @@
 #define HWTEST_SIZE_OF_TRX_SHORT_2_TAB		13
 #define HWTEST_MAX_DIGITS			10
 #define HWTEST_LOG_BUF_SIZE			(PAGE_SIZE * 10)
-#define SYN_WATCHDOG_POLL_DEFAULT_INTERVAL	HZ
+#define SYN_WATCHDOG_POLL_DEFAULT_INTERVAL	1000
 #define SYN_WAKEUP_GESTURE			"wakeup_gesture"
 
 #define SYN_PAGE_ADDR(page, addr) ((page) << 8 | (addr))
@@ -2318,7 +2318,7 @@ static int clearpad_set_normal_mode(struct clearpad_t *this)
 		rc = clearpad_set_cover_status(this);
 
 	this->active |= SYN_ACTIVE_POWER;
-	dev_info(&this->pdev->dev, "normal mode OK\n");
+	dev_dbg(&this->pdev->dev, "normal mode OK\n");
 exit:
 	return rc;
 }
@@ -2383,7 +2383,7 @@ static int clearpad_set_suspend_mode(struct clearpad_t *this)
 	}
 
 	this->active &= ~SYN_ACTIVE_POWER;
-	dev_info(&this->pdev->dev, "suspend mode OK\n");
+	dev_dbg(&this->pdev->dev, "suspend mode OK\n");
 exit:
 	return rc;
 }
@@ -2402,7 +2402,7 @@ static int clearpad_set_power(struct clearpad_t *this)
 		 this->input->users,
 		 !!(active & SYN_STANDBY));
 
-	dev_info(&this->pdev->dev, "%s: state=%s\n", __func__,
+	dev_dbg(&this->pdev->dev, "%s: state=%s\n", __func__,
 		 clearpad_state_name[this->state]);
 	should_wake = !(active & SYN_STANDBY);
 
@@ -2411,7 +2411,7 @@ static int clearpad_set_power(struct clearpad_t *this)
 	else if (!should_wake && (active & SYN_ACTIVE_POWER))
 		rc = clearpad_set_suspend_mode(this);
 	else
-		dev_info(&this->pdev->dev, "no change (%d)\n", should_wake);
+		dev_dbg(&this->pdev->dev, "no change (%d)\n", should_wake);
 
 	if (rc)
 		clearpad_reset_power(this, __func__);
@@ -2532,6 +2532,8 @@ static void clearpad_funcarea_initialize(struct clearpad_t *this)
 				pointer_area.y1 -= pointer_data->offset_y;
 				pointer_area.y2 -= pointer_data->offset_y;
 			}
+			input_mt_init_slots(this->input,
+						this->extents.n_fingers, 0);
 			input_set_abs_params(this->input, ABS_MT_TRACKING_ID,
 					0, this->extents.n_fingers, 0, 0);
 			input_set_abs_params(this->input, ABS_MT_POSITION_X,
@@ -2671,8 +2673,8 @@ static void clearpad_funcarea_down(struct clearpad_t *this,
 			break;
 		touch_major = max(cur->wx, cur->wy) + 1;
 		touch_minor = min(cur->wx, cur->wy) + 1;
-		input_report_abs(idev, ABS_MT_TRACKING_ID, cur->id);
-		input_report_abs(idev, ABS_MT_TOOL_TYPE, cur->tool);
+		input_mt_slot(idev, cur->id);
+		input_mt_report_slot_state(idev, cur->tool, true);
 		input_report_abs(idev, ABS_MT_POSITION_X, cur->x);
 		input_report_abs(idev, ABS_MT_POSITION_Y, cur->y);
 		if (this->touch_pressure_enabled)
@@ -2684,7 +2686,6 @@ static void clearpad_funcarea_down(struct clearpad_t *this,
 		if (this->touch_orientation_enabled)
 			input_report_abs(idev, ABS_MT_ORIENTATION,
 				 (cur->wx > cur->wy));
-		input_mt_sync(idev);
 		break;
 	case SYN_FUNCAREA_BUTTON:
 		LOG_EVENT(this, "button\n");
@@ -2714,7 +2715,8 @@ static void clearpad_funcarea_up(struct clearpad_t *this,
 		LOG_EVENT(this, "%s up\n", valid ? "pt" : "unused pt");
 		if (!valid)
 			break;
-		input_mt_sync(idev);
+		input_mt_slot(idev, pointer->cur.id);
+		input_mt_report_slot_state(idev, pointer->cur.tool, false);
 		break;
 	case SYN_FUNCAREA_BUTTON:
 		LOG_EVENT(this, "button up\n");
@@ -3205,7 +3207,7 @@ static int clearpad_process_irq(struct clearpad_t *this)
 
 	rc = 0;
 
-	dev_info(&this->pdev->dev, "no work, interrupt=[0x%02x]\n", interrupt);
+	dev_dbg(&this->pdev->dev, "no work, interrupt=[0x%02x]\n", interrupt);
 unlock:
 	if (rc) {
 		dev_err(&this->pdev->dev, "%s: error %d\n", __func__, rc);
@@ -3832,7 +3834,13 @@ static ssize_t clearpad_screen_status_store(struct device *dev,
 
 	LOCK(this);
 
-	sscanf(buf, "%d", &this->screen_status);
+	if (sscanf(buf, "%d", &this->screen_status) != 1) {
+		dev_err(&this->pdev->dev, "%s: %s sscanf failed ",
+						__func__, attr->attr.name);
+		UNLOCK(this);
+		return -EINVAL;
+	}
+
 	dev_dbg(&this->pdev->dev, "%s: screen_status = %d\n", __func__,
 				this->screen_status);
 
@@ -4338,8 +4346,9 @@ static int clearpad_pm_suspend(struct device *dev)
 
 	if (device_may_wakeup(dev)) {
 		enable_irq_wake(this->irq);
-		dev_info(&this->pdev->dev, "enable irq wake");
+		dev_dbg(&this->pdev->dev, "enable irq wake");
 	}
+
 	return 0;
 }
 
@@ -4352,7 +4361,7 @@ static int clearpad_pm_resume(struct device *dev)
 
 	if (device_may_wakeup(dev)) {
 		disable_irq_wake(this->irq);
-		dev_info(&this->pdev->dev, "disable irq wake");
+		dev_dbg(&this->pdev->dev, "disable irq wake");
 	}
 
 	spin_lock_irqsave(&this->slock, flags);
@@ -5570,7 +5579,7 @@ static int clearpad_probe(struct platform_device *pdev)
 	if (this->pdata->watchdog_enable) {
 		this->wd_poll_t_jf = this->pdata->watchdog_poll_t_ms ?
 			msecs_to_jiffies(this->pdata->watchdog_poll_t_ms) :
-			SYN_WATCHDOG_POLL_DEFAULT_INTERVAL;
+			msecs_to_jiffies(SYN_WATCHDOG_POLL_DEFAULT_INTERVAL);
 		INIT_DELAYED_WORK(&this->wd_poll_work, clearpad_wd_status_poll);
 	}
 

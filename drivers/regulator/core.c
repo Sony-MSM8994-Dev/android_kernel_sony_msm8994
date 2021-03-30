@@ -1894,6 +1894,14 @@ static void regulator_disable_work(struct work_struct *work)
 	count = rdev->deferred_disables;
 	rdev->deferred_disables = 0;
 
+	/*
+	 * Workqueue functions queue the new work instance while the previous
+	 * work instance is being processed. Cancel the queued work instance
+	 * as the work instance under processing does the job of the queued
+	 * work instance.
+	 */
+	cancel_delayed_work(&rdev->disable_work);
+
 	for (i = 0; i < count; i++) {
 		ret = _regulator_disable(rdev);
 		if (ret != 0)
@@ -1928,7 +1936,6 @@ static void regulator_disable_work(struct work_struct *work)
 int regulator_disable_deferred(struct regulator *regulator, int ms)
 {
 	struct regulator_dev *rdev = regulator->rdev;
-	int ret;
 
 	if (regulator->always_on)
 		return 0;
@@ -1938,15 +1945,11 @@ int regulator_disable_deferred(struct regulator *regulator, int ms)
 
 	mutex_lock(&rdev->mutex);
 	rdev->deferred_disables++;
+	mod_delayed_work(system_power_efficient_wq, &rdev->disable_work,
+			 msecs_to_jiffies(ms));
 	mutex_unlock(&rdev->mutex);
 
-	ret = queue_delayed_work(system_power_efficient_wq,
-				 &rdev->disable_work,
-				 msecs_to_jiffies(ms));
-	if (ret < 0)
-		return ret;
-	else
-		return 0;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(regulator_disable_deferred);
 
@@ -2187,6 +2190,40 @@ int regulator_list_voltage(struct regulator *regulator, unsigned selector)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(regulator_list_voltage);
+
+/**
+ * regulator_list_corner_voltage - return the maximum voltage in microvolts that
+ *	can be physically configured for the regulator when operating at the
+ *	specified voltage corner
+ * @regulator: regulator source
+ * @corner: voltage corner value
+ * Context: can sleep
+ *
+ * This function can be used for regulators which allow scaling between
+ * different voltage corners as opposed to be different absolute voltages.  The
+ * absolute voltage for a given corner may vary part-to-part or for a given part
+ * at runtime based upon various factors.
+ *
+ * Returns a voltage corresponding to the specified voltage corner or a negative
+ * errno if the corner value can't be used on this system.
+ */
+int regulator_list_corner_voltage(struct regulator *regulator, int corner)
+{
+	struct regulator_dev *rdev = regulator->rdev;
+	int ret;
+
+	if (corner < rdev->constraints->min_uV ||
+	    corner > rdev->constraints->max_uV ||
+	    !rdev->desc->ops->list_corner_voltage)
+		return -EINVAL;
+
+	mutex_lock(&rdev->mutex);
+	ret = rdev->desc->ops->list_corner_voltage(rdev, corner);
+	mutex_unlock(&rdev->mutex);
+
+	return ret;
+}
+EXPORT_SYMBOL(regulator_list_corner_voltage);
 
 /**
  * regulator_is_supported_voltage - check if a voltage range can be supported
@@ -3720,7 +3757,7 @@ static ssize_t reg_debug_volt_get(struct file *file, char __user *buf,
 	mutex_lock(&debug_buf_mutex);
 
 	output = snprintf(debug_buf, MAX_DEBUG_BUF_LEN-1, "%d\n", voltage);
-	rc = simple_read_from_buffer((void __user *) buf, output, ppos,
+	rc = simple_read_from_buffer((void __user *) buf, count, ppos,
 					(void *) debug_buf, output);
 
 	mutex_unlock(&debug_buf_mutex);
@@ -3848,6 +3885,15 @@ static const struct file_operations reg_consumers_fops = {
 	.release	= single_release,
 };
 
+static void rdev_deinit_debugfs(struct regulator_dev *rdev)
+{
+	if (!IS_ERR_OR_NULL(rdev)) {
+		debugfs_remove_recursive(rdev->debugfs);
+		rdev->debug_consumer->debugfs = NULL;
+		regulator_put(rdev->debug_consumer);
+	}
+}
+
 static void rdev_init_debugfs(struct regulator_dev *rdev)
 {
 	struct dentry *err_ptr = NULL;
@@ -3882,6 +3928,7 @@ static void rdev_init_debugfs(struct regulator_dev *rdev)
 		pr_err("Error-Bad Function Input\n");
 		goto error;
 	}
+	rdev->debug_consumer = reg;
 
 	reg_ops = rdev->desc->ops;
 	mode = S_IRUGO | S_IWUSR;
@@ -3891,7 +3938,6 @@ static void rdev_init_debugfs(struct regulator_dev *rdev)
 						reg, &reg_enable_fops);
 	if (IS_ERR(err_ptr)) {
 		pr_err("Error-Could not create enable file\n");
-		debugfs_remove_recursive(rdev->debugfs);
 		goto error;
 	}
 
@@ -3906,7 +3952,6 @@ static void rdev_init_debugfs(struct regulator_dev *rdev)
 					rdev->debugfs, reg, &reg_fdisable_fops);
 	if (IS_ERR(err_ptr)) {
 		pr_err("Error-Could not create force_disable file\n");
-		debugfs_remove_recursive(rdev->debugfs);
 		goto error;
 	}
 
@@ -3921,7 +3966,6 @@ static void rdev_init_debugfs(struct regulator_dev *rdev)
 						reg, &reg_volt_fops);
 	if (IS_ERR(err_ptr)) {
 		pr_err("Error-Could not create voltage file\n");
-		debugfs_remove_recursive(rdev->debugfs);
 		goto error;
 	}
 
@@ -3936,7 +3980,6 @@ static void rdev_init_debugfs(struct regulator_dev *rdev)
 						reg, &reg_mode_fops);
 	if (IS_ERR(err_ptr)) {
 		pr_err("Error-Could not create mode file\n");
-		debugfs_remove_recursive(rdev->debugfs);
 		goto error;
 	}
 
@@ -3951,18 +3994,26 @@ static void rdev_init_debugfs(struct regulator_dev *rdev)
 				rdev->debugfs, reg, &reg_optimum_mode_fops);
 	if (IS_ERR(err_ptr)) {
 		pr_err("Error-Could not create optimum_mode file\n");
-		debugfs_remove_recursive(rdev->debugfs);
 		goto error;
 	}
 
+	return;
+
 error:
+	rdev_deinit_debugfs(rdev);
 	return;
 }
+
 #else
+
+static inline void rdev_deinit_debugfs(struct regulator_dev *rdev)
+{
+}
+
 static inline void rdev_init_debugfs(struct regulator_dev *rdev)
 {
-	return;
 }
+
 #endif
 
 /**
@@ -4171,8 +4222,8 @@ void regulator_unregister(struct regulator_dev *rdev)
 	if (rdev->supply)
 		regulator_put(rdev->supply);
 	regulator_proxy_consumer_unregister(rdev->proxy_consumer);
+	rdev_deinit_debugfs(rdev);
 	mutex_lock(&regulator_list_mutex);
-	debugfs_remove_recursive(rdev->debugfs);
 	flush_work(&rdev->disable_work.work);
 	WARN_ON(rdev->open_count);
 	unset_regulator_supplies(rdev);

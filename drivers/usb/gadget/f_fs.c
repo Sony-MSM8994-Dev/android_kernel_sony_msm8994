@@ -22,6 +22,7 @@
 #include <linux/pagemap.h>
 #include <linux/export.h>
 #include <linux/hid.h>
+#include <linux/freezer.h>
 #include <asm/unaligned.h>
 
 #include <linux/usb/composite.h>
@@ -312,6 +313,7 @@ struct ffs_ep {
 	u8				num;
 
 	int				status;	/* P: epfile->mutex */
+	bool				is_busy;
 };
 
 struct ffs_epfile {
@@ -331,6 +333,7 @@ struct ffs_epfile {
 	unsigned char			isoc;	/* P: ffs->eps_lock */
 
 	unsigned char			_pad;
+	atomic_t			opened;
 };
 
 static int  __must_check ffs_epfiles_create(struct ffs_data *ffs);
@@ -758,6 +761,8 @@ static void ffs_epfile_io_complete(struct usb_ep *_ep, struct usb_request *req)
 	if (ep && ep->req && likely(req->context)) {
 		struct ffs_ep *ep = _ep->driver_data;
 		ep->status = req->status ? req->status : req->actual;
+		/* Set is_busy false to indicate completion of last request */
+		ep->is_busy = false;
 		complete(req->context);
 	}
 }
@@ -810,7 +815,7 @@ first_try:
 			 * and wait for next epfile open to happen
 			 */
 			if (!atomic_read(&epfile->error)) {
-				ret = wait_event_interruptible(epfile->wait,
+				ret = wait_event_freezable(epfile->wait,
 					(ep = epfile->ep));
 				if (ret < 0)
 					goto error;
@@ -821,15 +826,28 @@ first_try:
 			}
 		}
 
-		buffer_len = !read ? len : round_up(len,
+		spin_lock_irq(&epfile->ffs->eps_lock);
+		/*
+		 * While we were acquiring lock endpoint got disabled
+		 * (disconnect) or changed (composition switch) ?
+		 */
+		if (epfile->ep == ep) {
+			buffer_len = !read ? len : round_up(len,
 						ep->ep->desc->wMaxPacketSize);
+		} else {
+			spin_unlock_irq(&epfile->ffs->eps_lock);
+			ret = -ENODEV;
+			goto error;
+		}
 
 		/* Do we halt? */
 		halt = !read == !epfile->in;
 		if (halt && epfile->isoc) {
+			spin_unlock_irq(&epfile->ffs->eps_lock);
 			ret = -EINVAL;
 			goto error;
 		}
+		spin_unlock_irq(&epfile->ffs->eps_lock);
 
 		/* Allocate & copy */
 		if (!halt && !data) {
@@ -876,6 +894,7 @@ first_try:
 		req->complete = ffs_epfile_io_complete;
 		req->buf      = data;
 		req->length   = buffer_len;
+		ret           = 0;
 
 		if (read) {
 			INIT_COMPLETION(ffs->epout_completion);
@@ -884,7 +903,12 @@ first_try:
 			INIT_COMPLETION(ffs->epin_completion);
 			req->context  = done = &ffs->epin_completion;
 		}
-		ret = usb_ep_queue(ep->ep, req, GFP_ATOMIC);
+
+		/* Don't queue another read request if previous is still busy */
+		if (!(read && ep->is_busy)) {
+			ret = usb_ep_queue(ep->ep, req, GFP_ATOMIC);
+			ep->is_busy = true;
+		}
 
 		spin_unlock_irq(&epfile->ffs->eps_lock);
 
@@ -933,7 +957,7 @@ first_try:
 error:
 	kfree(data);
 	if (ret < 0)
-		pr_err_ratelimited("%s(): Error: returning %zd value\n",
+		pr_debug_ratelimited("%s(): Error: returning %zd value\n",
 							__func__, ret);
 	return ret;
 }
@@ -965,6 +989,13 @@ ffs_epfile_open(struct inode *inode, struct file *file)
 	if (WARN_ON(epfile->ffs->state != FFS_ACTIVE))
 		return -ENODEV;
 
+	if (atomic_read(&epfile->opened)) {
+		pr_err("%s(): ep(%s) is already opened.\n",
+					__func__, epfile->name);
+		return -EBUSY;
+	}
+
+	atomic_set(&epfile->opened, 1);
 	file->private_data = epfile;
 	ffs_data_opened(epfile->ffs);
 	atomic_set(&epfile->error, 0);
@@ -979,6 +1010,7 @@ ffs_epfile_release(struct inode *inode, struct file *file)
 
 	ENTER();
 
+	atomic_set(&epfile->opened, 0);
 	atomic_set(&epfile->error, 1);
 	ffs_data_closed(epfile->ffs);
 	file->private_data = NULL;
@@ -1514,7 +1546,7 @@ static void functionfs_unbind(struct ffs_data *ffs)
 static int ffs_epfiles_create(struct ffs_data *ffs)
 {
 	struct ffs_epfile *epfile, *epfiles;
-	unsigned i, count;
+	short i, count;
 
 	ENTER();
 
@@ -1528,6 +1560,7 @@ static int ffs_epfiles_create(struct ffs_data *ffs)
 		epfile->ffs = ffs;
 		mutex_init(&epfile->mutex);
 		init_waitqueue_head(&epfile->wait);
+		atomic_set(&epfile->opened, 0);
 		sprintf(epfiles->name, "ep%u",  i);
 		if (!unlikely(ffs_sb_create_file(ffs->sb, epfiles->name, epfile,
 						 &ffs_epfile_operations,
@@ -1636,7 +1669,8 @@ static void ffs_func_eps_disable(struct ffs_function *func)
 
 	spin_lock_irqsave(&func->ffs->eps_lock, flags);
 	do {
-		atomic_set(&epfile->error, 1);
+		if (epfile)
+			atomic_set(&epfile->error, 1);
 		/* pending requests get nuked */
 		if (likely(ep->ep)) {
 			usb_ep_disable(ep->ep);
@@ -1662,11 +1696,14 @@ static int ffs_func_eps_enable(struct ffs_function *func)
 	spin_lock_irqsave(&func->ffs->eps_lock, flags);
 	do {
 		struct usb_endpoint_descriptor *ds;
+		struct usb_ss_ep_comp_descriptor *comp_desc = NULL;
+		int needs_comp_desc = false;
 		int desc_idx;
 
-		if (ffs->gadget->speed == USB_SPEED_SUPER)
+		if (ffs->gadget->speed == USB_SPEED_SUPER) {
 			desc_idx = 2;
-		else if (ffs->gadget->speed == USB_SPEED_HIGH)
+			needs_comp_desc = true;
+		} else if (ffs->gadget->speed == USB_SPEED_HIGH)
 			desc_idx = 1;
 		else
 			desc_idx = 0;
@@ -1679,6 +1716,21 @@ static int ffs_func_eps_enable(struct ffs_function *func)
 
 		ep->ep->driver_data = ep;
 		ep->ep->desc = ds;
+
+		comp_desc = (struct usb_ss_ep_comp_descriptor *)(ds +
+				USB_DT_ENDPOINT_SIZE);
+		ep->ep->maxburst = comp_desc->bMaxBurst + 1;
+
+		if (needs_comp_desc)
+			ep->ep->comp_desc = comp_desc;
+
+		ret = config_ep_by_speed(func->gadget, &func->function, ep->ep);
+		if (ret) {
+			pr_err("%s(): config_ep_by_speed(%d) err for %s\n",
+						__func__, ret, ep->ep->name);
+			break;
+		}
+
 		ret = usb_ep_enable(ep->ep);
 		if (likely(!ret)) {
 			epfile->ep = ep;
@@ -2170,7 +2222,8 @@ static void __ffs_event_add(struct ffs_data *ffs,
 		break;
 
 	default:
-		BUG();
+		WARN(1, "%d: unknown event, this should not happen\n", type);
+		return;
 	}
 
 	{
@@ -2336,10 +2389,8 @@ static int ffs_func_bind(struct usb_configuration *c,
 	struct ffs_data *ffs = func->ffs;
 
 	const int full = !!func->ffs->fs_descs_count;
-	const int high = gadget_is_dualspeed(func->gadget) &&
-		func->ffs->hs_descs_count;
-	const int super = gadget_is_superspeed(func->gadget) &&
-		func->ffs->ss_descs_count;
+	const int high = !!func->ffs->hs_descs_count;
+	const int super = !!func->ffs->ss_descs_count;
 
 	int fs_len, hs_len, ret;
 
@@ -2496,14 +2547,23 @@ static int ffs_func_set_alt(struct usb_function *f,
 
 	ffs->func = func;
 	ret = ffs_func_eps_enable(func);
-	if (likely(ret >= 0))
+	if (likely(ret >= 0)) {
 		ffs_event_add(ffs, FUNCTIONFS_ENABLE);
+		/* Disable USB LPM later on bus_suspend */
+		usb_gadget_autopm_get_async(ffs->gadget);
+	}
+
 	return ret;
 }
 
 static void ffs_func_disable(struct usb_function *f)
 {
+	struct ffs_function *func = ffs_func_from_usb(f);
+	struct ffs_data *ffs = func->ffs;
+
 	ffs_func_set_alt(f, 0, (unsigned)-1);
+	/* matching put to allow LPM on disconnect */
+	usb_gadget_autopm_put_async(ffs->gadget);
 }
 
 static int ffs_func_setup(struct usb_function *f,
@@ -2557,7 +2617,7 @@ static int ffs_func_setup(struct usb_function *f,
 	__ffs_event_add(ffs, FUNCTIONFS_SETUP);
 	spin_unlock_irqrestore(&ffs->ev.waitq.lock, flags);
 
-	return 0;
+	return creq->wLength == 0 ? USB_GADGET_DELAYED_STATUS : 0;
 }
 
 static void ffs_func_suspend(struct usb_function *f)

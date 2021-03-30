@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -22,12 +22,12 @@ int msm_iommu_pagetable_map(struct msm_iommu_pt *pt, unsigned long va,
 			phys_addr_t pa, size_t len, int prot);
 size_t msm_iommu_pagetable_unmap(struct msm_iommu_pt *pt, unsigned long va,
 				size_t len);
-int msm_iommu_pagetable_map_range(struct msm_iommu_pt *pt, unsigned int va,
-			struct scatterlist *sg, unsigned int len, int prot);
-void msm_iommu_pagetable_unmap_range(struct msm_iommu_pt *pt, unsigned int va,
-				unsigned int len);
+int msm_iommu_pagetable_map_range(struct msm_iommu_pt *pt, unsigned long va,
+				struct scatterlist *sg, size_t len, int prot);
+void msm_iommu_pagetable_unmap_range(struct msm_iommu_pt *pt, unsigned long va,
+				size_t len);
 phys_addr_t msm_iommu_iova_to_phys_soft(struct iommu_domain *domain,
-						phys_addr_t va);
+						dma_addr_t va);
 void msm_iommu_pagetable_free_tables(struct msm_iommu_pt *pt, unsigned long va,
 				size_t len);
 #endif

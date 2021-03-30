@@ -30,6 +30,7 @@
 #include <linux/of_device.h>
 #include <linux/radix-tree.h>
 #include <linux/qpnp/pwm.h>
+#include <linux/delay.h>
 
 #define QPNP_LPG_DRIVER_NAME	"qcom,qpnp-pwm"
 #define QPNP_LPG_CHANNEL_BASE	"qpnp-lpg-channel-base"
@@ -1123,6 +1124,9 @@ static int qpnp_lpg_configure_lut_state(struct qpnp_pwm_chip *chip,
 	addr = SPMI_LPG_REG_ADDR(lpg_config->base_addr,
 				QPNP_ENABLE_CONTROL);
 
+	/* Add 1mS delay to fix qcom known HW issue */
+	mdelay(1);
+
 	if (chip->in_test_mode) {
 		test_enable = (state == QPNP_LUT_ENABLE) ? 1 : 0;
 		rc = qpnp_dtest_config(chip, test_enable);
@@ -1513,7 +1517,7 @@ static int _pwm_change_mode(struct qpnp_pwm_chip *chip, enum pm_pwm_mode mode)
  */
 int pwm_change_mode(struct pwm_device *pwm, enum pm_pwm_mode mode)
 {
-	int rc;
+	int rc = 0;
 	unsigned long flags;
 	struct qpnp_pwm_chip *chip;
 

@@ -79,8 +79,6 @@ enum cp_mem_usage {
 #define ION_FLAG_CP_CAMERA (1 << 21)
 #define ION_FLAG_CP_HLOS (1 << 22)
 #define ION_FLAG_CP_HLOS_FREE (1 << 23)
-#define ION_FLAG_CP_SEC_DISPLAY (1 << 25)
-#define ION_FLAG_CP_APP (1 << 26)
 
 /**
  * Flag to allow non continguous allocation of memory from secure

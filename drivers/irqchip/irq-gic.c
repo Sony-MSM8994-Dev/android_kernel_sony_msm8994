@@ -2,7 +2,7 @@
  *  linux/arch/arm/common/gic.c
  *
  *  Copyright (C) 2002 ARM Limited, All Rights Reserved.
- *  Copyright (c) 2014, The Linux Foundation. All rights reserved.
+ *  Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -44,6 +44,7 @@
 #include <linux/irqchip/arm-gic.h>
 #include <linux/syscore_ops.h>
 #include <linux/msm_rtb.h>
+#include <linux/wakeup_reason.h>
 
 #include <asm/cputype.h>
 #include <asm/irq.h>
@@ -212,6 +213,9 @@ static void gic_unmask_irq(struct irq_data *d)
 
 static void gic_disable_irq(struct irq_data *d)
 {
+	/* don't lazy-disable PPIs */
+	if (gic_irq(d) < 32)
+		gic_mask_irq(d);
 	if (gic_arch_extn.irq_disable)
 		gic_arch_extn.irq_disable(d);
 }
@@ -286,6 +290,17 @@ void gic_show_pending_irq(void)
 	}
 }
 
+uint32_t gic_return_irq_pending(void)
+{
+	struct gic_chip_data *gic = &gic_data[0];
+	void __iomem *cpu_base = gic_data_cpu_base(gic);
+	int val;
+
+	val = readl_relaxed_no_log(cpu_base + GIC_CPU_HIGHPRI);
+	return val;
+}
+EXPORT_SYMBOL(gic_return_irq_pending);
+
 static void gic_show_resume_irq(struct gic_chip_data *gic)
 {
 	unsigned int i;
@@ -307,7 +322,9 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 	for (i = find_first_bit((unsigned long *)pending, gic->gic_irqs);
 	i < gic->gic_irqs;
 	i = find_next_bit((unsigned long *)pending, gic->gic_irqs, i+1)) {
-		struct irq_desc *desc = irq_to_desc(i + gic->irq_offset);
+		unsigned int irq = irq_find_mapping(gic->domain,
+						i + gic->irq_offset);
+		struct irq_desc *desc = irq_to_desc(irq);
 		const char *name = "null";
 
 		if (desc == NULL)
@@ -315,8 +332,7 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 		else if (desc->action && desc->action->name)
 			name = desc->action->name;
 
-		pr_warning("%s: %d triggered %s\n", __func__,
-					i + gic->irq_offset, name);
+		log_wakeup_reason(irq);
 	}
 }
 
@@ -500,6 +516,14 @@ static asmlinkage void __exception_irq_entry gic_handle_irq(struct pt_regs *regs
 		if (irqnr < 16) {
 			writel_relaxed_no_log(irqstat, cpu_base + GIC_CPU_EOI);
 #ifdef CONFIG_SMP
+			/*
+			 * Ensure any shared data written by the CPU sending
+			 * the IPI is read after we've read the ACK register
+			 * on the GIC.
+			 *
+			 * Pairs with the write barrier in gic_raise_softirq
+			 */
+			smp_rmb();
 			handle_IPI(irqnr, regs);
 #endif
 			uncached_logk(LOGK_IRQ, (void *)(uintptr_t)irqnr);
@@ -630,7 +654,7 @@ static void __init gic_dist_init(struct gic_chip_data *gic)
 	mb();
 }
 
-static void __cpuinit gic_cpu_init(struct gic_chip_data *gic)
+static void gic_cpu_init(struct gic_chip_data *gic)
 {
 	void __iomem *dist_base = gic_data_dist_base(gic);
 	void __iomem *base = gic_data_cpu_base(gic);
@@ -990,7 +1014,7 @@ static int gic_irq_domain_xlate(struct irq_domain *d,
 }
 
 #ifdef CONFIG_SMP
-static int __cpuinit gic_secondary_init(struct notifier_block *nfb,
+static int gic_secondary_init(struct notifier_block *nfb,
 					unsigned long action, void *hcpu)
 {
 	if (action == CPU_STARTING || action == CPU_STARTING_FROZEN)
@@ -1002,7 +1026,7 @@ static int __cpuinit gic_secondary_init(struct notifier_block *nfb,
  * Notifier for enabling the GIC CPU interface. Set an arbitrarily high
  * priority because the GIC needs to be up before the ARM generic timers.
  */
-static struct notifier_block __cpuinitdata gic_cpu_notifier = {
+static struct notifier_block gic_cpu_notifier = {
 	.notifier_call = gic_secondary_init,
 	.priority = 100,
 };

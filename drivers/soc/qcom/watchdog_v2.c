@@ -116,8 +116,8 @@ module_param(ipi_opt_en, int, 0);
 static void dump_cpu_alive_mask(struct msm_watchdog_data *wdog_dd)
 {
 	static char alive_mask_buf[MASK_SIZE];
-	cpulist_scnprintf(alive_mask_buf, MASK_SIZE,
-						&wdog_dd->alive_mask);
+	scnprintf(alive_mask_buf, MASK_SIZE, "%*pbl",
+					cpumask_pr_args(&wdog_dd->alive_mask));
 	printk(KERN_INFO "cpu alive mask from last pet %s\n", alive_mask_buf);
 }
 
@@ -399,14 +399,14 @@ void msm_trigger_wdog_bite(void)
 {
 	if (!wdog_data)
 		return;
-	pr_info("Causing a watchdog bite!");
+	pr_info("Causing a watchdog bite!\n");
 	__raw_writel(1, wdog_data->base + WDT0_BITE_TIME);
 	mb();
 	__raw_writel(1, wdog_data->base + WDT0_RST);
 	mb();
 	/* Delay to make sure bite occurs */
 	mdelay(10000);
-	pr_err("Wdog - STS: 0x%x, CTL: 0x%x, BARK TIME: 0x%x, BITE TIME: 0x%x",
+	pr_err("Wdog - STS: 0x%x, CTL: 0x%x, BARK TIME: 0x%x, BITE TIME: 0x%x\n",
 		__raw_readl(wdog_data->base + WDT0_STS),
 		__raw_readl(wdog_data->base + WDT0_EN),
 		__raw_readl(wdog_data->base + WDT0_BARK_TIME),
@@ -461,8 +461,9 @@ static void configure_bark_dump(struct msm_watchdog_data *wdog_dd)
 	if (MSM_DUMP_MAJOR(msm_dump_table_version()) == 1) {
 		wdog_dd->scm_regsave = (void *)__get_free_page(GFP_KERNEL);
 		if (wdog_dd->scm_regsave) {
-			desc.args[0] = cmd_buf.addr =
-					virt_to_phys(wdog_dd->scm_regsave);
+			/* scm_regsave may be a phys address > 4GB */
+			desc.args[0] = virt_to_phys(wdog_dd->scm_regsave);
+			cmd_buf.addr = virt_to_phys(wdog_dd->scm_regsave);
 			desc.args[1] = cmd_buf.len  = PAGE_SIZE;
 			desc.arginfo = SCM_ARGS(2, SCM_RW, SCM_VAL);
 
@@ -588,7 +589,7 @@ static void init_watchdog_data(struct msm_watchdog_data *wdog_dd)
 	mutex_init(&wdog_dd->disable_lock);
 	init_completion(&wdog_dd->pet_complete);
 	wake_up_process(wdog_dd->watchdog_task);
-	init_timer(&wdog_dd->pet_timer);
+	init_timer_deferrable(&wdog_dd->pet_timer);
 	wdog_dd->pet_timer.data = (unsigned long)wdog_dd;
 	wdog_dd->pet_timer.function = pet_task_wakeup;
 	wdog_dd->pet_timer.expires = jiffies + delay_time;

@@ -161,7 +161,6 @@ static inline void bio_set_dev(struct bio *bio, struct block_device *bdev)
 }
 #endif
 
-
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
 static int sdfat_getattr(const struct path *path, struct kstat *stat,
 			u32 request_mask, unsigned int query_flags)
@@ -1108,7 +1107,7 @@ static const char *sdfat_follow_link(struct dentry *dentry, void **cookie)
 
 	return *cookie = (char *)(ei->target);
 }
-#else
+#else /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 3, 0) */
 static void *sdfat_follow_link(struct dentry *dentry, struct nameidata *nd)
 {
 	struct sdfat_inode_info *ei = SDFAT_I(dentry->d_inode);
@@ -2522,7 +2521,11 @@ static struct dentry *__sdfat_lookup(struct inode *dir, struct dentry *dentry)
 		 * In such case, we reuse an alias instead of new dentry
 		 */
 		if (d_unhashed(alias)) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0)
+			BUG_ON(alias->d_name.hash != dentry->d_name.hash && alias->d_name.len != dentry->d_name.len);
+#else
 			BUG_ON(alias->d_name.hash_len != dentry->d_name.hash_len);
+#endif
 			sdfat_msg(sb, KERN_INFO, "rehashed a dentry(%p) "
 				"in read lookup", alias);
 			d_drop(dentry);
@@ -4713,6 +4716,14 @@ static int parse_options(struct super_block *sb, char *options, int silent,
 	opts->errors = SDFAT_ERRORS_RO;
 	opts->discard = 0;
 	*debug = 0;
+
+#ifdef CONFIG_SDFAT_DELAY_ALLOC
+	opts->improved_allocation |= SDFAT_ALLOC_DELAY;
+#endif
+
+#ifdef CONFIG_SDFAT_SMART_ALLOC
+	opts->improved_allocation |= SDFAT_ALLOC_SMART;
+#endif
 
 	if (!options)
 		goto out;

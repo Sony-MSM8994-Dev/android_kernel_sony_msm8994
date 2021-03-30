@@ -277,7 +277,7 @@ static int msm_pcm_playback_prepare(struct snd_pcm_substream *substream)
 	struct msm_audio *prtd = runtime->private_data;
 	struct msm_plat_data *pdata;
 	struct snd_pcm_hw_params *params;
-	int ret;
+	int ret = 0;
 	uint16_t bits_per_sample;
 	uint16_t sample_word_size;
 
@@ -285,6 +285,11 @@ static int msm_pcm_playback_prepare(struct snd_pcm_substream *substream)
 		dev_get_drvdata(soc_prtd->platform->dev);
 	if (!pdata) {
 		pr_err("%s: platform data not populated\n", __func__);
+		return -EINVAL;
+	}
+	if (!prtd || !prtd->audio_client) {
+		pr_err("%s: private data null or audio client freed\n",
+			__func__);
 		return -EINVAL;
 	}
 	params = &soc_prtd->dpcm[substream->stream].hw_params;
@@ -374,6 +379,11 @@ static int msm_pcm_capture_prepare(struct snd_pcm_substream *substream)
 		dev_get_drvdata(soc_prtd->platform->dev);
 	if (!pdata) {
 		pr_err("%s: platform data not populated\n", __func__);
+		return -EINVAL;
+	}
+	if (!prtd || !prtd->audio_client) {
+		pr_err("%s: private data null or audio client freed\n",
+			__func__);
 		return -EINVAL;
 	}
 
@@ -1225,9 +1235,37 @@ static int msm_asoc_pcm_new(struct snd_soc_pcm_runtime *rtd)
 	return ret;
 }
 
+static snd_pcm_sframes_t msm_pcm_delay_blk(struct snd_pcm_substream *substream,
+		struct snd_soc_dai *dai)
+{
+	struct snd_pcm_runtime *runtime = substream->runtime;
+	struct msm_audio *prtd = runtime->private_data;
+	struct audio_client *ac = prtd->audio_client;
+	snd_pcm_sframes_t frames;
+	int ret;
+
+	ret = q6asm_get_path_delay(prtd->audio_client);
+	if (ret) {
+		pr_err("%s: get_path_delay failed, ret=%d\n", __func__, ret);
+		return 0;
+	}
+
+	/* convert microseconds to frames */
+	frames = ac->path_delay / 1000 * runtime->rate / 1000;
+
+	/* also convert the remainder from the initial division */
+	frames += ac->path_delay % 1000 * runtime->rate / 1000000;
+
+	/* overcompensate for the loss of precision (empirical) */
+	frames += 2;
+
+	return frames;
+}
+
 static struct snd_soc_platform_driver msm_soc_platform = {
 	.ops		= &msm_pcm_ops,
 	.pcm_new	= msm_asoc_pcm_new,
+	.delay_blk      = msm_pcm_delay_blk,
 };
 
 static int msm_pcm_probe(struct platform_device *pdev)

@@ -125,6 +125,7 @@
 #define DWC3_GPRTBIMAP_HS1	0xc184
 #define DWC3_GPRTBIMAP_FS0	0xc188
 #define DWC3_GPRTBIMAP_FS1	0xc18c
+#define DWC3_GUCTL2		0xc19c
 
 #define DWC3_GUSB2PHYCFG(n)	(0xc200 + (n * 0x04))
 #define DWC3_GUSB2I2CCTL(n)	(0xc240 + (n * 0x04))
@@ -205,6 +206,9 @@
 /* Global Debug LTSSM Register */
 #define DWC3_GDBGLTSSM_LINKSTATE_MASK	(0xF << 22)
 
+/* Global User Control 2 Register */
+#define DWC3_GUCTL2_ENABLE_EP_CACHE_EVICT	(1 << 12)
+
 /* Global USB2 PHY Configuration Register */
 #define DWC3_GUSB2PHYCFG_PHYSOFTRST	(1 << 31)
 #define DWC3_GUSB2PHYCFG_ENBLSLPM	(1 << 8)
@@ -221,6 +225,10 @@
 /* Global TX Fifo Size Register */
 #define DWC3_GTXFIFOSIZ_TXFDEF(n)	((n) & 0xffff)
 #define DWC3_GTXFIFOSIZ_TXFSTADDR(n)	((n) & 0xffff0000)
+
+/* Global Event Size Registers */
+#define DWC3_GEVNTSIZ_INTMASK		(1 << 31)
+#define DWC3_GEVNTSIZ_SIZE(n)		((n) & 0xffff)
 
 /* Global HWPARAMS1 Register */
 #define DWC3_GHWPARAMS1_EN_PWROPT(n)	(((n) & (3 << 24)) >> 24)
@@ -500,7 +508,7 @@ struct dwc3_ep_events {
 #define DWC3_EP_DIRECTION_TX	true
 #define DWC3_EP_DIRECTION_RX	false
 
-#define DWC3_TRB_NUM		1024
+#define DWC3_TRB_NUM		128
 #define DWC3_TRB_MASK		(DWC3_TRB_NUM - 1)
 
 /**
@@ -862,6 +870,10 @@ struct dwc3 {
 #define DWC3_REVISION_240A	0x5533240a
 #define DWC3_REVISION_250A	0x5533250a
 #define DWC3_REVISION_270A	0x5533270a
+#define DWC3_REVISION_280A	0x5533280a
+#define DWC3_REVISION_300A	0x5533300a
+#define DWC3_REVISION_310A	0x5533310a
+#define DWC3_REVISION_320A	0x5533320a
 
 	unsigned		is_selfpowered:1;
 	unsigned		three_stage_setup:1;
@@ -925,6 +937,7 @@ struct dwc3 {
 	unsigned                bh_handled_evt_cnt[MAX_INTR_STATS];
 	unsigned                bh_dbg_index;
 	ktime_t			irq_start_time[MAX_INTR_STATS];
+	ktime_t			t_pwr_evt_irq;
 	unsigned                irq_completion_time[MAX_INTR_STATS];
 	unsigned                irq_event_count[MAX_INTR_STATS];
 	unsigned                irq_dbg_index;

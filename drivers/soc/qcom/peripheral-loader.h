@@ -59,8 +59,8 @@ struct pil_desc {
 	void (*unmap_fw_mem)(void *virt, size_t size, void *data);
 	void *map_data;
 	bool shutdown_fail;
-	bool clear_fw_region;
 	int dump_in_progress;
+	bool clear_fw_region;
 };
 
 /**

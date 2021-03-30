@@ -10,6 +10,11 @@
 #include <linux/rwsem.h>
 #include <linux/memcontrol.h>
 
+extern int isolate_lru_page(struct page *page);
+extern void putback_lru_page(struct page *page);
+extern unsigned long reclaim_pages_from_list(struct list_head *page_list,
+					     struct vm_area_struct *vma);
+
 /*
  * The anon_vma heads a list of private "related" vmas, to scan if
  * an anonymous page pointing to this anon_vma needs to be unmapped:
@@ -35,6 +40,16 @@ struct anon_vma {
 	 * anon_vma if they are the last user on release
 	 */
 	atomic_t refcount;
+
+	/*
+	 * Count of child anon_vmas and VMAs which points to this anon_vma.
+	 *
+	 * This counter is used for making decision about reusing anon_vma
+	 * instead of forking new one. See comments in function anon_vma_clone.
+	 */
+	unsigned degree;
+
+	struct anon_vma *parent;	/* Parent of this anon_vma */
 
 	/*
 	 * NOTE: the LSB of the rb_root.rb_node is set by
@@ -188,7 +203,8 @@ int page_referenced_one(struct page *, struct vm_area_struct *,
 
 #define TTU_ACTION(x) ((x) & TTU_ACTION_MASK)
 
-int try_to_unmap(struct page *, enum ttu_flags flags);
+int try_to_unmap(struct page *, enum ttu_flags flags,
+			struct vm_area_struct *vma);
 int try_to_unmap_one(struct page *, struct vm_area_struct *,
 			unsigned long address, enum ttu_flags flags);
 
@@ -255,7 +271,7 @@ static inline int page_referenced(struct page *page, int is_locked,
 	return 0;
 }
 
-#define try_to_unmap(page, refs) SWAP_FAIL
+#define try_to_unmap(page, refs, vma) SWAP_FAIL
 
 static inline int page_mkclean(struct page *page)
 {

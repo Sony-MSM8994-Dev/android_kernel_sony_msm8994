@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2015, 2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -504,12 +504,12 @@ int sps_bam_enable(struct sps_bam *dev)
 		if (dev->props.logging_number > 0)
 			dev->props.logging_number--;
 		SPS_INFO(
-			"sps:BAM %pa (va:0x%p) enabled: ver:0x%x, number of pipes:%d\n",
+			"sps:BAM %pa (va:0x%pK) enabled: ver:0x%x, number of pipes:%d\n",
 			BAM_ID(dev), dev->base, dev->version,
 			dev->props.num_pipes);
 	} else
 		SPS_DBG2(
-			"sps:BAM %pa (va:0x%p) enabled: ver:0x%x, number of pipes:%d\n",
+			"sps:BAM %pa (va:0x%pK) enabled: ver:0x%x, number of pipes:%d\n",
 			BAM_ID(dev), dev->base, dev->version,
 			dev->props.num_pipes);
 
@@ -1055,10 +1055,15 @@ int sps_bam_pipe_disconnect(struct sps_bam *dev, u32 pipe_index)
 			bam_pipe_exit(dev->base, pipe_index, dev->props.ee);
 		if (pipe->sys.desc_cache != NULL) {
 			u32 size = pipe->num_descs * sizeof(void *);
-			if (pipe->desc_size + size <= PAGE_SIZE)
-				kfree(pipe->sys.desc_cache);
-			else
+			if (pipe->desc_size + size <= PAGE_SIZE) {
+				if (dev->props.options & SPS_BAM_HOLD_MEM)
+					memset(pipe->sys.desc_cache, 0,
+						pipe->desc_size + size);
+				else
+					kfree(pipe->sys.desc_cache);
+			} else {
 				vfree(pipe->sys.desc_cache);
+			}
 			pipe->sys.desc_cache = NULL;
 		}
 		dev->pipes[pipe_index] = BAM_PIPE_UNASSIGNED;
@@ -1183,30 +1188,43 @@ int sps_bam_pipe_set_params(struct sps_bam *dev, u32 pipe_index, u32 options)
 		/* Allocate both descriptor cache and user pointer array */
 		size = pipe->num_descs * sizeof(void *);
 
-		if (pipe->desc_size + size <= PAGE_SIZE)
-			pipe->sys.desc_cache =
-				kzalloc(pipe->desc_size + size, GFP_KERNEL);
-		else {
+		if (pipe->desc_size + size <= PAGE_SIZE) {
+			if ((dev->props.options &
+						SPS_BAM_HOLD_MEM)) {
+				if (dev->desc_cache_pointers[pipe_index]) {
+					pipe->sys.desc_cache =
+						dev->desc_cache_pointers
+							[pipe_index];
+				} else {
+					pipe->sys.desc_cache =
+						kzalloc(pipe->desc_size + size,
+								GFP_KERNEL);
+					dev->desc_cache_pointers[pipe_index] =
+							pipe->sys.desc_cache;
+				}
+			} else {
+				pipe->sys.desc_cache =
+						kzalloc(pipe->desc_size + size,
+							GFP_KERNEL);
+			}
+			if (pipe->sys.desc_cache == NULL) {
+				SPS_ERR("sps:No memory for pipe%d of BAM %pa\n",
+						pipe_index, BAM_ID(dev));
+				return -ENOMEM;
+			}
+		} else {
 			pipe->sys.desc_cache =
 				vmalloc(pipe->desc_size + size);
 
 			if (pipe->sys.desc_cache == NULL) {
-				SPS_ERR(
-					"sps:No memory for pipe %d of BAM %pa\n",
-					pipe_index, BAM_ID(dev));
+				SPS_ERR("sps:No memory for pipe%d of BAM %pa\n",
+						pipe_index, BAM_ID(dev));
 				return -ENOMEM;
 			}
 
 			memset(pipe->sys.desc_cache, 0, pipe->desc_size + size);
 		}
 
-		if (pipe->sys.desc_cache == NULL) {
-			/*** MUST BE LAST POINT OF FAILURE (see below) *****/
-			SPS_ERR("sps:Desc cache error: BAM %pa pipe %d: %d\n",
-				BAM_ID(dev), pipe_index,
-				pipe->desc_size + size);
-			return SPS_ERROR;
-		}
 		pipe->sys.user_ptrs = (void **)(pipe->sys.desc_cache +
 						 pipe->desc_size);
 		pipe->sys.cache_offset = pipe->sys.acked_offset;
@@ -1465,7 +1483,7 @@ int sps_bam_pipe_transfer(struct sps_bam *dev,
 	if (!pipe->sys.ack_xfers && pipe->polled) {
 		sps_bam_pipe_get_unused_desc_num(dev, pipe_index,
 					&count);
-		count = pipe->desc_size - count - 1;
+		count = pipe->desc_size / sizeof(struct sps_iovec) - count - 1;
 	} else
 		sps_bam_get_free_count(dev, pipe_index, &count);
 
@@ -1939,7 +1957,7 @@ int sps_bam_pipe_get_event(struct sps_bam *dev,
 
 	if (pipe->sys.no_queue) {
 		SPS_ERR(
-			"sps:Invalid connection for event: BAM %pa pipe %d context 0x%p\n",
+			"sps:Invalid connection for event: BAM %pa pipe %d context 0x%pK\n",
 			BAM_ID(dev), pipe_index, pipe);
 		notify->event_id = SPS_EVENT_INVALID;
 		return SPS_ERROR;

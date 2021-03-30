@@ -127,11 +127,13 @@ static int sco_conn_del(struct hci_conn *hcon, int err)
 	/* Kill socket */
 	sk = sco_chan_get(conn);
 	if (sk) {
+		sock_hold(sk);
 		bh_lock_sock(sk);
 		sco_sock_clear_timer(sk);
 		sco_chan_del(sk, err);
 		bh_unlock_sock(sk);
 		sco_sock_kill(sk);
+		sock_put(sk);
 	}
 
 	hcon->sco_data = NULL;
@@ -331,7 +333,8 @@ static void sco_sock_cleanup_listen(struct sock *parent)
  */
 static void sco_sock_kill(struct sock *sk)
 {
-	if (!sock_flag(sk, SOCK_ZAPPED) || sk->sk_socket)
+	if (!sock_flag(sk, SOCK_ZAPPED) || sk->sk_socket ||
+	    sock_flag(sk, SOCK_DEAD))
 		return;
 
 	BT_DBG("sk %pK state %d", sk, sk->sk_state);
@@ -357,8 +360,10 @@ static void __sco_sock_close(struct sock *sk)
 			sk->sk_state = BT_DISCONN;
 			sco_sock_set_timer(sk, SCO_DISCONN_TIMEOUT);
 			if (sco_pi(sk)->conn->hcon != NULL) {
+			sco_conn_lock(sco_pi(sk)->conn);
 				hci_conn_drop(sco_pi(sk)->conn->hcon);
 				sco_pi(sk)->conn->hcon = NULL;
+			sco_conn_unlock(sco_pi(sk)->conn);
 			}
 		} else
 			sco_chan_del(sk, ECONNRESET);
@@ -499,6 +504,9 @@ static int sco_sock_connect(struct socket *sock, struct sockaddr *addr, int alen
 	BT_DBG("sk %pK", sk);
 
 	if (!addr || addr->sa_family != AF_BLUETOOTH)
+		return -EINVAL;
+
+	if (alen < sizeof(struct sockaddr_sco))
 		return -EINVAL;
 
 	memset(&sa, 0, sizeof(sa));
@@ -874,7 +882,9 @@ static int sco_sock_shutdown(struct socket *sock, int how)
 	if (!sk)
 		return 0;
 
+	sock_hold(sk);
 	lock_sock(sk);
+
 	if (!sk->sk_shutdown) {
 		sk->sk_shutdown = SHUTDOWN_MASK;
 		sco_sock_clear_timer(sk);
@@ -885,7 +895,10 @@ static int sco_sock_shutdown(struct socket *sock, int how)
 			err = bt_sock_wait_state(sk, BT_CLOSED,
 						 sk->sk_lingertime);
 	}
+
 	release_sock(sk);
+	sock_put(sk);
+
 	return err;
 }
 
@@ -966,6 +979,11 @@ static void sco_conn_ready(struct sco_conn *conn)
 		bh_unlock_sock(sk);
 	} else {
 		sco_conn_lock(conn);
+
+		if (!conn->hcon) {
+			sco_conn_unlock(conn);
+			return;
+		}
 
 		parent = sco_get_sock_listen(conn->src);
 		if (!parent) {

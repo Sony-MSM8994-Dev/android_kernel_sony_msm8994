@@ -22,6 +22,20 @@
 
 #if BITS_PER_LONG == 64
 
+/**
+ * do_div - returns 2 values: calculate remainder and update new dividend
+ * @n: pointer to uint64_t dividend (will be updated)
+ * @base: uint32_t divisor
+ *
+ * Summary:
+ * ``uint32_t remainder = *n % base;``
+ * ``*n = *n / base;``
+ *
+ * Return: (uint32_t)remainder
+ *
+ * NOTE: macro parameter @n is evaluated multiple times,
+ * beware of side effects!
+ */
 # define do_div(n,base) ({					\
 	uint32_t __base = (base);				\
 	uint32_t __rem;						\
@@ -32,7 +46,11 @@
 
 #elif BITS_PER_LONG == 32
 
+#include <linux/log2.h>
+
+#ifndef __div64_32
 extern uint32_t __div64_32(uint64_t *dividend, uint32_t divisor);
+#endif
 
 /* The unnecessary pointer compare is there
  * to check for type safety (n must be 64bit)
@@ -41,7 +59,11 @@ extern uint32_t __div64_32(uint64_t *dividend, uint32_t divisor);
 	uint32_t __base = (base);			\
 	uint32_t __rem;					\
 	(void)(((typeof((n)) *)0) == ((uint64_t *)0));	\
-	if (likely(((n) >> 32) == 0)) {			\
+	if (__builtin_constant_p(__base) &&		\
+	    is_power_of_2(__base)) {			\
+		__rem = (n) & (__base - 1);		\
+		(n) >>= ilog2(__base);			\
+	} else if (likely(((n) >> 32) == 0)) {		\
 		__rem = (uint32_t)(n) % __base;		\
 		(n) = (uint32_t)(n) / __base;		\
 	} else 						\

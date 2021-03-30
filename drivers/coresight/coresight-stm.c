@@ -795,15 +795,10 @@ static ssize_t stm_show_entities(struct device *dev,
 	struct stm_drvdata *drvdata = dev_get_drvdata(dev->parent);
 	ssize_t len;
 
-	len = bitmap_scnprintf(buf, PAGE_SIZE, drvdata->entities,
-			       OST_ENTITY_MAX);
+	len = snprintf(buf, PAGE_SIZE, "%*pb\n",
+		       OST_ENTITY_MAX, drvdata->entities);
 
-	if (PAGE_SIZE - len < 2)
-		len = -EINVAL;
-	else
-		len += scnprintf(buf + len, 2, "\n");
-
-	return len;
+	return len < PAGE_SIZE ? len : -EINVAL;
 }
 
 static ssize_t stm_store_entities(struct device *dev,

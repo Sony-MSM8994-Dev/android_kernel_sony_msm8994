@@ -42,13 +42,14 @@
 #include <linux/sched.h>
 #include <linux/rcupdate.h>
 #include <linux/notifier.h>
-#include <linux/mutex.h>
-#include <linux/delay.h>
 #include <linux/swap.h>
 #include <linux/fs.h>
 #include <linux/cpuset.h>
 #include <linux/show_mem_notifier.h>
 #include <linux/vmpressure.h>
+#include <linux/zcache.h>
+#include "lowmemorykiller_stats.h"
+#include "lowmemorykiller_tng.h"
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/almk.h>
@@ -65,15 +66,18 @@
 #define CREATE_TRACE_POINTS
 #include "trace/lowmemorykiller.h"
 
-static uint32_t lowmem_debug_level = 1;
-static short lowmem_adj[6] = {
+extern int extra_free_kbytes;
+
+#include "lowmemorykiller_stats.h"
+uint32_t lowmem_debug_level = 1;
+short lowmem_adj[6] = {
 	0,
 	1,
 	6,
 	12,
 };
 static int lowmem_adj_size = 4;
-static int lowmem_minfree[6] = {
+int lowmem_minfree[6] = {
 	3 * 512,	/* 6MB */
 	2 * 1024,	/* 8MB */
 	4 * 1024,	/* 16MB */
@@ -90,8 +94,21 @@ static unsigned long lowmem_deathpending_timeout;
 			pr_info(x);			\
 	} while (0)
 
+int lowmem_min_param_size(void)
+{
+	int array_size = ARRAY_SIZE(lowmem_adj);
+
+	if (lowmem_adj_size < array_size)
+		array_size = lowmem_adj_size;
+	if (lowmem_minfree_size < array_size)
+		array_size = lowmem_minfree_size;
+	return array_size;
+}
+
 static atomic_t shift_adj = ATOMIC_INIT(0);
 static short adj_max_shift = 353;
+module_param_named(adj_max_shift, adj_max_shift, short,
+	S_IRUGO | S_IWUSR);
 
 /* User knob to enable/disable adaptive lmk feature */
 static int enable_adaptive_lmk;
@@ -138,16 +155,19 @@ int adjust_minadj(short *min_score_adj)
 static int lmk_vmpressure_notifier(struct notifier_block *nb,
 			unsigned long action, void *data)
 {
-	int other_free, other_file;
+	int other_free = 0, other_file = 0;
 	unsigned long pressure = action;
 	int array_size = ARRAY_SIZE(lowmem_adj);
 
-	if (!enable_adaptive_lmk)
+	if (!enable_adaptive_lmk) {
+		balance_cache();
 		return 0;
+	}
 
 	if (pressure >= 95) {
-		other_file = global_page_state(NR_FILE_PAGES) -
+		other_file = global_page_state(NR_FILE_PAGES) + zcache_pages() -
 			global_page_state(NR_SHMEM) -
+			global_page_state(NR_UNEVICTABLE) -
 			total_swapcache_pages();
 		other_free = global_page_state(NR_FREE_PAGES);
 
@@ -159,8 +179,9 @@ static int lmk_vmpressure_notifier(struct notifier_block *nb,
 		if (lowmem_minfree_size < array_size)
 			array_size = lowmem_minfree_size;
 
-		other_file = global_page_state(NR_FILE_PAGES) -
+		other_file = global_page_state(NR_FILE_PAGES) + zcache_pages() -
 			global_page_state(NR_SHMEM) -
+			global_page_state(NR_UNEVICTABLE) -
 			total_swapcache_pages();
 
 		other_free = global_page_state(NR_FREE_PAGES);
@@ -181,6 +202,7 @@ static int lmk_vmpressure_notifier(struct notifier_block *nb,
 		trace_almk_vmpressure(pressure, other_free, other_file);
 		atomic_set(&shift_adj, 0);
 	}
+	balance_cache();
 
 	return 0;
 }
@@ -204,8 +226,6 @@ static int test_task_flag(struct task_struct *p, int flag)
 
 	return 0;
 }
-
-static DEFINE_MUTEX(scan_mutex);
 
 int can_use_cma_pages(gfp_t gfp_mask)
 {
@@ -243,7 +263,7 @@ void tune_lmk_zone_param(struct zonelist *zonelist, int classzone_idx,
 	for_each_zone_zonelist(zone, zoneref, zonelist, MAX_NR_ZONES) {
 		zone_idx = zonelist_zone_idx(zoneref);
 		if (zone_idx == ZONE_MOVABLE) {
-			if (!use_cma_pages)
+			if (!use_cma_pages && other_free)
 				*other_free -=
 				    zone_page_state(zone, NR_FREE_CMA_PAGES);
 			continue;
@@ -259,7 +279,8 @@ void tune_lmk_zone_param(struct zonelist *zonelist, int classzone_idx,
 					- zone_page_state(zone, NR_SHMEM)
 					- zone_page_state(zone, NR_SWAPCACHE);
 		} else if (zone_idx < classzone_idx) {
-			if (zone_watermark_ok(zone, 0, 0, classzone_idx, 0)) {
+			if (zone_watermark_ok(zone, 0, 0, classzone_idx, 0) &&
+			    other_free) {
 				if (!use_cma_pages) {
 					*other_free -= min(
 					  zone->lowmem_reserve[classzone_idx] +
@@ -272,8 +293,9 @@ void tune_lmk_zone_param(struct zonelist *zonelist, int classzone_idx,
 					  zone->lowmem_reserve[classzone_idx];
 				}
 			} else {
-				*other_free -=
-					   zone_page_state(zone, NR_FREE_PAGES);
+				if (other_free)
+					*other_free -=
+					  zone_page_state(zone, NR_FREE_PAGES);
 			}
 		}
 	}
@@ -393,6 +415,7 @@ void tune_lmk_param(int *other_free, int *other_file, struct shrink_control *sc)
 			     "ofree %d, %d\n", *other_free, *other_file);
 	}
 #endif
+
 }
 
 #ifdef CONFIG_ANDROID_LOW_MEMORY_KILLER_CONSIDER_SWAP
@@ -421,7 +444,7 @@ static void lowmem_wakeup_kswapd(struct shrink_control *sc, int minfree)
 	}
 
 	lowmem_print(4, "lowmem_wakeup_kswapd order %d\n", order);
-	wakeup_kswapd(preferred_zone, order, classzone_idx);
+	wake_all_kswapd(order, zonelist, high_zoneidx, classzone_idx);
 }
 #endif
 
@@ -465,12 +488,14 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 
 	tune_lmk_param(&other_free, &other_file, sc);
 
+	lmk_inc_stats(LMK_SCAN);
 	if (lowmem_adj_size < array_size)
 		array_size = lowmem_adj_size;
 	if (lowmem_minfree_size < array_size)
 		array_size = lowmem_minfree_size;
 	for (i = 0; i < array_size; i++) {
-		minfree = lowmem_minfree[i];
+		minfree = lowmem_minfree[i] +
+			  ((extra_free_kbytes * 1024) / PAGE_SIZE);
 #ifdef CONFIG_ANDROID_LOW_MEMORY_KILLER_CONSIDER_SWAP
 		if (max_minfree < minfree)
 			max_minfree = minfree;
@@ -547,6 +572,17 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 			task_unlock(p);
 			continue;
 		}
+
+		if (!thread_group_leader(p) || test_tsk_thread_flag(p, TIF_MEMDIE)) {
+			lowmem_print(2, "Skipped '%s'(%d), adj %hd, ma %hd\n",
+				     p->comm, p->pid, p->signal->oom_score_adj,
+				     min_score_adj);
+			task_unlock(p);
+			if (enable_adaptive_lmk)
+				atomic_set(&shift_adj, 1);
+			continue;
+		}
+
 		tasksize = get_mm_rss(p->mm);
 		task_unlock(p);
 		if (tasksize <= 0)
@@ -577,6 +613,7 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 				"   Total reserve is %ldkB\n" \
 				"   Total free pages is %ldkB\n" \
 				"   Total file cache is %ldkB\n" \
+				"   Total zcache is %ldkB\n" \
 				"   Slab Reclaimable is %ldkB\n" \
 				"   Slab UnReclaimable is %ldkB\n" \
 				"   Total Slab is %ldkB\n" \
@@ -595,6 +632,7 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 				(long)(PAGE_SIZE / 1024),
 			     global_page_state(NR_FILE_PAGES) *
 				(long)(PAGE_SIZE / 1024),
+			     (long)zcache_pages() * (long)(PAGE_SIZE / 1024),
 			     global_page_state(NR_SLAB_RECLAIMABLE) *
 				(long)(PAGE_SIZE / 1024),
 			     global_page_state(NR_SLAB_UNRECLAIMABLE) *
@@ -630,7 +668,9 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
 			other_free, other_file, selected_oom_score_adj);
 	} else {
 		trace_almk_shrink(1, ret, other_free, other_file, 0);
+		lmk_inc_stats(LMK_WASTE);
 		rcu_read_unlock();
+		return SHRINK_STOP;
 	}
 
 	lowmem_print(4, "lowmem_shrink %lu, %x, return %d\n",
@@ -647,8 +687,12 @@ static struct shrinker lowmem_shrinker = {
 
 static int __init lowmem_init(void)
 {
+#ifdef CONFIG_ANDROID_LOW_MEMORY_KILLER_TNG
+	lowmem_init_tng(&lowmem_shrinker);
+#endif
 	register_shrinker(&lowmem_shrinker);
 	vmpressure_notifier_register(&lmk_vmpr_nb);
+	init_procfs_lmk();
 	return 0;
 }
 
@@ -754,4 +798,3 @@ module_init(lowmem_init);
 module_exit(lowmem_exit);
 
 MODULE_LICENSE("GPL");
-

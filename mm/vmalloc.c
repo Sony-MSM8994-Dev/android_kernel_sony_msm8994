@@ -414,6 +414,12 @@ static struct vmap_area *alloc_vmap_area(unsigned long size,
 	if (unlikely(!va))
 		return ERR_PTR(-ENOMEM);
 
+	/*
+	 * Only scan the relevant parts containing pointers to other objects
+	 * to avoid false negatives.
+	 */
+	kmemleak_scan_area(&va->rb_node, SIZE_MAX, gfp_mask & GFP_RECLAIM_MASK);
+
 retry:
 	spin_lock(&vmap_area_lock);
 	/*
@@ -510,8 +516,7 @@ overflow:
 		goto retry;
 	}
 	if (printk_ratelimit())
-		printk(KERN_WARNING
-			"vmap allocation for size %lu failed: "
+		pr_warn("vmap allocation for size %lu failed: "
 			"use vmalloc=<size> to increase size.\n", size);
 	kfree(va);
 	return ERR_PTR(-EBUSY);
@@ -808,7 +813,7 @@ struct vmap_block {
 	spinlock_t lock;
 	struct vmap_area *va;
 	unsigned long free, dirty;
-	DECLARE_BITMAP(dirty_map, VMAP_BBMAP_BITS);
+	unsigned long dirty_min, dirty_max; /*< dirty range */
 	struct list_head free_list;
 	struct rcu_head rcu_head;
 	struct list_head purge;
@@ -839,13 +844,31 @@ static unsigned long addr_to_vb_idx(unsigned long addr)
 	return addr;
 }
 
-static struct vmap_block *new_vmap_block(gfp_t gfp_mask)
+static void *vmap_block_vaddr(unsigned long va_start, unsigned long pages_off)
+{
+	unsigned long addr;
+
+	addr = va_start + (pages_off << PAGE_SHIFT);
+	BUG_ON(addr_to_vb_idx(addr) != addr_to_vb_idx(va_start));
+	return (void *)addr;
+}
+
+/**
+ * new_vmap_block - allocates new vmap_block and occupies 2^order pages in this
+ *                  block. Of course pages number can't exceed VMAP_BBMAP_BITS
+ * @order:    how many 2^order pages should be occupied in newly allocated block
+ * @gfp_mask: flags for the page level allocator
+ *
+ * Returns: virtual address in a newly allocated block or ERR_PTR(-errno)
+ */
+static void *new_vmap_block(unsigned int order, gfp_t gfp_mask)
 {
 	struct vmap_block_queue *vbq;
 	struct vmap_block *vb;
 	struct vmap_area *va;
 	unsigned long vb_idx;
 	int node, err;
+	void *vaddr;
 
 	node = numa_node_id();
 
@@ -869,11 +892,15 @@ static struct vmap_block *new_vmap_block(gfp_t gfp_mask)
 		return ERR_PTR(err);
 	}
 
+	vaddr = vmap_block_vaddr(va->va_start, 0);
 	spin_lock_init(&vb->lock);
 	vb->va = va;
-	vb->free = VMAP_BBMAP_BITS;
+	/* At least something should be left free */
+	BUG_ON(VMAP_BBMAP_BITS <= (1UL << order));
+	vb->free = VMAP_BBMAP_BITS - (1UL << order);
 	vb->dirty = 0;
-	bitmap_zero(vb->dirty_map, VMAP_BBMAP_BITS);
+	vb->dirty_min = VMAP_BBMAP_BITS;
+	vb->dirty_max = 0;
 	INIT_LIST_HEAD(&vb->free_list);
 
 	vb_idx = addr_to_vb_idx(va->va_start);
@@ -885,11 +912,11 @@ static struct vmap_block *new_vmap_block(gfp_t gfp_mask)
 
 	vbq = &get_cpu_var(vmap_block_queue);
 	spin_lock(&vbq->lock);
-	list_add_rcu(&vb->free_list, &vbq->free);
+	list_add_tail_rcu(&vb->free_list, &vbq->free);
 	spin_unlock(&vbq->lock);
 	put_cpu_var(vmap_block_queue);
 
-	return vb;
+	return vaddr;
 }
 
 static void free_vmap_block(struct vmap_block *vb)
@@ -924,7 +951,8 @@ static void purge_fragmented_blocks(int cpu)
 		if (vb->free + vb->dirty == VMAP_BBMAP_BITS && vb->dirty != VMAP_BBMAP_BITS) {
 			vb->free = 0; /* prevent further allocs after releasing lock */
 			vb->dirty = VMAP_BBMAP_BITS; /* prevent purging it again */
-			bitmap_fill(vb->dirty_map, VMAP_BBMAP_BITS);
+			vb->dirty_min = 0;
+			vb->dirty_max = VMAP_BBMAP_BITS;
 			spin_lock(&vbq->lock);
 			list_del_rcu(&vb->free_list);
 			spin_unlock(&vbq->lock);
@@ -953,7 +981,7 @@ static void *vb_alloc(unsigned long size, gfp_t gfp_mask)
 {
 	struct vmap_block_queue *vbq;
 	struct vmap_block *vb;
-	unsigned long addr = 0;
+	void *vaddr = NULL;
 	unsigned int order;
 
 	BUG_ON(size & ~PAGE_MASK);
@@ -968,43 +996,38 @@ static void *vb_alloc(unsigned long size, gfp_t gfp_mask)
 	}
 	order = get_order(size);
 
-again:
 	rcu_read_lock();
 	vbq = &get_cpu_var(vmap_block_queue);
 	list_for_each_entry_rcu(vb, &vbq->free, free_list) {
-		int i;
+		unsigned long pages_off;
 
 		spin_lock(&vb->lock);
-		if (vb->free < 1UL << order)
-			goto next;
+		if (vb->free < (1UL << order)) {
+			spin_unlock(&vb->lock);
+			continue;
+		}
 
-		i = VMAP_BBMAP_BITS - vb->free;
-		addr = vb->va->va_start + (i << PAGE_SHIFT);
-		BUG_ON(addr_to_vb_idx(addr) !=
-				addr_to_vb_idx(vb->va->va_start));
+		pages_off = VMAP_BBMAP_BITS - vb->free;
+		vaddr = vmap_block_vaddr(vb->va->va_start, pages_off);
 		vb->free -= 1UL << order;
 		if (vb->free == 0) {
 			spin_lock(&vbq->lock);
 			list_del_rcu(&vb->free_list);
 			spin_unlock(&vbq->lock);
 		}
+
 		spin_unlock(&vb->lock);
 		break;
-next:
-		spin_unlock(&vb->lock);
 	}
 
 	put_cpu_var(vmap_block_queue);
 	rcu_read_unlock();
 
-	if (!addr) {
-		vb = new_vmap_block(gfp_mask);
-		if (IS_ERR(vb))
-			return vb;
-		goto again;
-	}
+	/* Allocate new block if nothing was found */
+	if (!vaddr)
+		vaddr = new_vmap_block(order, gfp_mask);
 
-	return (void *)addr;
+	return vaddr;
 }
 
 static void vb_free(const void *addr, unsigned long size)
@@ -1022,6 +1045,7 @@ static void vb_free(const void *addr, unsigned long size)
 	order = get_order(size);
 
 	offset = (unsigned long)addr & (VMAP_BLOCK_SIZE - 1);
+	offset >>= PAGE_SHIFT;
 
 	vb_idx = addr_to_vb_idx((unsigned long)addr);
 	rcu_read_lock();
@@ -1032,7 +1056,10 @@ static void vb_free(const void *addr, unsigned long size)
 	vunmap_page_range((unsigned long)addr, (unsigned long)addr + size);
 
 	spin_lock(&vb->lock);
-	BUG_ON(bitmap_allocate_region(vb->dirty_map, offset >> PAGE_SHIFT, order));
+
+	/* Expand dirty range */
+	vb->dirty_min = min(vb->dirty_min, offset);
+	vb->dirty_max = max(vb->dirty_max, offset + (1UL << order));
 
 	vb->dirty += 1UL << order;
 	if (vb->dirty == VMAP_BBMAP_BITS) {
@@ -1071,28 +1098,18 @@ void vm_unmap_aliases(void)
 
 		rcu_read_lock();
 		list_for_each_entry_rcu(vb, &vbq->free, free_list) {
-			int i;
-
 			spin_lock(&vb->lock);
-			i = find_first_bit(vb->dirty_map, VMAP_BBMAP_BITS);
-			while (i < VMAP_BBMAP_BITS) {
+			if (vb->dirty) {
+				unsigned long va_start = vb->va->va_start;
 				unsigned long s, e;
-				int j;
-				j = find_next_zero_bit(vb->dirty_map,
-					VMAP_BBMAP_BITS, i);
 
-				s = vb->va->va_start + (i << PAGE_SHIFT);
-				e = vb->va->va_start + (j << PAGE_SHIFT);
+				s = va_start + (vb->dirty_min << PAGE_SHIFT);
+				e = va_start + (vb->dirty_max << PAGE_SHIFT);
+
+				start = min(s, start);
+				end   = max(e, end);
+
 				flush = 1;
-
-				if (s < start)
-					start = s;
-				if (e > end)
-					end = e;
-
-				i = j;
-				i = find_next_bit(vb->dirty_map,
-							VMAP_BBMAP_BITS, i);
 			}
 			spin_unlock(&vb->lock);
 		}
@@ -1533,7 +1550,7 @@ static void __vunmap(const void *addr, int deallocate_pages)
 			addr))
 		return;
 
-	area = remove_vm_area(addr);
+	area = find_vmap_area((unsigned long)addr)->vm;
 	if (unlikely(!area)) {
 		WARN(1, KERN_ERR "Trying to vfree() nonexistent vm area (%p)\n",
 				addr);
@@ -1543,6 +1560,7 @@ static void __vunmap(const void *addr, int deallocate_pages)
 	debug_check_no_locks_freed(addr, area->size);
 	debug_check_no_obj_freed(addr, area->size);
 
+	remove_vm_area(addr);
 	if (deallocate_pages) {
 		int i;
 
@@ -1655,7 +1673,8 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 	const int order = 0;
 	struct page **pages;
 	unsigned int nr_pages, array_size, i;
-	gfp_t nested_gfp = (gfp_mask & GFP_RECLAIM_MASK) | __GFP_ZERO;
+	const gfp_t nested_gfp = (gfp_mask & GFP_RECLAIM_MASK) | __GFP_ZERO;
+	const gfp_t alloc_mask = gfp_mask | __GFP_NOWARN;
 
 	nr_pages = get_vm_area_size(area) >> PAGE_SHIFT;
 	array_size = (nr_pages * sizeof(struct page *));
@@ -1678,12 +1697,11 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 
 	for (i = 0; i < area->nr_pages; i++) {
 		struct page *page;
-		gfp_t tmp_mask = gfp_mask | __GFP_NOWARN;
 
-		if (node < 0)
-			page = alloc_page(tmp_mask);
+		if (node == NUMA_NO_NODE)
+			page = alloc_page(alloc_mask);
 		else
-			page = alloc_pages_node(node, tmp_mask, order);
+			page = alloc_pages_node(node, alloc_mask, order);
 
 		if (unlikely(!page)) {
 			/* Successfully allocated i pages, free them in __vunmap() */
@@ -1756,11 +1774,11 @@ void *__vmalloc_node_range(unsigned long size, unsigned long align,
 	clear_vm_uninitialized_flag(area);
 
 	/*
-	 * A ref_count = 3 is needed because the vm_struct and vmap_area
-	 * structures allocated in the __get_vm_area_node() function contain
-	 * references to the virtual address of the vmalloc'ed block.
+	 * A ref_count = 2 is needed because vm_struct allocated in
+	 * __get_vm_area_node() contains a reference to the virtual address of
+	 * the vmalloc'ed block.
 	 */
-	kmemleak_alloc(addr, real_size, 3, gfp_mask);
+	kmemleak_alloc(addr, real_size, 2, gfp_mask);
 
 	return addr;
 
@@ -1783,6 +1801,13 @@ fail:
  *	Allocate enough pages to cover @size from the page level
  *	allocator with @gfp_mask flags.  Map them into contiguous
  *	kernel virtual space, using a pagetable protection of @prot.
+ *
+ *	Reclaim modifiers in @gfp_mask - __GFP_NORETRY, __GFP_REPEAT
+ *	and __GFP_NOFAIL are not supported
+ *
+ *	Any use of gfp flags outside of GFP_KERNEL should be consulted
+ *	with mm people.
+ *
  */
 static void *__vmalloc_node(unsigned long size, unsigned long align,
 			    gfp_t gfp_mask, pgprot_t prot,
@@ -1799,8 +1824,8 @@ void *__vmalloc(unsigned long size, gfp_t gfp_mask, pgprot_t prot)
 }
 EXPORT_SYMBOL(__vmalloc);
 
-static inline void *__vmalloc_node_flags(unsigned long size,
-					int node, gfp_t flags)
+void *__vmalloc_node_flags(unsigned long size,
+			   int node, gfp_t flags)
 {
 	return __vmalloc_node(size, 1, flags, PAGE_KERNEL,
 					node, __builtin_return_address(0));
@@ -2673,10 +2698,10 @@ static void show_numa_info(struct seq_file *m, struct vm_struct *v)
 		if (!counters)
 			return;
 
+		if (v->flags & VM_UNLIST)
+			return;
 		/* Pair with smp_wmb() in clear_vm_uninitialized_flag() */
 		smp_rmb();
-		if (v->flags & VM_UNINITIALIZED)
-			return;
 
 		memset(counters, 0, nr_node_ids * sizeof(unsigned int));
 
@@ -2747,21 +2772,11 @@ static const struct seq_operations vmalloc_op = {
 
 static int vmalloc_open(struct inode *inode, struct file *file)
 {
-	unsigned int *ptr = NULL;
-	int ret;
-
-	if (IS_ENABLED(CONFIG_NUMA)) {
-		ptr = kmalloc(nr_node_ids * sizeof(unsigned int), GFP_KERNEL);
-		if (ptr == NULL)
-			return -ENOMEM;
-	}
-	ret = seq_open(file, &vmalloc_op);
-	if (!ret) {
-		struct seq_file *m = file->private_data;
-		m->private = ptr;
-	} else
-		kfree(ptr);
-	return ret;
+	if (IS_ENABLED(CONFIG_NUMA))
+		return seq_open_private(file, &vmalloc_op,
+					nr_node_ids * sizeof(unsigned int));
+	else
+		return seq_open(file, &vmalloc_op);
 }
 
 static const struct file_operations proc_vmalloc_operations = {
@@ -2778,52 +2793,5 @@ static int __init proc_vmalloc_init(void)
 }
 module_init(proc_vmalloc_init);
 
-void get_vmalloc_info(struct vmalloc_info *vmi)
-{
-	struct vmap_area *va;
-	unsigned long free_area_size;
-	unsigned long prev_end;
-
-	vmi->used = 0;
-	vmi->largest_chunk = 0;
-
-	prev_end = VMALLOC_START;
-
-	spin_lock(&vmap_area_lock);
-
-	if (list_empty(&vmap_area_list)) {
-		vmi->largest_chunk = VMALLOC_TOTAL;
-		goto out;
-	}
-
-	list_for_each_entry(va, &vmap_area_list, list) {
-		unsigned long addr = va->va_start;
-
-		/*
-		 * Some archs keep another range for modules in vmalloc space
-		 */
-		if (addr < VMALLOC_START)
-			continue;
-		if (addr >= VMALLOC_END)
-			break;
-
-		if (va->flags & (VM_LAZY_FREE | VM_LAZY_FREEING))
-			continue;
-
-		vmi->used += (va->va_end - va->va_start);
-
-		free_area_size = addr - prev_end;
-		if (vmi->largest_chunk < free_area_size)
-			vmi->largest_chunk = free_area_size;
-
-		prev_end = va->va_end;
-	}
-
-	if (VMALLOC_END - prev_end > vmi->largest_chunk)
-		vmi->largest_chunk = VMALLOC_END - prev_end;
-
-out:
-	spin_unlock(&vmap_area_lock);
-}
 #endif
 

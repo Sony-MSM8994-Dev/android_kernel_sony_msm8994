@@ -29,6 +29,7 @@
 DECLARE_HASHTABLE(uid_hash_table, UID_HASH_BITS);
 
 static spinlock_t cpufreq_stats_lock;
+static DEFINE_SPINLOCK(cpufreq_stats_table_lock);
 
 static DEFINE_SPINLOCK(cpufreq_stats_table_lock);
 static DEFINE_SPINLOCK(task_time_in_state_lock); /* task->time_in_state */
@@ -596,8 +597,10 @@ static int __cpufreq_stats_create_table(struct cpufreq_policy *policy,
 	struct cpufreq_stats *stat;
 	unsigned int alloc_size;
 	unsigned int cpu = policy->cpu;
+
 	if (per_cpu(cpufreq_stats_table, cpu))
-		return -EBUSY;
+		return 0;
+
 	stat = kzalloc(sizeof(*stat), GFP_KERNEL);
 	if ((stat) == NULL) {
 		pr_err("Failed to alloc cpufreq_stats table\n");
@@ -689,7 +692,6 @@ static void cpufreq_powerstats_create(unsigned int cpu,
 	unsigned int alloc_size, i = 0, j = 0, ret = 0;
 	struct cpufreq_power_stats *powerstats;
 	struct device_node *cpu_node;
-	char device_path[16];
 
 	powerstats = kzalloc(sizeof(struct cpufreq_power_stats),
 			GFP_KERNEL);
@@ -717,8 +719,7 @@ static void cpufreq_powerstats_create(unsigned int cpu,
 	}
 	powerstats->state_num = j;
 
-	snprintf(device_path, sizeof(device_path), "/cpus/cpu@%d", cpu);
-	cpu_node = of_find_node_by_path(device_path);
+	cpu_node = of_get_cpu_node(cpu, NULL);
 	if (cpu_node) {
 		ret = of_property_read_u32_array(cpu_node, "current",
 				powerstats->curr, count);
@@ -844,6 +845,9 @@ static int cpufreq_stat_notifier_policy(struct notifier_block *nb,
 	if (val == CPUFREQ_UPDATE_POLICY_CPU) {
 		cpufreq_stats_update_policy_cpu(policy);
 		return 0;
+	} else if (val == CPUFREQ_REMOVE_POLICY) {
+		__cpufreq_stats_free_table(policy);
+		return 0;
 	}
 
 	table = cpufreq_frequency_get_table(cpu);
@@ -866,8 +870,6 @@ static int cpufreq_stat_notifier_policy(struct notifier_block *nb,
 
 	if (val == CPUFREQ_CREATE_POLICY)
 		ret = __cpufreq_stats_create_table(policy, table, count);
-	else if (val == CPUFREQ_REMOVE_POLICY)
-		__cpufreq_stats_free_table(policy);
 
 	return ret;
 }
@@ -876,7 +878,7 @@ static void cpufreq_stats_create_table(unsigned int cpu)
 {
 	struct cpufreq_policy *policy;
 	struct cpufreq_frequency_table *table;
-	int i, count = 0;
+	int i, cpu_num, count = 0;
 	/*
 	 * "likely(!policy)" because normally cpufreq_stats will be registered
 	 * before cpufreq driver
@@ -890,16 +892,17 @@ static void cpufreq_stats_create_table(unsigned int cpu)
 		for (i = 0; table[i].frequency != CPUFREQ_TABLE_END; i++) {
 			unsigned int freq = table[i].frequency;
 
-			if (freq == CPUFREQ_ENTRY_INVALID)
-				continue;
-			count++;
+			if (freq != CPUFREQ_ENTRY_INVALID)
+				count++;
 		}
 
 		if (!per_cpu(all_cpufreq_stats, cpu))
 			cpufreq_allstats_create(cpu, table, count);
 
-		if (!per_cpu(cpufreq_power_stats, cpu))
-			cpufreq_powerstats_create(cpu, table, count);
+		for_each_possible_cpu(cpu_num) {
+			if (!per_cpu(cpufreq_power_stats, cpu))
+				cpufreq_powerstats_create(cpu, table, count);
+		}
 
 		__cpufreq_stats_create_table(policy, table, count);
 	}

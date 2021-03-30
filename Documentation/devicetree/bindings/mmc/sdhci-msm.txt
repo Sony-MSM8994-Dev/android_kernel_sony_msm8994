@@ -14,6 +14,9 @@ Required properties:
 			  Required "supply-name" are "vdd" and "vdd-io".
   - qcom,clk-rates: this is an array that specifies supported SDHC clock
 		    frequencies for a slot, Units - Hz.
+  - qcom,ice-clk-rates: this is an array that specifies supported Inline
+		    Crypto Engine (ICE) clock frequencies, Units - Hz.
+  - sdhc-msm-crypto: phandle to SDHC ICE node
 
 Required alias:
 - The slot number is specified via an alias with the following format
@@ -50,6 +53,8 @@ Optional Properties:
 			    to redetect it until next reboot probe.
 	- qcom,no-1p8v - specifies the system physically doesn't support 1.8v, even if the
 			  host does.
+	- qcom,core_3_0v_support: an optional property that is used to fake
+					3.0V support for SDIO devices.
 	- qcom,bus-speed-mode - specifies supported bus speed modes by host.
 				The supported bus speed modes are :
 				"HS400_1p8v" - indicates that host can support HS400 at 1.8v.
@@ -64,6 +69,14 @@ Optional Properties:
         - qcom,dat1-mpm-int:    specifies MPM interrupt number (e.g. sdhc_2 node below)
 				corresponding to DAT1 line of SDHC (used only if slot has dedicated
 				DAT1 MSM pin (not GPIO))
+	- qcom,scaling-lower-bus-speed-mode:	specifies the lower bus speed mode to be used
+						during clock scaling. If this property is not
+						defined, then it falls back to the default HS
+						bus speed mode to maintain backward compatibility.
+	- qcom,broken-pwr-cycle-host:	Specifies if SDIO host and card  requires complete
+					power_restore (mmc_sdio_power_restore) while resuming.
+					This is in cases where card cannot go through
+					complete pwr_cycle in suspend/resume.
 
 In the following, <supply> can be vdd (flash core voltage) or vdd-io (I/O voltage).
 	- qcom,<supply>-always-on - specifies whether supply should be kept "on" always.
@@ -102,6 +115,9 @@ In the following, <supply> can be vdd (flash core voltage) or vdd-io (I/O voltag
 		- pinctrl-names
 		- pinctrl-0, pinctrl-1,.. pinctrl-n
 
+	- qcom,large-address-bus - specifies whether the soc is capable of
+				 supporting larger than 32 bit address bus width.
+
         - qcom,cpu-affinity: this is a string that specifies the pm QoS request
 	  type. The supported cpu affinity modes are :
 	  "all_cores" - PM_QOS_REQ_ALL_CORES is applicable to all CPU cores that
@@ -135,6 +151,7 @@ Example:
                 reg-names = "hc_mem", "core_mem";
                 interrupts = <0 123 0>, <0 138 0>;
                 interrupt-names = "hc_irq", "pwr_irq";
+		sdhc-msm-crypto = <&sdcc1_ice>;
 
 		vdd-supply = <&pm8941_l21>;
 		vdd-io-supply = <&pm8941_l13>;
@@ -157,8 +174,12 @@ Example:
 		qcom,cpu-affinity-mask = <0x0f>;
 
 		qcom,nonremovable;
+		qcom,large-address-bus;
 		qcom,bus-speed-mode = "HS200_1p8v", "DDR_1p8v";
 		qcom,clk-rates = <400000 20000000 25000000 50000000 100000000 200000000>;
+		qcom,ice-clk-rates = <200000000>;
+
+		qcom,scaling-lower-bus-speed-mode = "DDR52";
 
 		gpios = <&msmgpio 40 0>, /* CLK */
 			<&msmgpio 39 0>, /* CMD */

@@ -54,7 +54,7 @@ static LIST_HEAD(deferred_probe_active_list);
 static struct workqueue_struct *deferred_wq;
 static atomic_t deferred_trigger_count = ATOMIC_INIT(0);
 
-/**
+/*
  * deferred_probe_work_func() - Retry probing devices in the active list.
  */
 static void deferred_probe_work_func(struct work_struct *work)
@@ -141,7 +141,7 @@ static bool driver_deferred_probe_enable = false;
  * more than one device is probing at the same time, it is possible for one
  * probe to complete successfully while another is about to defer. If the second
  * depends on the first, then it will get put on the pending list after the
- * trigger event has already occured and will be stuck there.
+ * trigger event has already occurred and will be stuck there.
  *
  * The atomic 'deferred_trigger_count' is used to determine if a successful
  * trigger has occurred in the midst of probing a driver. If the trigger count
@@ -223,8 +223,8 @@ static void driver_bound(struct device *dev)
 		return;
 	}
 
-	pr_debug("driver: '%s': %s: bound to device '%s'\n", dev_name(dev),
-		 __func__, dev->driver->name);
+	pr_debug("driver: '%s': %s: bound to device '%s'\n", dev->driver->name,
+		 __func__, dev_name(dev));
 
 	klist_add_tail(&dev->p->knode_driver, &dev->driver->p->klist_devices);
 
@@ -345,7 +345,7 @@ probe_failed:
 
 	if (ret == -EPROBE_DEFER) {
 		/* Driver requested deferred probing */
-		dev_info(dev, "Driver %s requests probe deferral\n", drv->name);
+		dev_dbg(dev, "Driver %s requests probe deferral\n", drv->name);
 		driver_deferred_probe_add(dev);
 		/* Did a trigger occur while probing? Need to re-trigger if yes */
 		if (local_trigger_count != atomic_read(&deferred_trigger_count))
@@ -407,6 +407,8 @@ EXPORT_SYMBOL_GPL(wait_for_device_probe);
  *
  * This function must be called with @dev lock held.  When called for a
  * USB interface, @dev->parent lock must be held as well.
+ *
+ * If the device has a parent, runtime-resume the parent before driver probing.
  */
 int driver_probe_device(struct device_driver *drv, struct device *dev)
 {
@@ -418,9 +420,15 @@ int driver_probe_device(struct device_driver *drv, struct device *dev)
 	pr_debug("bus: '%s': %s: matched device %s with driver %s\n",
 		 drv->bus->name, __func__, dev_name(dev), drv->name);
 
+	if (dev->parent)
+		pm_runtime_get_sync(dev->parent);
+
 	pm_runtime_barrier(dev);
 	ret = really_probe(dev, drv);
 	pm_request_idle(dev);
+
+	if (dev->parent)
+		pm_runtime_put(dev->parent);
 
 	return ret;
 }
@@ -467,8 +475,15 @@ int device_attach(struct device *dev)
 			ret = 0;
 		}
 	} else {
+
+		if (dev->parent)
+			pm_runtime_get_sync(dev->parent);
+
 		ret = bus_for_each_drv(dev->bus, NULL, dev, __device_attach);
 		pm_request_idle(dev);
+
+		if (dev->parent)
+			pm_runtime_put(dev->parent);
 	}
 out_unlock:
 	device_unlock(dev);

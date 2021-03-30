@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2015, 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -639,7 +639,7 @@ static long msm_vfe47_reset_hardware(struct vfe_device *vfe_dev,
 	}
 
 	if (blocking_call) {
-		rc = wait_for_completion_timeout(
+		rc = wait_for_completion_interruptible_timeout(
 			&vfe_dev->reset_complete, msecs_to_jiffies(50));
 		if (rc <= 0) {
 			pr_err("%s:%d failed: reset timeout\n", __func__,
@@ -923,10 +923,12 @@ static int msm_vfe47_start_fetch_engine(struct vfe_device *vfe_dev,
 	vfe_dev->fetch_engine_info.session_id = fe_cfg->session_id;
 	vfe_dev->fetch_engine_info.stream_id = fe_cfg->stream_id;
 
+	mutex_lock(&vfe_dev->buf_mgr->lock);
 	rc = vfe_dev->buf_mgr->ops->get_buf_by_index(
 		vfe_dev->buf_mgr, bufq_handle, fe_cfg->buf_idx, &buf);
 	if (rc < 0) {
 		pr_err("%s: No fetch buffer\n", __func__);
+		mutex_unlock(&vfe_dev->buf_mgr->lock);
 		return -EINVAL;
 	}
 	vfe_dev->fetch_engine_info.buf_idx = fe_cfg->buf_idx;
@@ -939,6 +941,7 @@ static int msm_vfe47_start_fetch_engine(struct vfe_device *vfe_dev,
 
 	ISP_DBG("%s:VFE%d Fetch Engine ready\n", __func__, vfe_dev->pdev->id);
 	buf->state = MSM_ISP_BUFFER_STATE_DISPATCHED;
+	mutex_unlock(&vfe_dev->buf_mgr->lock);
 
 	return 0;
 }
@@ -1426,7 +1429,7 @@ static int msm_vfe47_axi_halt(struct vfe_device *vfe_dev,
 		init_completion(&vfe_dev->halt_complete);
 		/* Halt AXI Bus Bridge */
 		msm_camera_io_w_mb(0x1, vfe_dev->vfe_base + 0x400);
-		rc = wait_for_completion_timeout(
+		rc = wait_for_completion_interruptible_timeout(
 			&vfe_dev->halt_complete, msecs_to_jiffies(500));
 	} else {
 		/* Halt AXI Bus Bridge */

@@ -25,14 +25,6 @@ config DEFAULT_MESSAGE_LOGLEVEL
 	  that are auditing their logs closely may want to set it to a lower
 	  priority.
 
-config ENABLE_WARN_DEPRECATED
-	bool "Enable __deprecated logic"
-	default y
-	help
-	  Enable the __deprecated logic in the kernel build.
-	  Disable this to suppress the "warning: 'foo' is deprecated
-	  (declared at kernel/power/somefile.c:1234)" messages.
-
 config ENABLE_MUST_CHECK
 	bool "Enable __must_check logic"
 	default y
@@ -663,7 +655,7 @@ config PROVE_LOCKING
 	 the proof of observed correctness is also maintained for an
 	 arbitrary combination of these separate locking variants.
 
-	 For more details, see Documentation/lockdep-design.txt.
+	 For more details, see Documentation/locking/lockdep-design.txt.
 
 config LOCKDEP
 	bool
@@ -684,7 +676,7 @@ config LOCK_STAT
 	help
 	 This feature enables tracking lock contention points
 
-	 For more details, see Documentation/lockstat.txt
+	 For more details, see Documentation/locking/lockstat.txt
 
 	 This also enables lock events required by "perf lock",
 	 subcommand of perf.
@@ -1589,6 +1581,17 @@ config PANIC_ON_DATA_CORRUPTION
 	 Select this option to upgrade warnings for potentially
 	 recoverable data corruption scenarios to system-halting panics,
 	 for easier detection and debug.
+
+config MEMTEST
+	bool "Memtest"
+	---help---
+	  This option adds a kernel parameter 'memtest', which allows memtest
+	  to be set.
+	        memtest=0, mean disabled; -- default
+	        memtest=1, mean do 1 test pattern;
+	        ...
+	        memtest=4, mean do 4 test patterns.
+	  If you are unsure how to answer this question, answer N.
 
 source "samples/Kconfig"
 

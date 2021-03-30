@@ -10,6 +10,11 @@
  * GNU General Public License for more details.
  *
  */
+/*
+ * NOTE: This file has been modified by Sony Mobile Communications Inc.
+ * Modifications are Copyright (c) 2015 Sony Mobile Communications Inc,
+ * and licensed under the license of the file.
+ */
 
 #include <linux/jiffies.h>
 #include <linux/sched.h>
@@ -115,6 +120,11 @@ static int msm_comm_get_mbs_per_sec(struct msm_vidc_inst *inst)
 	rc = v4l2_g_ctrl(&inst->ctrl_handler, &ctrl);
 	if (!rc && ctrl.value) {
 		fps = (ctrl.value >> 16)? ctrl.value >> 16: 1;
+		/*
+		 * Check if operating rate is less than fps.
+		 * If Yes, then use fps to scale the clocks
+		*/
+		fps = fps > inst->prop.fps ? fps : inst->prop.fps;
 		return max(output_port_mbs, capture_port_mbs) * fps;
 	} else
 		return max(output_port_mbs, capture_port_mbs) * inst->prop.fps;
@@ -142,8 +152,16 @@ int msm_comm_get_inst_load(struct msm_vidc_inst *inst,
 	}
 
 	if (is_non_realtime_session(inst) &&
-		(quirks & LOAD_CALC_IGNORE_NON_REALTIME_LOAD))
-		load = msm_comm_get_mbs_per_sec(inst) / inst->prop.fps;
+		(quirks & LOAD_CALC_IGNORE_NON_REALTIME_LOAD)) {
+		if (!inst->prop.fps) {
+			dprintk(VIDC_INFO, "%s: instance:%p prop->fps is set 0\n", __func__, inst);
+			load = 0;
+		} else {
+			load = msm_comm_get_mbs_per_sec(inst) / inst->prop.fps;
+			dprintk(VIDC_DBG, "%s: NON REALTIME Session so load is: %d\n", __func__, load);
+		}
+	} else
+		dprintk(VIDC_DBG, "%s: REALTIME Session so load is: %d\n", __func__, load);
 	return load;
 }
 
@@ -219,6 +237,9 @@ enum hal_video_codec get_hal_codec_type(int fourcc)
 		break;
 	case V4L2_PIX_FMT_VP8:
 		codec = HAL_VIDEO_CODEC_VP8;
+		break;
+	case V4L2_PIX_FMT_VP9:
+		codec = HAL_VIDEO_CODEC_VP9;
 		break;
 	case V4L2_PIX_FMT_DIVX_311:
 		codec = HAL_VIDEO_CODEC_DIVX_311;
@@ -933,7 +954,7 @@ int msm_comm_queue_output_buffers(struct msm_vidc_inst *inst)
 	struct hfi_device *hdev;
 	struct msm_smem *handle;
 	struct vidc_frame_data frame_data = {0};
-	struct hal_buffer_requirements *output_buf;
+	struct hal_buffer_requirements *output_buf, *extra_buf;
 	int rc = 0;
 
 	if (!inst || !inst->core || !inst->core->device) {
@@ -955,6 +976,8 @@ int msm_comm_queue_output_buffers(struct msm_vidc_inst *inst)
 		output_buf->buffer_count_actual,
 		output_buf->buffer_size);
 
+	extra_buf = get_buff_req_buffer(inst, HAL_BUFFER_EXTRADATA_OUTPUT);
+
 	mutex_lock(&inst->outputbufs.lock);
 	list_for_each_entry(binfo, &inst->outputbufs.list, list) {
 		if (binfo->buffer_ownership != DRIVER)
@@ -968,6 +991,8 @@ int msm_comm_queue_output_buffers(struct msm_vidc_inst *inst)
 		frame_data.extradata_addr = handle->device_addr +
 		output_buf->buffer_size;
 		frame_data.buffer_type = HAL_BUFFER_OUTPUT;
+		frame_data.extradata_size = extra_buf ?
+			extra_buf->buffer_size : 0;
 		rc = call_hfi_op(hdev, session_ftb,
 			(void *) inst->session, &frame_data);
 		binfo->buffer_ownership = FIRMWARE;
@@ -1160,7 +1185,6 @@ void msm_comm_session_clean(struct msm_vidc_inst *inst)
 	}
 
 	hdev = inst->core->device;
-	mutex_lock(&inst->lock);
 	if (hdev && inst->session) {
 		dprintk(VIDC_DBG, "cleaning up instance: 0x%pK\n", inst);
 		rc = call_hfi_op(hdev, session_clean,
@@ -1171,7 +1195,6 @@ void msm_comm_session_clean(struct msm_vidc_inst *inst)
 		}
 		inst->session = NULL;
 	}
-	mutex_unlock(&inst->lock);
 }
 
 static void handle_session_close(enum command_response cmd, void *data)
@@ -1882,6 +1905,7 @@ static int msm_comm_session_abort(struct msm_vidc_inst *inst)
 {
 	int rc = 0, abort_completion = 0;
 	struct hfi_device *hdev;
+	char crash_reason[SUBSYS_CRASH_REASON_LEN];
 
 	if (!inst || !inst->core || !inst->core->device) {
 		dprintk(VIDC_ERR, "%s invalid params\n", __func__);
@@ -1904,6 +1928,10 @@ static int msm_comm_session_abort(struct msm_vidc_inst *inst)
 		dprintk(VIDC_ERR,
 				"%s: Wait interrupted or timed out [%pK]: %d\n",
 				__func__, inst, abort_completion);
+		snprintf(crash_reason, sizeof(crash_reason),
+			  "%s: Wait interrupted or timed out [%p]: %d",
+			  __func__, inst, abort_completion);
+		subsystem_crash_reason("venus", crash_reason);
 		rc = -EBUSY;
 	} else {
 		rc = 0;
@@ -1931,6 +1959,8 @@ static void handle_thermal_event(struct msm_vidc_core *core)
 			inst->state < MSM_VIDC_CLOSE_DONE) {
 			dprintk(VIDC_WARN, "%s: abort inst %pK\n",
 				__func__, inst);
+
+			change_inst_state(inst, MSM_VIDC_CORE_INVALID);
 			rc = msm_comm_session_abort(inst);
 			if (rc) {
 				dprintk(VIDC_ERR,
@@ -1938,7 +1968,6 @@ static void handle_thermal_event(struct msm_vidc_core *core)
 					__func__, rc);
 				goto err_sess_abort;
 			}
-			change_inst_state(inst, MSM_VIDC_CORE_INVALID);
 			dprintk(VIDC_WARN,
 				"%s Send sys error for inst %pK\n",
 				__func__, inst);
@@ -2245,7 +2274,7 @@ static int msm_vidc_load_resources(int flipped_state,
 {
 	int rc = 0;
 	struct hfi_device *hdev;
-	int num_mbs_per_sec = 0;
+	int num_mbs_per_sec = 0, max_load_adj = 0;
 	struct msm_vidc_core *core;
 	enum load_calc_quirks quirks = LOAD_CALC_IGNORE_TURBO_LOAD |
 		LOAD_CALC_IGNORE_THUMBNAIL_LOAD |
@@ -2273,13 +2302,21 @@ static int msm_vidc_load_resources(int flipped_state,
 		msm_comm_get_load(core, MSM_VIDC_DECODER, quirks) +
 		msm_comm_get_load(core, MSM_VIDC_ENCODER, quirks);
 
-	if (num_mbs_per_sec > core->resources.max_load) {
+	max_load_adj = core->resources.max_load + inst->capability.mbs_per_frame.max;
+
+	if (num_mbs_per_sec > max_load_adj) {
 		dprintk(VIDC_ERR, "HW is overloaded, needed: %d max: %d\n",
-			num_mbs_per_sec, core->resources.max_load);
+			num_mbs_per_sec, max_load_adj);
 		msm_vidc_print_running_insts(core);
 		inst->state = MSM_VIDC_CORE_INVALID;
 		msm_comm_kill_session(inst);
 		return -EBUSY;
+	}
+
+	if (!is_thermal_permissible(core)) {
+		dprintk(VIDC_WARN,
+			"Thermal level critical, stop the session!\n");
+		return -ENOTSUPP;
 	}
 
 	hdev = core->device;
@@ -2495,7 +2532,7 @@ static int set_output_buffers(struct msm_vidc_inst *inst,
 {
 	int rc = 0;
 	struct msm_smem *handle;
-	struct internal_buf *binfo;
+	struct internal_buf *binfo = NULL;
 	struct vidc_buffer_addr_info buffer_info = {0};
 	u32 smem_flags = 0, buffer_size;
 	struct hal_buffer_requirements *output_buf, *extradata_buf;
@@ -2591,10 +2628,10 @@ static int set_output_buffers(struct msm_vidc_inst *inst,
 	}
 	return rc;
 fail_set_buffers:
-	kfree(binfo);
-fail_kzalloc:
 	msm_comm_smem_free(inst, handle);
 err_no_mem:
+	kfree(binfo);
+fail_kzalloc:
 	return rc;
 }
 
@@ -4024,21 +4061,22 @@ int msm_vidc_trigger_ssr(struct msm_vidc_core *core,
 
 static int msm_vidc_load_supported(struct msm_vidc_inst *inst)
 {
-	int num_mbs_per_sec = 0;
+	int num_mbs_per_sec = 0, max_load_adj = 0;
 	enum load_calc_quirks quirks = LOAD_CALC_IGNORE_TURBO_LOAD |
 		LOAD_CALC_IGNORE_THUMBNAIL_LOAD |
 		LOAD_CALC_IGNORE_NON_REALTIME_LOAD;
 
 	if (inst->state == MSM_VIDC_OPEN_DONE) {
+		max_load_adj = inst->core->resources.max_load + inst->capability.mbs_per_frame.max;
 		num_mbs_per_sec = msm_comm_get_load(inst->core,
 					MSM_VIDC_DECODER, quirks);
 		num_mbs_per_sec += msm_comm_get_load(inst->core,
 					MSM_VIDC_ENCODER, quirks);
-		if (num_mbs_per_sec > inst->core->resources.max_load) {
+		if (num_mbs_per_sec > max_load_adj) {
 			dprintk(VIDC_ERR,
 				"H/W is overloaded. needed: %d max: %d\n",
 				num_mbs_per_sec,
-				inst->core->resources.max_load);
+				max_load_adj);
 			msm_vidc_print_running_insts(inst->core);
 			return -EBUSY;
 		}
@@ -4143,12 +4181,6 @@ int msm_vidc_check_session_supported(struct msm_vidc_inst *inst)
 		dprintk(VIDC_WARN,
 			"%s: Hardware is overloaded\n", __func__);
 		return rc;
-	}
-
-	if (!is_thermal_permissible(core)) {
-		dprintk(VIDC_WARN,
-			"Thermal level critical, stop all active sessions!\n");
-		return -ENOTSUPP;
 	}
 
 	if (!rc && inst->capability.capability_set) {

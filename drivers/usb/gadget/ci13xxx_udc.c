@@ -58,6 +58,7 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/irq.h>
+#include <linux/clk.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/module.h>
@@ -389,6 +390,7 @@ static int hw_device_state(u32 dma)
 {
 	struct ci13xxx *udc = _udc;
 	struct usb_gadget *gadget = &udc->gadget;
+	int ret;
 
 	if (dma) {
 		if (gadget->streaming_enabled || !(udc->udc_driver->flags &
@@ -396,12 +398,42 @@ static int hw_device_state(u32 dma)
 			hw_cwrite(CAP_USBMODE, USBMODE_SDIS, 0);
 			pr_debug("%s(): streaming mode is enabled. USBMODE:%x\n",
 				 __func__, hw_cread(CAP_USBMODE, ~0));
+
+			/* In streaming mode, allowed to increase USB system
+			 * clock upto 133MHz. But, going to 133MHz require
+			 * system to run at turbo. Hence setting up optimum
+			 * frequency 100MHZ, that operates in nominal mode.
+			 * If HW fix for prime failure bug is enabled, then
+			 * system clock will be running >= 100Mhz and hence
+			 * in this case, it is not required to change system
+			 * clock rate.
+			 */
+			if (udc->system_clk && !udc->enable_epprime_fix) {
+				ret = clk_set_rate(udc->system_clk, 100000000);
+				if (ret)
+					pr_err("fail to set system_clk: %d\n",
+						ret);
+			}
 		} else {
 			hw_cwrite(CAP_USBMODE, USBMODE_SDIS, USBMODE_SDIS);
 			pr_debug("%s(): streaming mode is disabled. USBMODE:%x\n",
 				__func__, hw_cread(CAP_USBMODE, ~0));
 
+			/* In non-stream mode, due to HW limitation cannot go
+			 * beyond 80MHz, otherwise, may see EP prime failures.
+			 */
+			if (udc->system_clk && !udc->enable_epprime_fix) {
+				ret = clk_set_rate(udc->system_clk, 80000000);
+				if (ret)
+					pr_err("fail to set system_clk: %d\n",
+						ret);
+			}
+
 		}
+
+		/* make sure clock set rate is finished before proceeding */
+		mb();
+
 		hw_cwrite(CAP_ENDPTLISTADDR, ~0, dma);
 
 
@@ -424,6 +456,18 @@ static int hw_device_state(u32 dma)
 			hw_awrite(ABS_AHBMODE, AHB2AHB_BYPASS, 0);
 			pr_debug("%s(): ByPass Mode is disabled. AHBMODE:%x\n",
 					__func__, hw_aread(ABS_AHBMODE, ~0));
+
+		/* In non-stream mode, due to HW limitation cannot go
+		 * beyond 80MHz, otherwise, may see EP prime failures.
+		 */
+		if (udc->system_clk && !udc->enable_epprime_fix) {
+			ret = clk_set_rate(udc->system_clk, 80000000);
+			if (ret)
+				pr_err("fail to set system_clk ret:%d\n", ret);
+		}
+
+		/* make sure clock set rate is finished before proceeding */
+		mb();
 		}
 	}
 	return 0;
@@ -1447,9 +1491,13 @@ static ssize_t show_registers(struct device *dev,
 		return 0;
 	}
 
+	clk_prepare_enable(udc->system_clk);
+	clk_prepare_enable(udc->pclk);
 	spin_lock_irqsave(udc->lock, flags);
 	k = hw_register_read(dump, DUMP_ENTRIES);
 	spin_unlock_irqrestore(udc->lock, flags);
+	clk_disable_unprepare(udc->pclk);
+	clk_disable_unprepare(udc->system_clk);
 
 	for (i = 0; i < k; i++) {
 		n += scnprintf(buf + n, PAGE_SIZE - n,
@@ -1931,6 +1979,10 @@ static void ep_prime_timer_func(unsigned long data)
 		}
 		dbg_usb_op_fail(0xFF, "PRIMEF", mep);
 		mep->prime_fail_count++;
+		/* Notify to trigger h/w reset recovery later */
+		if (_udc->udc_driver->notify_event)
+			_udc->udc_driver->notify_event(_udc,
+					CI13XXX_CONTROLLER_ERROR_EVENT);
 	} else {
 		mod_timer(&mep->prime_timer, EP_PRIME_CHECK_DELAY);
 	}
@@ -2513,13 +2565,12 @@ static void isr_resume_handler(struct ci13xxx *udc)
 			  CI13XXX_CONTROLLER_RESUME_EVENT);
 		if (udc->transceiver)
 			usb_phy_set_suspend(udc->transceiver, 0);
+		udc->suspended = 0;
 		udc->driver->resume(&udc->gadget);
 		spin_lock(udc->lock);
 
 		if (udc->rw_pending)
 			purge_rw_queue(udc);
-
-		udc->suspended = 0;
 	}
 }
 
@@ -3281,6 +3332,12 @@ static int ep_queue(struct usb_ep *ep, struct usb_request *req,
 		}
 	}
 
+	if (ep->endless && udc->gadget.speed == USB_SPEED_FULL) {
+		err("Queueing endless req is not supported for FS");
+		retval = -EINVAL;
+		goto done;
+	}
+
 	/* first nuke then test link, e.g. previous status has not sent */
 	if (!list_empty(&mReq->queue)) {
 		retval = -EBUSY;
@@ -3372,10 +3429,17 @@ static int ep_dequeue(struct usb_ep *ep, struct usb_request *req)
 	struct ci13xxx_ep  *mEp  = container_of(ep,  struct ci13xxx_ep, ep);
 	struct ci13xxx_ep *mEpTemp = mEp;
 	struct ci13xxx_req *mReq = container_of(req, struct ci13xxx_req, req);
+	struct ci13xxx *udc = _udc;
 	unsigned long flags;
 
 	trace("%pK, %pK", ep, req);
 
+	if (udc->udc_driver->in_lpm && udc->udc_driver->in_lpm(udc)) {
+		dev_err(udc->transceiver->dev,
+				"%s: Unable to dequeue while in LPM\n",
+				__func__);
+		return -EAGAIN;
+	}
 	spin_lock_irqsave(mEp->lock, flags);
 	/*
 	 * Only ep0 IN is exposed to composite.  When a req is dequeued
@@ -3570,31 +3634,54 @@ static int ci13xxx_vbus_session(struct usb_gadget *_gadget, int is_active)
 		gadget_ready = 1;
 	spin_unlock_irqrestore(udc->lock, flags);
 
-	if (gadget_ready) {
-		if (is_active) {
-			pm_runtime_get_sync(&_gadget->dev);
-			hw_device_reset(udc);
-			if (udc->udc_driver->notify_event)
-				udc->udc_driver->notify_event(udc,
-					CI13XXX_CONTROLLER_CONNECT_EVENT);
-			if (udc->softconnect)
-				hw_device_state(udc->ep0out.qh.dma);
-		} else {
-			hw_device_state(0);
-			_gadget_stop_activity(&udc->gadget);
-			if (udc->udc_driver->notify_event)
-				udc->udc_driver->notify_event(udc,
-					CI13XXX_CONTROLLER_DISCONNECT_EVENT);
-			pm_runtime_put_sync(&_gadget->dev);
+	if (!gadget_ready)
+		return 0;
+
+	if (is_active) {
+		pm_runtime_get_sync(&_gadget->dev);
+		hw_device_reset(udc);
+		if (udc->udc_driver->notify_event)
+			udc->udc_driver->notify_event(udc,
+				CI13XXX_CONTROLLER_CONNECT_EVENT);
+		/* Enable BAM (if needed) before starting controller */
+		if (udc->softconnect) {
+			dbg_event(0xFF, "BAM EN2",
+				_gadget->bam2bam_func_enabled);
+			msm_usb_bam_enable(CI_CTRL,
+				_gadget->bam2bam_func_enabled);
+			hw_device_state(udc->ep0out.qh.dma);
 		}
+	} else {
+		hw_device_state(0);
+		_gadget_stop_activity(&udc->gadget);
+		if (udc->udc_driver->notify_event)
+			udc->udc_driver->notify_event(udc,
+				CI13XXX_CONTROLLER_DISCONNECT_EVENT);
+		pm_runtime_put_sync(&_gadget->dev);
 	}
 
 	return 0;
 }
 
+#define VBUS_DRAW_BUF_LEN 10
+#define MAX_OVERRIDE_VBUS_ALLOWED 900	/* 900 mA */
+static char vbus_draw_mA[VBUS_DRAW_BUF_LEN];
+module_param_string(vbus_draw_mA, vbus_draw_mA, VBUS_DRAW_BUF_LEN,
+			S_IRUGO | S_IWUSR);
+
 static int ci13xxx_vbus_draw(struct usb_gadget *_gadget, unsigned mA)
 {
 	struct ci13xxx *udc = container_of(_gadget, struct ci13xxx, gadget);
+	unsigned int override_mA = 0;
+
+	/* override param to draw more current if battery draining faster */
+	if ((mA == CONFIG_USB_GADGET_VBUS_DRAW) &&
+		(vbus_draw_mA[0] != '\0')) {
+		if ((!kstrtoint(vbus_draw_mA, 10, &override_mA)) &&
+				(override_mA <= MAX_OVERRIDE_VBUS_ALLOWED)) {
+			mA = override_mA;
+		}
+	}
 
 	if (udc->transceiver)
 		return usb_phy_set_power(udc->transceiver, mA);
@@ -3624,6 +3711,17 @@ static int ci13xxx_pullup(struct usb_gadget *_gadget, int is_active)
 		return ret;
 	}
 
+	/* Enable BAM (if needed) before starting controller */
+	if (is_active) {
+		dbg_event(0xFF, "BAM EN1", _gadget->bam2bam_func_enabled);
+		msm_usb_bam_enable(CI_CTRL, _gadget->bam2bam_func_enabled);
+	}
+
+	spin_lock_irqsave(udc->lock, flags);
+	if (!udc->vbus_active) {
+		spin_unlock_irqrestore(udc->lock, flags);
+		return 0;
+	}
 	if (is_active) {
 		if (udc->udc_driver->notify_event)
 			udc->udc_driver->notify_event(udc,
@@ -3632,6 +3730,7 @@ static int ci13xxx_pullup(struct usb_gadget *_gadget, int is_active)
 	} else {
 		hw_device_state(0);
 	}
+	spin_unlock_irqrestore(udc->lock, flags);
 
 	return 0;
 }
@@ -3987,8 +4086,11 @@ static int udc_probe(struct ci13xxx_udc_driver *driver, struct device *dev,
 	udc->gadget.ep0 = &udc->ep0in.ep;
 
 	pdata = dev->platform_data;
-	if (pdata)
+	if (pdata) {
 		udc->gadget.usb_core_id = pdata->usb_core_id;
+		udc->system_clk = pdata->system_clk;
+		udc->enable_epprime_fix = pdata->enable_epprime_fix;
+	}
 
 	if (udc->udc_driver->flags & CI13XXX_REQUIRE_TRANSCEIVER) {
 		udc->transceiver = usb_get_phy(USB_PHY_TYPE_USB2);

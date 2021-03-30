@@ -249,7 +249,8 @@ static void batt_log_work(struct work_struct *work)
 	 power_supply_changed(fg_params->bms_psy);
 
 	 if (fg_params->output_batt_log > 0)
-		schedule_delayed_work(&fg_params->batt_log_work,
+		queue_delayed_work(system_power_efficient_wq,
+			&fg_params->batt_log_work,
 			msecs_to_jiffies(fg_params->output_batt_log * 1000));
 }
 
@@ -443,7 +444,8 @@ static ssize_t somc_fg_param_store(struct device *dev,
 			return ret;
 		}
 		if (fg_params->output_batt_log > 0) {
-			schedule_delayed_work(&fg_params->batt_log_work,
+			queue_delayed_work(system_power_efficient_wq,
+			&fg_params->batt_log_work,
 			msecs_to_jiffies(fg_params->output_batt_log * 1000));
 		}
 		break;

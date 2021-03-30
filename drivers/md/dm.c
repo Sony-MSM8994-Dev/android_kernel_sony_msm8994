@@ -19,6 +19,7 @@
 #include <linux/idr.h>
 #include <linux/hdreg.h>
 #include <linux/delay.h>
+#include <linux/iosched_switcher.h>
 
 #include <trace/events/block.h>
 
@@ -1990,6 +1991,8 @@ static struct mapped_device *alloc_dev(int minor)
 
 	BUG_ON(old_md != MINOR_ALLOCED);
 
+	init_iosched_switcher(md->queue);
+
 	return md;
 
 bad_bdev:
@@ -2804,11 +2807,15 @@ struct mapped_device *dm_get_from_kobject(struct kobject *kobj)
 
 	md = container_of(kobj, struct mapped_device, kobj_holder.kobj);
 
-	if (test_bit(DMF_FREEING, &md->flags) ||
-	    dm_deleting_md(md))
-		return NULL;
-
+	spin_lock(&_minor_lock);
+	if (test_bit(DMF_FREEING, &md->flags) || dm_deleting_md(md)) {
+		md = NULL;
+		goto out;
+	}
 	dm_get(md);
+out:
+	spin_unlock(&_minor_lock);
+
 	return md;
 }
 

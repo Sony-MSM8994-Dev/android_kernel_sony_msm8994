@@ -151,6 +151,8 @@
 		SDHCI_INT_DATA_TIMEOUT | SDHCI_INT_DATA_CRC | \
 		SDHCI_INT_DATA_END_BIT | SDHCI_INT_ADMA_ERROR | \
 		SDHCI_INT_BLK_GAP)
+
+#define SDHCI_INT_CMDQ_EN	(0x1 << 14)
 #define SDHCI_INT_ALL_MASK	((unsigned int)-1)
 
 #define SDHCI_AUTO_CMD_ERR		0x3C
@@ -300,6 +302,10 @@ struct sdhci_ops {
 	unsigned int    (*get_ro)(struct sdhci_host *host);
 	void	(*platform_reset_enter)(struct sdhci_host *host, u8 mask);
 	void	(*platform_reset_exit)(struct sdhci_host *host, u8 mask);
+	int	(*crypto_engine_cfg)(struct sdhci_host *host,
+				struct mmc_request *mrq, u32 slot);
+	int	(*crypto_engine_reset)(struct sdhci_host *host);
+	void	(*crypto_cfg_reset)(struct sdhci_host *host, unsigned int slot);
 	int	(*set_uhs_signaling)(struct sdhci_host *host, unsigned int uhs);
 	void	(*hw_reset)(struct sdhci_host *host);
 	void	(*platform_suspend)(struct sdhci_host *host);
@@ -322,6 +328,10 @@ struct sdhci_ops {
 					  u32 type);
 	int	(*enable_controller_clock)(struct sdhci_host *host);
 	void	(*reset_workaround)(struct sdhci_host *host, u32 enable);
+	void	(*clear_set_dumpregs)(struct sdhci_host *host, bool set);
+	int	(*notify_load)(struct sdhci_host *host, enum mmc_load state);
+	void	(*notify_pm_status)(struct sdhci_host *host,
+					enum dev_state state);
 };
 
 #ifdef CONFIG_MMC_SDHCI_IO_ACCESSORS

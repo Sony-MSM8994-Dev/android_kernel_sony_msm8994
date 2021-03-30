@@ -30,6 +30,7 @@
 #include <linux/mm.h>
 #include <linux/of.h>
 #include <linux/ipc_logging.h>
+#include <linux/termios.h>
 
 #include <soc/qcom/glink.h>
 
@@ -42,10 +43,42 @@
 #define GLINK_PKT_IOCTL_QUEUE_RX_INTENT \
 	_IOW(GLINK_PKT_IOCTL_MAGIC, 0, unsigned int)
 
+#define SMD_DTR_SIG BIT(31)
+#define SMD_CTS_SIG BIT(30)
+#define SMD_CD_SIG BIT(29)
+#define SMD_RI_SIG BIT(28)
+
+#define map_to_smd_trans_signal(sigs) \
+	do { \
+		sigs &= 0x0fff; \
+		if (sigs & TIOCM_DTR) \
+			sigs |= SMD_DTR_SIG; \
+		if (sigs & TIOCM_RTS) \
+			sigs |= SMD_CTS_SIG; \
+		if (sigs & TIOCM_CD) \
+			sigs |= SMD_CD_SIG; \
+		if (sigs & TIOCM_RI) \
+			sigs |= SMD_RI_SIG; \
+	} while (0)
+
+#define map_from_smd_trans_signal(sigs) \
+	do { \
+		if (sigs & SMD_DTR_SIG) \
+			sigs |= TIOCM_DTR; \
+		if (sigs & SMD_CTS_SIG) \
+			sigs |= TIOCM_RTS; \
+		if (sigs & SMD_CD_SIG) \
+			sigs |= TIOCM_CD; \
+		if (sigs & SMD_RI_SIG) \
+			sigs |= TIOCM_RI; \
+		sigs &= 0x0fff; \
+	} while (0)
+
 /**
  * glink_pkt_dev - G-Link packet device structure
  * dev_list:	G-Link packets device list.
  * open_cfg:	Transport configuration used to open Logical channel.
+ * dev_name:	Device node name used by the clients.
  * handle:	Opaque Channel handle returned by G-Link.
  * ch_lock:	Per channel lock for synchronization.
  * ch_satet:	flag used to check the channel state.
@@ -55,16 +88,21 @@
  * ref_cnt:	number of references to this device.
  * poll_mode:	flag to check polling mode.
  * ch_read_wait_queue:	reader thread wait queue.
+ * ch_opened_wait_queue: open thread wait queue.
  * pkt_list:	The pending Rx packets list.
  * pkt_list_lock: Lock to protect @pkt_list.
  * pa_ws:	Packet arrival Wakeup source.
  * packet_arrival_work:	Hold the wakeup source worker info.
  * pa_spinlock:	Packet arrival spinlock.
  * ws_locked:	flag to check wakeup source state.
+ * sigs_updated: flag to check signal update.
+ * open_time_wait: wait time for channel to fully open.
+ * in_reset:	flag to check SSR state.
  */
 struct glink_pkt_dev {
 	struct list_head dev_list;
 	struct glink_open_config open_cfg;
+	const char *dev_name;
 	void *handle;
 	struct mutex ch_lock;
 	unsigned ch_state;
@@ -77,6 +115,7 @@ struct glink_pkt_dev {
 	int poll_mode;
 
 	wait_queue_head_t ch_read_wait_queue;
+	wait_queue_head_t ch_opened_wait_queue;
 	struct list_head pkt_list;
 	spinlock_t pkt_list_lock;
 
@@ -84,6 +123,9 @@ struct glink_pkt_dev {
 	struct work_struct packet_arrival_work;
 	spinlock_t pa_spinlock;
 	int ws_locked;
+	int sigs_updated;
+	int open_time_wait;
+	int in_reset;
 };
 
 /**
@@ -110,18 +152,6 @@ struct queue_rx_intent_work {
 	size_t intent_size;
 	struct glink_pkt_dev *devp;
 	struct work_struct work;
-};
-
-/**
- * glink_pkt_mmap_info - stucture to use for mmap callback
- * @handle:	Opaque Channel handle returned by G-Link.
- * @buf:	Pointer to the mmaped address.
- * @backup_buf:	Pointer to backup buffer.
- */
-struct glink_pkt_mmap_info {
-	void *handle;
-	void *buf;
-	void *backup_buf;
 };
 
 static DEFINE_MUTEX(glink_pkt_dev_lock_lha1);
@@ -176,6 +206,56 @@ do { \
 #define GLINK_PKT_INFO(x...) do {} while (0)
 #define GLINK_PKT_ERR(x...) do {} while (0)
 #endif
+
+static ssize_t open_timeout_store(struct device *d,
+				  struct device_attribute *attr,
+				  const char *buf,
+				  size_t n)
+{
+	struct glink_pkt_dev *devp;
+	long tmp;
+
+	mutex_lock(&glink_pkt_dev_lock_lha1);
+	list_for_each_entry(devp, &glink_pkt_dev_list, dev_list) {
+		if (devp->devicep == d) {
+			if (!kstrtol(buf, 0, &tmp)) {
+				devp->open_time_wait = tmp;
+				mutex_unlock(&glink_pkt_dev_lock_lha1);
+				return n;
+			} else {
+				mutex_unlock(&glink_pkt_dev_lock_lha1);
+				pr_err("%s: unable to convert: %s to an int\n",
+						__func__, buf);
+				return -EINVAL;
+			}
+		}
+	}
+	mutex_unlock(&glink_pkt_dev_lock_lha1);
+	GLINK_PKT_ERR("%s: unable to match device to valid port\n", __func__);
+	return -EINVAL;
+}
+
+static ssize_t open_timeout_show(struct device *d,
+				 struct device_attribute *attr,
+				 char *buf)
+{
+	struct glink_pkt_dev *devp;
+
+	mutex_lock(&glink_pkt_dev_lock_lha1);
+	list_for_each_entry(devp, &glink_pkt_dev_list, dev_list) {
+		if (devp->devicep == d) {
+			mutex_unlock(&glink_pkt_dev_lock_lha1);
+			return snprintf(buf, PAGE_SIZE, "%d\n",
+					devp->open_time_wait);
+		}
+	}
+	mutex_unlock(&glink_pkt_dev_lock_lha1);
+	GLINK_PKT_ERR("%s: unable to match device to valid port\n", __func__);
+	return -EINVAL;
+
+}
+
+static DEVICE_ATTR(open_timeout, 0664, open_timeout_show, open_timeout_store);
 
 /**
  * packet_arrival_worker() - wakeup source timeout worker fn
@@ -281,19 +361,26 @@ void glink_pkt_notify_tx_done(void *handle, const void *priv,
 void glink_pkt_notify_state(void *handle, const void *priv, unsigned event)
 {
 	struct glink_pkt_dev *devp = (struct glink_pkt_dev *)priv;
-	GLINK_PKT_INFO("%s(): event[%d]\n", __func__, event);
-	mutex_lock(&devp->ch_lock);
+	GLINK_PKT_INFO("%s(): event[%d] on [%s]\n", __func__, event,
+						devp->open_cfg.name);
 	devp->ch_state = event;
-	mutex_unlock(&devp->ch_lock);
+	if (event == GLINK_CONNECTED) {
+		devp->in_reset = 0;
+		wake_up_interruptible(&devp->ch_opened_wait_queue);
+	} else if (event == GLINK_REMOTE_DISCONNECTED) {
+		devp->in_reset = 1;
+		wake_up(&devp->ch_read_wait_queue);
+		wake_up_interruptible(&devp->ch_opened_wait_queue);
+	}
 }
 
 /**
  * glink_pkt_rmt_rx_intent_req_cb() - Remote Rx intent request callback
- * handle:	Opaque Channel handle returned by GlLink.
+ * handle:	Opaque Channel handle returned by GLink.
  * priv:	private pointer to the channel.
  * sz:	the size of the requested Rx intent
  *
- * This is callback function is notified when remote client
+ * This callback function is notified when remote client
  * request the intent from local client.
  */
 bool glink_pkt_rmt_rx_intent_req_cb(void *handle, const void *priv, size_t sz)
@@ -314,6 +401,28 @@ bool glink_pkt_rmt_rx_intent_req_cb(void *handle, const void *priv, size_t sz)
 	queue_work(glink_pkt_wq, &work_item->work);
 
 	return true;
+}
+
+/**
+ * glink_pkt_notify_rx_sigs() - signals callback
+ * handle:      Opaque Channel handle returned by GLink.
+ * priv:        private pointer to the channel.
+ * old_sigs:    signal before modification
+ * new_sigs:    signal after modification
+ *
+ * This callback function is notified when remote client
+ * updated the signal.
+ */
+void glink_pkt_notify_rx_sigs(void *handle, const void *priv,
+			uint32_t old_sigs, uint32_t new_sigs)
+{
+	struct glink_pkt_dev *devp = (struct glink_pkt_dev *)priv;
+	GLINK_PKT_INFO("%s(): sigs old[%x] new[%x]\n",
+				__func__, old_sigs, new_sigs);
+	mutex_lock(&devp->ch_lock);
+	devp->sigs_updated = true;
+	mutex_unlock(&devp->ch_lock);
+	wake_up(&devp->ch_read_wait_queue);
 }
 
 /**
@@ -397,6 +506,20 @@ ssize_t glink_pkt_read(struct file *file,
 			__func__, devp->i);
 		return -EINVAL;
 	}
+	if (devp->in_reset) {
+		GLINK_PKT_ERR("%s: notifying reset for glink_pkt_dev id:%d\n",
+			__func__, devp->i);
+		return -ENETRESET;
+	}
+
+	if (!glink_rx_intent_exists(devp->handle, count)) {
+		ret  = glink_queue_rx_intent(devp->handle, devp, count);
+		if (ret) {
+			GLINK_PKT_ERR("%s: failed to queue_rx_intent ret[%d]\n",
+					__func__, ret);
+			return ret;
+		}
+	}
 
 	GLINK_PKT_INFO("Begin %s on glink_pkt_dev id:%d buffer_size %zu\n",
 		__func__, devp->i, count);
@@ -404,6 +527,11 @@ ssize_t glink_pkt_read(struct file *file,
 	ret = wait_event_interruptible(devp->ch_read_wait_queue,
 				     !devp->handle || devp->in_reset ||
 				     glink_pkt_read_avail(devp));
+	if (devp->in_reset) {
+		GLINK_PKT_ERR("%s: notifying reset for glink_pkt_dev id:%d\n",
+			__func__, devp->i);
+		return -ENETRESET;
+	}
 	if (!devp->handle) {
 		GLINK_PKT_ERR("%s on a closed glink_pkt_dev id:%d\n",
 			__func__, devp->i);
@@ -449,8 +577,8 @@ ssize_t glink_pkt_read(struct file *file,
 	spin_unlock_irqrestore(&devp->pa_spinlock, flags);
 	mutex_unlock(&devp->ch_lock);
 
-	GLINK_PKT_INFO("End %s on glink_pkt_dev id:%d pkt->size %zu ret[%d]\n",
-				__func__, devp->i, pkt->size, ret);
+	GLINK_PKT_INFO("End %s on glink_pkt_dev id:%d ret[%d]\n",
+				__func__, devp->i, ret);
 	return ret;
 }
 
@@ -485,10 +613,14 @@ ssize_t glink_pkt_write(struct file *file,
 			__func__, devp->i);
 		return -EINVAL;
 	}
+	if (devp->in_reset) {
+		GLINK_PKT_ERR("%s: notifying reset for glink_pkt_dev id:%d\n",
+			__func__, devp->i);
+		return -ENETRESET;
+	};
 
 	GLINK_PKT_INFO("Begin %s on glink_pkt_dev id:%d buffer_size %zu\n",
 		__func__, devp->i, count);
-
 	data = kzalloc(count, GFP_KERNEL);
 	if (!data) {
 		GLINK_PKT_ERR("%s buffer allocation failed\n", __func__);
@@ -502,7 +634,11 @@ ssize_t glink_pkt_write(struct file *file,
 	if (ret) {
 		GLINK_PKT_ERR("%s glink_tx failed ret[%d]\n", __func__, ret);
 		kfree(data);
+		return ret;
 	}
+
+	GLINK_PKT_INFO("Finished %s on glink_pkt_dev id:%d buffer_size %zu\n",
+		__func__, devp->i, count);
 
 	return count;
 }
@@ -526,6 +662,10 @@ static unsigned int glink_pkt_poll(struct file *file, poll_table *wait)
 		GLINK_PKT_ERR("%s: Invalid device handle\n", __func__);
 		return POLLERR;
 	}
+	if (devp->in_reset) {
+		mutex_unlock(&devp->ch_lock);
+		return POLLHUP;
+	}
 
 	devp->poll_mode = 1;
 	poll_wait(file, &devp->ch_read_wait_queue, wait);
@@ -534,10 +674,20 @@ static unsigned int glink_pkt_poll(struct file *file, poll_table *wait)
 		mutex_unlock(&devp->ch_lock);
 		return POLLERR;
 	}
+	if (devp->in_reset) {
+		mutex_unlock(&devp->ch_lock);
+		return POLLHUP;
+	}
 
 	if (glink_pkt_read_avail(devp)) {
 		mask |= POLLIN | POLLRDNORM;
 		GLINK_PKT_INFO("%s sets POLLIN for glink_pkt_dev id: %d\n",
+			__func__, devp->i);
+	}
+
+	if (devp->sigs_updated) {
+		mask |= POLLPRI;
+		GLINK_PKT_INFO("%s sets POLLPRI for glink_pkt_dev id: %d\n",
 			__func__, devp->i);
 	}
 	mutex_unlock(&devp->ch_lock);
@@ -545,101 +695,46 @@ static unsigned int glink_pkt_poll(struct file *file, poll_table *wait)
 	return mask;
 }
 
-
-static void glink_pkt_vm_open(struct vm_area_struct *vma)
-{
-	GLINK_PKT_INFO("%s [vma=%08lx-%08lx]\n",
-			__func__, vma->vm_start, vma->vm_end);
-}
-
-static void glink_pkt_vm_close(struct vm_area_struct *vma)
-{
-	struct glink_pkt_mmap_info *info = vma->vm_private_data;
-
-	GLINK_PKT_INFO("%s [vma=%08lx-%08lx]\n",
-			__func__, vma->vm_start, vma->vm_end);
-	kfree(info->backup_buf);
-	glink_rx_done(info->handle, info->buf, false);
-	kfree(info);
-}
-
-static struct vm_operations_struct glink_pkt_vm_ops = {
-	.open	= glink_pkt_vm_open,
-	.close	= glink_pkt_vm_close,
-};
-
 /**
- * glink_pkt_mmap() - mmap() syscall for the glink_pkt device
- * file:	Pointer to the file structure.
- * wvma:	Pointer to the virtual memory structure.
+ * glink_pkt_tiocmset() - set the signals for glink_pkt device
+ * devp:	Pointer to the glink_pkt device structure.
+ * cmd:		IOCTL command.
+ * arg:		Arguments to the ioctl call.
  *
- * This function is used to mmap on the glink pkt device when
- * userspace client do a mmap() system call. All input arguments are
- * validated by the virtual file system before calling this function.
+ * This function is used to set the signals on the glink pkt device
+ * when userspace client do a ioctl() system call with TIOCMBIS,
+ * TIOCMBIC and TICOMSET.
  */
-static int glink_pkt_mmap(struct file *file, struct vm_area_struct *vma)
+static int glink_pkt_tiocmset(struct glink_pkt_dev *devp, unsigned int cmd,
+							unsigned long arg)
 {
-	struct glink_pkt_dev *devp;
-	struct glink_pkt_mmap_info *info;
-	struct glink_rx_pkt *pkt = NULL;
-	unsigned long pfn;
-	unsigned long size;
-	void *data = NULL;
+	int ret;
+	uint32_t sigs;
+	uint32_t val;
 
-	devp = file->private_data;
-	if (!devp || !devp->handle) {
-		GLINK_PKT_ERR("%s: Invalid device handle\n", __func__);
-		return -EINVAL;
+	ret = get_user(val, (uint32_t *)arg);
+	if (ret)
+		return ret;
+	map_to_smd_trans_signal(val);
+	ret = glink_sigs_local_get(devp->handle, &sigs);
+	if (ret < 0) {
+		GLINK_PKT_ERR("%s: Get signals failed[%d]\n", __func__, ret);
+		return ret;
 	}
-	if (vma->vm_end < vma->vm_start) {
-		GLINK_PKT_ERR("%s: Invalid Memory range\n", __func__);
-		return -EFAULT;
+	switch (cmd) {
+	case TIOCMBIS:
+		sigs |= val;
+		break;
+	case TIOCMBIC:
+		sigs &= ~val;
+		break;
+	case TIOCMSET:
+		sigs = val;
+		break;
 	}
-
-	GLINK_PKT_INFO("%s: on glink_pkt_dev id[%d]\n", __func__, devp->i);
-
-	if (list_empty(&devp->pkt_list)) {
-		GLINK_PKT_ERR("%s: No Rx data on id[%d]\n", __func__, devp->i);
-		return -EAGAIN; /* No DATA */
-	}
-
-	info = kzalloc(sizeof(struct glink_pkt_mmap_info *), GFP_KERNEL);
-	if (!info) {
-		GLINK_PKT_ERR("%s: INFO Memory allocation failed\n", __func__);
-		return -ENOMEM;
-	}
-	info->handle = devp->handle;
-
-	pkt = list_first_entry(&devp->pkt_list, struct glink_rx_pkt, list);
-	data = (void *)pkt->data;
-	info->buf = (void *)pkt->data;
-
-	if ((pkt->size < PAGE_SIZE) && ((unsigned long)data & ~PAGE_MASK)) {
-		data = kzalloc(PAGE_SIZE, GFP_KERNEL);
-		if (!data) {
-			GLINK_PKT_ERR("%s: data Memory allocation failed\n",
-					__func__);
-			return -ENOMEM;
-		}
-		GLINK_PKT_INFO("%s Reallocate to page-align for size[%zu]\n",
-					__func__, pkt->size);
-		memcpy(data, pkt->data, pkt->size);
-		info->backup_buf = (void *)data;
-	}
-
-	pfn = virt_to_phys((void *)((unsigned long)data)) >> PAGE_SHIFT;
-	size = vma->vm_end - vma->vm_start;
-	vma->vm_private_data = (void *) info;
-	vma->vm_ops = &glink_pkt_vm_ops;
-	if (remap_pfn_range(vma, vma->vm_start, pfn,
-			size, vma->vm_page_prot)) {
-		GLINK_PKT_ERR("%s: Remap failed\n", __func__);
-		return -EAGAIN;
-	}
-
-	list_del(&pkt->list);
-	kfree(pkt);
-	return 0;
+	ret = glink_sigs_set(devp->handle, sigs);
+	GLINK_PKT_INFO("%s: sigs[0x%x] ret[%d]\n", __func__, sigs, ret);
+	return ret;
 }
 
 /**
@@ -657,7 +752,8 @@ static long glink_pkt_ioctl(struct file *file, unsigned int cmd,
 {
 	int ret;
 	struct glink_pkt_dev *devp;
-	size_t size = 0;
+	uint32_t size = 0;
+	uint32_t sigs = 0;
 
 	devp = file->private_data;
 	if (!devp || !devp->handle) {
@@ -665,34 +761,39 @@ static long glink_pkt_ioctl(struct file *file, unsigned int cmd,
 		return -EINVAL;
 	}
 
-	GLINK_PKT_INFO("%s: ioctl command 0x%x\n", __func__, cmd);
+	mutex_lock(&devp->ch_lock);
 	switch (cmd) {
 	case TIOCMGET:
-		ret = glink_sigs_local_get(devp->handle);
-		GLINK_PKT_INFO("%s: TIOCMGET on dev_id[%d] ret[0x%x]\n",
-						__func__, devp->i, ret);
+		devp->sigs_updated = false;
+		ret = glink_sigs_remote_get(devp->handle, &sigs);
+		GLINK_PKT_INFO("%s: TIOCMGET ret[%d] sigs[0x%x]\n",
+					__func__, ret, sigs);
+		map_from_smd_trans_signal(sigs);
+		if (!ret)
+			ret = put_user(sigs, (uint32_t *)arg);
 		break;
 	case TIOCMSET:
-		GLINK_PKT_INFO("%s: TIOCMSET on dev_id[%d] arg[%lu]\n",
-						__func__, devp->i, arg);
-		ret = glink_sigs_set(devp->handle, arg);
+	case TIOCMBIS:
+	case TIOCMBIC:
+		ret = glink_pkt_tiocmset(devp, cmd, arg);
 		break;
+
 	case GLINK_PKT_IOCTL_QUEUE_RX_INTENT:
-		ret = get_user(size, (size_t *)arg);
-		GLINK_PKT_INFO("%s: QUEUE_RX_INTENT size[%zu]\n",
-						__func__, size);
+		ret = get_user(size, (uint32_t *)arg);
+		GLINK_PKT_INFO("%s: intent size[%d]\n", __func__, size);
 		ret  = glink_queue_rx_intent(devp->handle, devp, size);
 		if (ret) {
 			GLINK_PKT_ERR("%s: failed to QUEUE_RX_INTENT ret[%d]\n",
-						__func__, ret);
+					__func__, ret);
 		}
 		break;
 	default:
 		GLINK_PKT_ERR("%s: Unrecognized ioctl command 0x%x\n",
-							__func__, cmd);
+					__func__, cmd);
 		ret = -ENOIOCTLCMD;
 		break;
 	}
+	mutex_unlock(&devp->ch_lock);
 
 	return ret;
 }
@@ -716,8 +817,8 @@ int glink_pkt_open(struct inode *inode, struct file *file)
 		GLINK_PKT_ERR("%s on NULL device\n", __func__);
 		return -EINVAL;
 	}
-	GLINK_PKT_INFO("Begin %s() on dev id:%d by [%s]\n",
-				__func__, devp->i, current->comm);
+	GLINK_PKT_INFO("Begin %s() on dev id:%d open_wait_time[%d] by [%s]\n",
+		__func__, devp->i, devp->open_time_wait, current->comm);
 	file->private_data = devp;
 
 	mutex_lock(&devp->ch_lock);
@@ -729,14 +830,44 @@ int glink_pkt_open(struct inode *inode, struct file *file)
 				__func__, devp->open_cfg.transport,
 				devp->open_cfg.edge, devp->open_cfg.name);
 			ret = -ENODEV;
+			devp->handle = NULL;
+			goto error;
 		}
-		wakeup_source_init(&devp->pa_ws, devp->open_cfg.name);
-		INIT_WORK(&devp->packet_arrival_work, packet_arrival_worker);
+
+		/*
+		 * Wait for the channel to be complete open state so we know
+		 * the remote is ready enough.
+		 * Defualt timeout 1sec.
+		 */
+		if (!devp->open_time_wait)
+			devp->open_time_wait = 1;
+		if (devp->open_time_wait < 0) {
+			ret = wait_event_interruptible(
+				devp->ch_opened_wait_queue,
+				devp->ch_state == GLINK_CONNECTED);
+		} else {
+			ret = wait_event_interruptible_timeout(
+				devp->ch_opened_wait_queue,
+				devp->ch_state == GLINK_CONNECTED,
+				msecs_to_jiffies(devp->open_time_wait * 1000));
+			if (ret == 0)
+				ret = -ETIMEDOUT;
+		}
+		if (ret < 0) {
+			GLINK_PKT_ERR("%s: open failed on dev id:%d rc:%d\n",
+					__func__, devp->i, ret);
+			glink_close(devp->handle);
+			devp->handle = NULL;
+			goto error;
+		}
 	}
+	ret = 0;
 	devp->ref_cnt++;
+
+error:
 	mutex_unlock(&devp->ch_lock);
-	GLINK_PKT_INFO("END %s() on dev id:%d ref_cnt[%d]\n",
-					__func__, devp->i, devp->ref_cnt);
+	GLINK_PKT_INFO("END %s() on dev id:%d ref_cnt[%d] ret[%d]\n",
+			__func__, devp->i, devp->ref_cnt, ret);
 	return ret;
 }
 
@@ -761,6 +892,9 @@ int glink_pkt_release(struct inode *inode, struct file *file)
 		devp->ref_cnt--;
 
 	if (devp->handle && devp->ref_cnt == 0) {
+		devp->ch_state = GLINK_LOCAL_DISCONNECTED;
+		wake_up(&devp->ch_read_wait_queue);
+		wake_up_interruptible(&devp->ch_opened_wait_queue);
 		ret = glink_close(devp->handle);
 		if (ret)
 			GLINK_PKT_ERR("%s: close failed ret[%d]\n",
@@ -768,10 +902,14 @@ int glink_pkt_release(struct inode *inode, struct file *file)
 		devp->handle = NULL;
 		devp->poll_mode = 0;
 		devp->ws_locked = 0;
-		wakeup_source_trash(&devp->pa_ws);
+		devp->sigs_updated = false;
+		devp->in_reset = 0;
 	}
 	mutex_unlock(&devp->ch_lock);
 
+	if (flush_work(&devp->packet_arrival_work))
+		GLINK_PKT_INFO("%s: Flushed work for glink_pkt_dev id:%d\n",
+			__func__, devp->i);
 	return ret;
 }
 
@@ -782,7 +920,6 @@ static const struct file_operations glink_pkt_fops = {
 	.read = glink_pkt_read,
 	.write = glink_pkt_write,
 	.poll = glink_pkt_poll,
-	.mmap = glink_pkt_mmap,
 	.unlocked_ioctl = glink_pkt_ioctl,
 	.compat_ioctl = glink_pkt_ioctl,
 };
@@ -802,16 +939,21 @@ static int glink_pkt_init_add_device(struct glink_pkt_dev *devp, int i)
 	devp->open_cfg.notify_tx_done = glink_pkt_notify_tx_done;
 	devp->open_cfg.notify_state = glink_pkt_notify_state;
 	devp->open_cfg.notify_rx_intent_req = glink_pkt_rmt_rx_intent_req_cb;
+	devp->open_cfg.notify_rx_sigs = glink_pkt_notify_rx_sigs;
 	devp->open_cfg.priv = devp;
 
 	devp->i = i;
 	devp->poll_mode = 0;
 	devp->ws_locked = 0;
+	devp->ch_state = GLINK_LOCAL_DISCONNECTED;
 	mutex_init(&devp->ch_lock);
 	init_waitqueue_head(&devp->ch_read_wait_queue);
+	init_waitqueue_head(&devp->ch_opened_wait_queue);
 	spin_lock_init(&devp->pa_spinlock);
 	INIT_LIST_HEAD(&devp->pkt_list);
 	spin_lock_init(&devp->pkt_list_lock);
+	wakeup_source_init(&devp->pa_ws, devp->dev_name);
+	INIT_WORK(&devp->packet_arrival_work, packet_arrival_worker);
 
 	cdev_init(&devp->cdev, &glink_pkt_fops);
 	devp->cdev.owner = THIS_MODULE;
@@ -820,6 +962,7 @@ static int glink_pkt_init_add_device(struct glink_pkt_dev *devp, int i)
 	if (IS_ERR_VALUE(ret)) {
 		GLINK_PKT_ERR("%s: cdev_add() failed for dev id:%d ret:%i\n",
 			__func__, i, ret);
+		wakeup_source_trash(&devp->pa_ws);
 		return ret;
 	}
 
@@ -827,15 +970,20 @@ static int glink_pkt_init_add_device(struct glink_pkt_dev *devp, int i)
 			      NULL,
 			      (glink_pkt_number + i),
 			      NULL,
-			      devp->open_cfg.name);
+			      devp->dev_name);
 
 	if (IS_ERR_OR_NULL(devp->devicep)) {
 		GLINK_PKT_ERR("%s: device_create() failed for dev id:%d\n",
 			__func__, i);
 		ret = -ENOMEM;
 		cdev_del(&devp->cdev);
+		wakeup_source_trash(&devp->pa_ws);
 		return ret;
 	}
+
+	if (device_create_file(devp->devicep, &dev_attr_open_timeout))
+		GLINK_PKT_ERR("%s: device_create_file() failed for id:%d\n",
+			__func__, i);
 
 	mutex_lock(&glink_pkt_dev_lock_lha1);
 	list_add(&devp->dev_list, &glink_pkt_dev_list);
@@ -938,6 +1086,13 @@ static int parse_glinkpkt_devicetree(struct device_node *node,
 		goto error;
 	GLINK_PKT_INFO("%s ch_name = %s\n", __func__,
 			glink_pkt_devp->open_cfg.name);
+
+	key = "qcom,glinkpkt-dev-name";
+	glink_pkt_devp->dev_name = of_get_property(node, key, NULL);
+	if (!glink_pkt_devp->dev_name)
+		goto error;
+	GLINK_PKT_INFO("%s dev_name = %s\n", __func__,
+			glink_pkt_devp->dev_name);
 	return 0;
 
 error:

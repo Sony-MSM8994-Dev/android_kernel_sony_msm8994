@@ -68,7 +68,7 @@ static int vlan_dev_rebuild_header(struct sk_buff *skb)
 	return 0;
 }
 
-static inline u16
+u16
 vlan_dev_get_egress_qos_mask(struct net_device *dev, struct sk_buff *skb)
 {
 	struct vlan_priority_tci_mapping *mp;
@@ -86,6 +86,7 @@ vlan_dev_get_egress_qos_mask(struct net_device *dev, struct sk_buff *skb)
 	}
 	return 0;
 }
+EXPORT_SYMBOL(vlan_dev_get_egress_qos_mask);
 
 /*
  *	Create the VLAN header for an arbitrary protocol layer

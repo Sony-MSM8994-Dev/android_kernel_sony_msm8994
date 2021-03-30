@@ -994,8 +994,7 @@ int msm_vidc_dqbuf(void *instance, struct v4l2_buffer *b)
 		if (!inst->map_output_buffer)
 			continue;
 		if (EXTRADATA_IDX(b->length) &&
-			(i == EXTRADATA_IDX(b->length)) &&
-			!b->m.planes[i].m.userptr) {
+			i == EXTRADATA_IDX(b->length)) {
 			continue;
 		}
 		buffer_info = device_to_uvaddr(&inst->registeredbufs,
@@ -1009,7 +1008,7 @@ int msm_vidc_dqbuf(void *instance, struct v4l2_buffer *b)
 		}
 
 		b->m.planes[i].m.userptr = buffer_info->uvaddr[i];
-		if (!b->m.planes[i].m.userptr) {
+		if (!(inst->flags & VIDC_SECURE) && !b->m.planes[i].m.userptr) {
 			dprintk(VIDC_ERR,
 			"%s: Failed to find user virtual address, 0x%lx, %d, %d\n",
 			__func__, b->m.planes[i].m.userptr, b->type, i);
@@ -1323,11 +1322,15 @@ void *msm_vidc_open(int core_id, int session_type)
 	}
 	if (session_type == MSM_VIDC_DECODER) {
 		msm_vdec_inst_init(inst);
-		msm_vdec_ctrl_init(inst);
+		rc = msm_vdec_ctrl_init(inst);
 	} else if (session_type == MSM_VIDC_ENCODER) {
 		msm_venc_inst_init(inst);
-		msm_venc_ctrl_init(inst);
+		rc = msm_venc_ctrl_init(inst);
 	}
+
+	if (rc)
+		goto fail_bufq_capture;
+
 	msm_dcvs_init(inst);
 	rc = vb2_bufq_init(inst, V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
 			session_type);

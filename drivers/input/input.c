@@ -669,6 +669,7 @@ EXPORT_SYMBOL(input_close_device);
  */
 static void input_dev_release_keys(struct input_dev *dev)
 {
+	bool need_sync = false;
 	int code;
 
 	if (is_event_supported(EV_KEY, dev->evbit, EV_MAX)) {
@@ -676,9 +677,11 @@ static void input_dev_release_keys(struct input_dev *dev)
 			if (is_event_supported(code, dev->keybit, KEY_MAX) &&
 			    __test_and_clear_bit(code, dev->key)) {
 				input_pass_event(dev, EV_KEY, code, 0);
+				need_sync = true;
 			}
 		}
-		input_pass_event(dev, EV_SYN, SYN_REPORT, 1);
+		if (need_sync)
+			input_pass_event(dev, EV_SYN, SYN_REPORT, 1);
 	}
 }
 
@@ -1653,7 +1656,7 @@ static void input_dev_toggle(struct input_dev *dev, bool activate)
  *
  * This function tries to reset the state of an opened input device and
  * bring internal state and state if the hardware in sync with each other.
- * We mark all keys as released, restore LED state, repeat rate, etc.
+ * We restore LED state, repeat rate, etc.
  */
 void input_reset_device(struct input_dev *dev)
 {
@@ -1661,16 +1664,6 @@ void input_reset_device(struct input_dev *dev)
 
 	if (dev->users) {
 		input_dev_toggle(dev, true);
-
-		/*
-		 * Keys that have been pressed at suspend time are unlikely
-		 * to be still pressed when we resume.
-		 */
-		if (!test_bit(INPUT_PROP_NO_DUMMY_RELEASE, dev->propbit)) {
-			spin_lock_irq(&dev->event_lock);
-			input_dev_release_keys(dev);
-			spin_unlock_irq(&dev->event_lock);
-		}
 	}
 
 	mutex_unlock(&dev->mutex);

@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2015, 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -185,12 +185,12 @@ static int32_t msm_vfe40_init_qos_parms(struct vfe_device *vfe_dev,
 						__func__);
 					kfree(ds_settings);
 					kfree(ds_regs);
-	} else {
+				} else {
 					for (i = 0; i < ds_entries; i++)
 						msm_camera_io_w(ds_settings[i],
 							vfebase + ds_regs[i]);
-						kfree(ds_regs);
-						kfree(ds_settings);
+					kfree(ds_regs);
+					kfree(ds_settings);
 				}
 			} else {
 				kfree(ds_regs);
@@ -424,15 +424,24 @@ static void msm_vfe40_clear_status_reg(struct vfe_device *vfe_dev)
 static void msm_vfe40_process_reset_irq(struct vfe_device *vfe_dev,
 	uint32_t irq_status0, uint32_t irq_status1)
 {
-	if (irq_status0 & (1 << 31))
+	unsigned long flags;
+
+	if (irq_status0 & (1 << 31)) {
+		spin_lock_irqsave(&vfe_dev->reset_completion_lock, flags);
 		complete(&vfe_dev->reset_complete);
+		spin_unlock_irqrestore(&vfe_dev->reset_completion_lock, flags);
+	}
 }
 
 static void msm_vfe40_process_halt_irq(struct vfe_device *vfe_dev,
 	uint32_t irq_status0, uint32_t irq_status1)
 {
+	unsigned long flags;
+
 	if (irq_status1 & (1 << 8)) {
+		spin_lock_irqsave(&vfe_dev->halt_completion_lock, flags);
 		complete(&vfe_dev->halt_complete);
+		spin_unlock_irqrestore(&vfe_dev->halt_completion_lock, flags);
 		msm_camera_io_w(0x0, vfe_dev->vfe_base + 0x2C0);
 	}
 }
@@ -809,7 +818,11 @@ static long msm_vfe40_reset_hardware(struct vfe_device *vfe_dev,
 	uint32_t first_start, uint32_t blocking_call)
 {
 	long rc = 0;
+	unsigned long flags;
+
+	spin_lock_irqsave(&vfe_dev->reset_completion_lock, flags);
 	init_completion(&vfe_dev->reset_complete);
+	spin_unlock_irqrestore(&vfe_dev->reset_completion_lock, flags);
 
 	if (first_start) {
 		msm_camera_io_w_mb(0x1FF, vfe_dev->vfe_base + 0xC);
@@ -1125,10 +1138,12 @@ static int msm_vfe40_start_fetch_engine(struct vfe_device *vfe_dev,
 	vfe_dev->fetch_engine_info.session_id = fe_cfg->session_id;
 	vfe_dev->fetch_engine_info.stream_id = fe_cfg->stream_id;
 
+	mutex_lock(&vfe_dev->buf_mgr->lock);
 	rc = vfe_dev->buf_mgr->ops->get_buf_by_index(
 		vfe_dev->buf_mgr, bufq_handle, fe_cfg->buf_idx, &buf);
 	if (rc < 0) {
 		pr_err("%s: No fetch buffer\n", __func__);
+		mutex_unlock(&vfe_dev->buf_mgr->lock);
 		return -EINVAL;
 	}
 
@@ -1138,6 +1153,7 @@ static int msm_vfe40_start_fetch_engine(struct vfe_device *vfe_dev,
 	msm_camera_io_w_mb(0x10000, vfe_dev->vfe_base + 0x4C);
 	msm_camera_io_w_mb(0x20000, vfe_dev->vfe_base + 0x4C);
 	buf->state = MSM_ISP_BUFFER_STATE_DIVERTED;
+	mutex_unlock(&vfe_dev->buf_mgr->lock);
 
 	return 0;
 }
@@ -1628,6 +1644,7 @@ static int msm_vfe40_axi_halt(struct vfe_device *vfe_dev,
 {
 	int rc = 0;
 	enum msm_vfe_input_src i;
+	unsigned long flags;
 
 	/* Keep only halt and restart mask */
 	msm_camera_io_w(BIT(31), vfe_dev->vfe_base + 0x28);
@@ -1662,7 +1679,9 @@ static int msm_vfe40_axi_halt(struct vfe_device *vfe_dev,
 	}
 
 	if (blocking) {
+		spin_lock_irqsave(&vfe_dev->halt_completion_lock, flags);
 		init_completion(&vfe_dev->halt_complete);
+		spin_unlock_irqrestore(&vfe_dev->halt_completion_lock, flags);
 		/* Halt AXI Bus Bridge */
 		msm_camera_io_w_mb(0x1, vfe_dev->vfe_base + 0x2C0);
 		rc = wait_for_completion_interruptible_timeout(

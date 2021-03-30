@@ -38,14 +38,18 @@
 #if defined(CONFIG_SONY_CAM_V4L2)
 #define MSM_POST_EVT_TIMEOUT 14000
 #else
-#define MSM_POST_EVT_TIMEOUT 5000
+#define MSM_POST_EVT_TIMEOUT 10000
 #endif
 #define MSM_POST_EVT_NOTIMEOUT 0xFFFFFFFF
 #define MSM_CAMERA_STREAM_CNT_BITS  32
 
+#define CAMERA_DISABLE_PC_LATENCY 100
+#define CAMERA_ENABLE_PC_LATENCY PM_QOS_DEFAULT_VALUE
+
 struct msm_video_device {
 	struct video_device *vdev;
 	atomic_t opened;
+	struct mutex video_drvdata_mutex;
 };
 
 struct msm_queue_head {
@@ -109,8 +113,11 @@ struct msm_session {
 	 * session struct msm_stream */
 	struct msm_queue_head stream_q;
 	struct mutex lock;
+	struct mutex close_lock;
 	rwlock_t stream_rwlock;
 };
+
+void msm_pm_qos_update_request(int val);
 
 int msm_post_event(struct v4l2_event *event, int timeout);
 int  msm_create_session(unsigned int session, struct video_device *vdev);

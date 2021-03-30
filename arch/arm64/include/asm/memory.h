@@ -46,7 +46,8 @@
 #else
 #define VA_BITS			(39)
 #endif
-#define PAGE_OFFSET		(UL(0xffffffffffffffff) << (VA_BITS - 1))
+#define PAGE_OFFSET		(UL(0xffffffffffffffff) - \
+	(UL(1) << (VA_BITS - 1)) + 1)
 #define MODULES_END		(PAGE_OFFSET)
 #define MODULES_VADDR		(MODULES_END - SZ_64M)
 #define FIXADDR_TOP		(MODULES_VADDR - SZ_2M - PAGE_SIZE)
@@ -61,10 +62,6 @@
 #endif /* CONFIG_COMPAT */
 
 #define TASK_UNMAPPED_BASE	(PAGE_ALIGN(TASK_SIZE / 4))
-
-#if TASK_SIZE_64 > MODULES_VADDR
-#error Top of 64-bit user space clashes with start of module space
-#endif
 
 /*
  * Physical vs virtual RAM address space conversion.  These are
@@ -147,7 +144,11 @@ static inline void *phys_to_virt(phys_addr_t x)
 #define ARCH_PFN_OFFSET		PHYS_PFN_OFFSET
 
 #define virt_to_page(kaddr)	pfn_to_page(__pa(kaddr) >> PAGE_SHIFT)
-#define	virt_addr_valid(kaddr)	pfn_valid(__pa(kaddr) >> PAGE_SHIFT)
+#define _virt_addr_valid(kaddr)	pfn_valid(__pa(kaddr) >> PAGE_SHIFT)
+
+#define _virt_addr_is_linear(kaddr)	(((u64)(kaddr)) >= PAGE_OFFSET)
+#define virt_addr_valid(kaddr)		(_virt_addr_is_linear(kaddr) && \
+					 _virt_addr_valid(kaddr))
 
 #endif
 

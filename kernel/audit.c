@@ -77,13 +77,13 @@ static int	audit_initialized;
 #define AUDIT_OFF	0
 #define AUDIT_ON	1
 #define AUDIT_LOCKED	2
-int		audit_enabled;
-int		audit_ever_enabled;
+int		audit_enabled = AUDIT_OFF;
+int		audit_ever_enabled = !!AUDIT_OFF;
 
 EXPORT_SYMBOL_GPL(audit_enabled);
 
 /* Default state when kernel boots without any parameters. */
-static int	audit_default;
+static int	audit_default = AUDIT_OFF;
 
 /* If auditing cannot proceed, audit_failure selects what happens. */
 static int	audit_failure = AUDIT_FAIL_PRINTK;
@@ -373,7 +373,7 @@ static void audit_printk_skb(struct sk_buff *skb)
 
 	if (nlh->nlmsg_type != AUDIT_EOE) {
 		if (printk_ratelimit())
-			printk(KERN_NOTICE "type=%d %s\n", nlh->nlmsg_type, data);
+			pr_debug(KERN_NOTICE "type=%d %s\n", nlh->nlmsg_type, data);
 		else
 			audit_log_lost("printk limit exceeded\n");
 	}
@@ -573,10 +573,19 @@ static int audit_netlink_ok(struct sk_buff *skb, u16 msg_type)
 {
 	int err = 0;
 
-	/* Only support the initial namespaces for now. */
-	if ((current_user_ns() != &init_user_ns) ||
-	    (task_active_pid_ns(current) != &init_pid_ns))
-		return -EPERM;
+	/* Only support initial user namespace for now. */
+	/*
+	 * We return ECONNREFUSED because it tricks userspace into thinking
+	 * that audit was not configured into the kernel.  Lots of users
+	 * configure their PAM stack (because that's what the distro does)
+	 * to reject login if unable to send messages to audit.  If we return
+	 * ECONNREFUSED the PAM stack thinks the kernel does not have audit
+	 * configured in and will let login proceed.  If we return EPERM
+	 * userspace will reject all logins.  This should be removed when we
+	 * support non init namespaces!!
+	 */
+	if (current_user_ns() != &init_user_ns)
+		return -ECONNREFUSED;
 
 	switch (msg_type) {
 	case AUDIT_LIST:
@@ -593,6 +602,10 @@ static int audit_netlink_ok(struct sk_buff *skb, u16 msg_type)
 	case AUDIT_TTY_SET:
 	case AUDIT_TRIM:
 	case AUDIT_MAKE_EQUIV:
+		/* Only support auditd and auditctl in initial pid namespace for now. */
+		if (task_active_pid_ns(current) != &init_pid_ns)
+			return -EPERM;
+
 		if (!netlink_capable(skb, CAP_AUDIT_CONTROL))
 			err = -EPERM;
 		break;
@@ -686,11 +699,17 @@ static int audit_receive_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 				return err;
 		}
 		if (status_get->mask & AUDIT_STATUS_PID) {
+			/* NOTE: we are using task_tgid_vnr() below because
+			 *       the s.pid value is relative to the namespace
+			 *       of the caller; at present this doesn't matter
+			 *       much since you can really only run auditd
+			 *       from the initial pid namespace, but something
+			 *       to keep in mind if this changes */
 			int new_pid = status_get->pid;
 
 			if (audit_enabled != AUDIT_OFF)
 				audit_log_config_change("audit_pid", new_pid, audit_pid, 1);
-			audit_pid = new_pid;
+			audit_pid = 0;
 			audit_nlk_portid = NETLINK_CB(skb).portid;
 		}
 		if (status_get->mask & AUDIT_STATUS_RATE_LIMIT) {
@@ -910,8 +929,6 @@ static int __init audit_init(void)
 	skb_queue_head_init(&audit_skb_queue);
 	skb_queue_head_init(&audit_skb_hold_queue);
 	audit_initialized = AUDIT_INITIALIZED;
-	audit_enabled = audit_default;
-	audit_ever_enabled |= !!audit_default;
 
 	audit_log(NULL, GFP_KERNEL, AUDIT_KERNEL, "initialized");
 
@@ -928,6 +945,8 @@ static int __init audit_enable(char *str)
 	audit_default = !!simple_strtol(str, NULL, 0);
 	if (!audit_default)
 		audit_initialized = AUDIT_DISABLED;
+	audit_enabled = audit_default;
+	audit_ever_enabled = !!audit_enabled;
 
 	printk(KERN_INFO "audit: %s", audit_default ? "enabled" : "disabled");
 
@@ -1318,14 +1337,14 @@ void audit_log_n_string(struct audit_buffer *ab, const char *string,
  * @string: string to be checked
  * @len: max length of the string to check
  */
-int audit_string_contains_control(const char *string, size_t len)
+bool audit_string_contains_control(const char *string, size_t len)
 {
 	const unsigned char *p;
 	for (p = string; p < (const unsigned char *)string + len; p++) {
 		if (*p == '"' || *p < 0x21 || *p > 0x7e)
-			return 1;
+			return true;
 	}
-	return 0;
+	return false;
 }
 
 /**
@@ -1617,7 +1636,7 @@ void audit_log_task_info(struct audit_buffer *ab, struct task_struct *tsk)
 			 " euid=%u suid=%u fsuid=%u"
 			 " egid=%u sgid=%u fsgid=%u ses=%u tty=%s",
 			 sys_getppid(),
-			 tsk->pid,
+			 task_tgid_nr(tsk),
 			 from_kuid(&init_user_ns, audit_get_loginuid(tsk)),
 			 from_kuid(&init_user_ns, cred->uid),
 			 from_kgid(&init_user_ns, cred->gid),
@@ -1645,7 +1664,7 @@ EXPORT_SYMBOL(audit_log_task_info);
 
 /**
  * audit_log_link_denied - report a link restriction denial
- * @operation: specific link opreation
+ * @operation: specific link operation
  * @link: the path that triggered the restriction
  */
 void audit_log_link_denied(const char *operation, struct path *link)

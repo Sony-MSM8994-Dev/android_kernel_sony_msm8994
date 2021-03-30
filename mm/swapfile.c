@@ -506,7 +506,7 @@ noswap:
 	return (swp_entry_t) {0};
 }
 
-/* The only caller of this function is now susupend routine */
+/* The only caller of this function is now suspend routine */
 swp_entry_t get_swap_page_of_type(int type)
 {
 	struct swap_info_struct *si;
@@ -550,16 +550,16 @@ static struct swap_info_struct *swap_info_get(swp_entry_t entry)
 	return p;
 
 bad_free:
-	printk(KERN_ERR "swap_free: %s%08lx\n", Unused_offset, entry.val);
+	pr_err("swap_free: %s%08lx\n", Unused_offset, entry.val);
 	goto out;
 bad_offset:
-	printk(KERN_ERR "swap_free: %s%08lx\n", Bad_offset, entry.val);
+	pr_err("swap_free: %s%08lx\n", Bad_offset, entry.val);
 	goto out;
 bad_device:
-	printk(KERN_ERR "swap_free: %s%08lx\n", Unused_file, entry.val);
+	pr_err("swap_free: %s%08lx\n", Unused_file, entry.val);
 	goto out;
 bad_nofile:
-	printk(KERN_ERR "swap_free: %s%08lx\n", Bad_file, entry.val);
+	pr_err("swap_free: %s%08lx\n", Bad_file, entry.val);
 out:
 	return NULL;
 }
@@ -643,7 +643,7 @@ static unsigned char swap_entry_free(struct swap_info_struct *p,
 }
 
 /*
- * Caller has made sure that the swapdevice corresponding to entry
+ * Caller has made sure that the swap device corresponding to entry
  * is still around or has not been recycled.
  */
 void swap_free(swp_entry_t entry)
@@ -787,7 +787,7 @@ int try_to_free_swap(struct page *page)
 	 * original page might be freed under memory pressure, then
 	 * later read back in from swap, now with the wrong data.
 	 *
-	 * Hibration suspends storage while it is writing the image
+	 * Hibernation suspends storage while it is writing the image
 	 * to disk so check that here.
 	 */
 	if (pm_suspended_storage())
@@ -1005,7 +1005,7 @@ static int unuse_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 	 * some architectures (e.g. x86_32 with PAE) we might catch a glimpse
 	 * of unmatched parts which look like swp_pte, so unuse_pte must
 	 * recheck under pte lock.  Scanning without pte lock lets it be
-	 * preemptible whenever CONFIG_PREEMPT but not CONFIG_HIGHPTE.
+	 * preemptable whenever CONFIG_PREEMPT but not CONFIG_HIGHPTE.
 	 */
 	pte = pte_offset_map(pmd, addr);
 	do {
@@ -1634,6 +1634,7 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 	struct filename *pathname;
 	int i, type, prev;
 	int err;
+	unsigned int old_block_size;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
@@ -1722,11 +1723,11 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 	}
 
 	swap_file = p->swap_file;
+	old_block_size = p->old_block_size;
 	p->swap_file = NULL;
 	p->max = 0;
 	swap_map = p->swap_map;
 	p->swap_map = NULL;
-	p->flags = 0;
 	frontswap_map = frontswap_map_get(p);
 	frontswap_map_set(p, NULL);
 	spin_unlock(&p->lock);
@@ -1735,13 +1736,13 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 	mutex_unlock(&swapon_mutex);
 	vfree(swap_map);
 	vfree(frontswap_map);
-	/* Destroy swap account informatin */
+	/* Destroy swap account information */
 	swap_cgroup_swapoff(type);
 
 	inode = mapping->host;
 	if (S_ISBLK(inode->i_mode)) {
 		struct block_device *bdev = I_BDEV(inode);
-		set_blocksize(bdev, p->old_block_size);
+		set_blocksize(bdev, old_block_size);
 		blkdev_put(bdev, FMODE_READ | FMODE_WRITE | FMODE_EXCL);
 	} else {
 		mutex_lock(&inode->i_mutex);
@@ -1749,6 +1750,16 @@ SYSCALL_DEFINE1(swapoff, const char __user *, specialfile)
 		mutex_unlock(&inode->i_mutex);
 	}
 	filp_close(swap_file, NULL);
+
+	/*
+	 * Clear the SWP_USED flag after all resources are freed so that swapon
+	 * can reuse this swap_info in alloc_swap_info() safely.  It is ok to
+	 * not hold p->lock after we cleared its SWP_WRITEOK.
+	 */
+	spin_lock(&swap_lock);
+	p->flags = 0;
+	spin_unlock(&swap_lock);
+
 	err = 0;
 	atomic_inc(&proc_poll_event);
 	wake_up_interruptible(&proc_poll_wait);
@@ -1977,9 +1988,10 @@ static unsigned long read_swap_header(struct swap_info_struct *p,
 	int i;
 	unsigned long maxpages;
 	unsigned long swapfilepages;
+	unsigned long last_page;
 
 	if (memcmp("SWAPSPACE2", swap_header->magic.magic, 10)) {
-		printk(KERN_ERR "Unable to find swap-space signature\n");
+		pr_err("Unable to find swap-space signature\n");
 		return 0;
 	}
 
@@ -1995,9 +2007,8 @@ static unsigned long read_swap_header(struct swap_info_struct *p,
 	}
 	/* Check the swap header's sub-version */
 	if (swap_header->info.version != 1) {
-		printk(KERN_WARNING
-		       "Unable to handle swap header version %d\n",
-		       swap_header->info.version);
+		pr_warn("Unable to handle swap header version %d\n",
+			swap_header->info.version);
 		return 0;
 	}
 
@@ -2021,8 +2032,18 @@ static unsigned long read_swap_header(struct swap_info_struct *p,
 	 */
 	maxpages = swp_offset(pte_to_swp_entry(
 			swp_entry_to_pte(swp_entry(0, ~0UL)))) + 1;
-	if (maxpages > swap_header->info.last_page) {
-		maxpages = swap_header->info.last_page + 1;
+	last_page = swap_header->info.last_page;
+	if (!last_page) {
+		pr_warn("Empty swap-file\n");
+		return 0;
+	}
+	if (last_page > maxpages) {
+		pr_warn("Truncating oversized swap area, only using %luk out of %luk\n",
+			maxpages << (PAGE_SHIFT - 10),
+			last_page << (PAGE_SHIFT - 10));
+	}
+	if (maxpages > last_page) {
+		maxpages = last_page + 1;
 		/* p->max is an unsigned int: don't overflow it */
 		if ((unsigned int)maxpages == 0)
 			maxpages = UINT_MAX;
@@ -2033,8 +2054,7 @@ static unsigned long read_swap_header(struct swap_info_struct *p,
 		return 0;
 	swapfilepages = i_size_read(inode) >> PAGE_SHIFT;
 	if (swapfilepages && maxpages > swapfilepages) {
-		printk(KERN_WARNING
-		       "Swap area shorter than signature indicates\n");
+		pr_warn("Swap area shorter than signature indicates\n");
 		return 0;
 	}
 	if (swap_header->info.nr_badpages && S_ISREG(inode->i_mode))
@@ -2077,7 +2097,7 @@ static int setup_swap_map_and_extents(struct swap_info_struct *p,
 		nr_good_pages = p->pages;
 	}
 	if (!nr_good_pages) {
-		printk(KERN_WARNING "Empty swap-file\n");
+		pr_warn("Empty swap-file\n");
 		return -EINVAL;
 	}
 
@@ -2193,9 +2213,10 @@ SYSCALL_DEFINE2(swapon, const char __user *, specialfile, int, swap_flags)
 		}
 		if ((swap_flags & SWAP_FLAG_DISCARD) && discard_swap(p) == 0)
 			p->flags |= SWP_DISCARDABLE;
-		if (blk_queue_fast(bdev_get_queue(p->bdev)))
-			p->flags |= SWP_FAST;
 	}
+
+	if (blk_queue_fast(bdev_get_queue(p->bdev)))
+		p->flags |= SWP_FAST;
 
 	mutex_lock(&swapon_mutex);
 	prio = -1;
@@ -2204,8 +2225,8 @@ SYSCALL_DEFINE2(swapon, const char __user *, specialfile, int, swap_flags)
 		  (swap_flags & SWAP_FLAG_PRIO_MASK) >> SWAP_FLAG_PRIO_SHIFT;
 	enable_swap_info(p, prio, swap_map, frontswap_map);
 
-	printk(KERN_INFO "Adding %uk swap on %s.  "
-			"Priority:%d extents:%d across:%lluk %s%s%s\n",
+	pr_info("Adding %uk swap on %s.  "
+		"Priority:%d extents:%d across:%lluk %s%s%s\n",
 		p->pages<<(PAGE_SHIFT-10), name->name, p->prio,
 		nr_extents, (unsigned long long)span<<(PAGE_SHIFT-10),
 		(p->flags & SWP_SOLIDSTATE) ? "SS" : "",
@@ -2336,7 +2357,7 @@ out:
 	return err;
 
 bad_file:
-	printk(KERN_ERR "swap_dup: %s%08lx\n", Bad_file, entry.val);
+	pr_err("swap_dup: %s%08lx\n", Bad_file, entry.val);
 	goto out;
 }
 
@@ -2462,8 +2483,8 @@ int add_swap_count_continuation(swp_entry_t entry, gfp_t gfp_mask)
 
 	/*
 	 * We are fortunate that although vmalloc_to_page uses pte_offset_map,
-	 * no architecture is using highmem pages for kernel pagetables: so it
-	 * will not corrupt the GFP_ATOMIC caller's atomic pagetable kmaps.
+	 * no architecture is using highmem pages for kernel page tables: so it
+	 * will not corrupt the GFP_ATOMIC caller's atomic page table kmaps.
 	 */
 	head = vmalloc_to_page(si->swap_map + offset);
 	offset &= ~PAGE_MASK;

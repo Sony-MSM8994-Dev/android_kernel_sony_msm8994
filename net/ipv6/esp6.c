@@ -447,9 +447,9 @@ static void esp6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 		return;
 
 	if (type == NDISC_REDIRECT)
-		ip6_redirect(skb, net, 0, 0);
+		ip6_redirect(skb, net, 0, 0, sock_net_uid(net, NULL));
 	else
-		ip6_update_pmtu(skb, net, info, 0, 0);
+		ip6_update_pmtu(skb, net, info, 0, 0, sock_net_uid(net, NULL));
 	xfrm_state_put(x);
 }
 
@@ -616,13 +616,12 @@ static int esp6_init_state(struct xfrm_state *x)
 			x->props.header_len += IPV4_BEET_PHMAXLEN +
 				               (sizeof(struct ipv6hdr) - sizeof(struct iphdr));
 		break;
+	default:
 	case XFRM_MODE_TRANSPORT:
 		break;
 	case XFRM_MODE_TUNNEL:
 		x->props.header_len += sizeof(struct ipv6hdr);
 		break;
-	default:
-		goto error;
 	}
 
 	align = ALIGN(crypto_aead_blocksize(aead), 4);

@@ -9,6 +9,11 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+/*
+ * NOTE: This file has been modified by Sony Mobile Communications Inc.
+ * Modifications are Copyright (c) 2014 Sony Mobile Communications Inc,
+ * and licensed under the license of the file.
+ */
 
 #include <linux/kernel.h>
 #include <linux/err.h>
@@ -586,14 +591,16 @@ static int pil_init_image_trusted(struct pil_desc *pil,
 
 	memcpy(mdata_buf, metadata, size);
 
-	desc.args[0] = request.proc = d->pas_id;
-	desc.args[1] = request.image_addr = mdata_phys;
-	desc.arginfo = SCM_ARGS(2, SCM_VAL, SCM_RW);
+	request.proc = d->pas_id;
+	request.image_addr = mdata_phys;
 
 	if (!is_scm_armv8()) {
 		ret = scm_call(SCM_SVC_PIL, PAS_INIT_IMAGE_CMD, &request,
 				sizeof(request), &scm_ret, sizeof(scm_ret));
 	} else {
+		desc.args[0] = d->pas_id;
+		desc.args[1] = mdata_phys;
+		desc.arginfo = SCM_ARGS(2, SCM_VAL, SCM_RW);
 		ret = scm_call2(SCM_SIP_FNID(SCM_SVC_PIL, PAS_INIT_IMAGE_CMD),
 				&desc);
 		scm_ret = desc.ret[0];
@@ -622,15 +629,18 @@ static int pil_mem_setup_trusted(struct pil_desc *pil, phys_addr_t addr,
 	if (d->subsys_desc.no_auth)
 		return 0;
 
-	desc.args[0] = request.proc = d->pas_id;
-	desc.args[1] = request.start_addr = addr;
-	desc.args[2] = request.len = size;
-	desc.arginfo = SCM_ARGS(3);
+	request.proc = d->pas_id;
+	request.start_addr = addr;
+	request.len = size;
 
 	if (!is_scm_armv8()) {
 		ret = scm_call(SCM_SVC_PIL, PAS_MEM_SETUP_CMD, &request,
 				sizeof(request), &scm_ret, sizeof(scm_ret));
 	} else {
+		desc.args[0] = d->pas_id;
+		desc.args[1] = addr;
+		desc.args[2] = size;
+		desc.arginfo = SCM_ARGS(3);
 		ret = scm_call2(SCM_SIP_FNID(SCM_SVC_PIL, PAS_MEM_SETUP_CMD),
 				&desc);
 		scm_ret = desc.ret[0];
@@ -764,6 +774,7 @@ static void log_failure_reason(const struct pil_tz_data *d)
 
 	strlcpy(reason, smem_reason, min(size, MAX_SSR_REASON_LEN));
 	pr_err("%s subsystem failure reason: %s.\n", name, reason);
+	update_crash_reason(d->subsys, reason, size);
 
 	smem_reason[0] = '\0';
 	wmb();
@@ -784,6 +795,10 @@ static int subsys_shutdown(const struct subsys_desc *subsys, bool force_stop)
 							subsys->name);
 		gpio_set_value(subsys->force_stop_gpio, 0);
 	}
+
+	if (subsys_get_crash_status(d->subsys) &&
+		subsys_is_ramdump_enabled(d->subsys))
+		d->desc.dump_in_progress = 1;
 
 	pil_shutdown(&d->desc);
 	return 0;
@@ -806,11 +821,16 @@ static int subsys_powerup(const struct subsys_desc *subsys)
 static int subsys_ramdump(int enable, const struct subsys_desc *subsys)
 {
 	struct pil_tz_data *d = subsys_to_data(subsys);
+	int ret = 0;
 
 	if (!enable)
 		return 0;
 
-	return pil_do_ramdump(&d->desc, d->ramdump_dev);
+	ret = pil_do_ramdump(&d->desc, d->ramdump_dev);
+	pil_free_memory(&d->desc);
+	d->desc.dump_in_progress = 0;
+
+	return ret;
 }
 
 static void subsys_free_memory(const struct subsys_desc *subsys)
@@ -969,6 +989,7 @@ err_subsys:
 	destroy_ramdump_device(d->ramdump_dev);
 err_ramdump:
 	pil_desc_release(&d->desc);
+	platform_set_drvdata(pdev, NULL);
 
 	return rc;
 }

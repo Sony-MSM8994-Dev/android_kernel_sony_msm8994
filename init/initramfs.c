@@ -24,6 +24,7 @@
 #include <linux/syscalls.h>
 #include <linux/utime.h>
 #include <linux/initramfs.h>
+#include <linux/file.h>
 
 static __initdata char *message;
 static void __init error(char *x)
@@ -180,7 +181,7 @@ static __initdata enum state {
 } state, next_state;
 
 static __initdata char *victim;
-static __initdata unsigned count;
+static unsigned long count __initdata;
 static __initdata loff_t this_header, next_header;
 
 static inline void __init eat(unsigned n)
@@ -192,7 +193,7 @@ static inline void __init eat(unsigned n)
 
 static __initdata char *vcollected;
 static __initdata char *collected;
-static __initdata int remains;
+static long remains __initdata;
 static __initdata char *collect;
 
 static void __init read_into(char *buf, unsigned size, enum state next)
@@ -219,7 +220,7 @@ static int __init do_start(void)
 
 static int __init do_collect(void)
 {
-	unsigned n = remains;
+	unsigned long n = remains;
 	if (count < n)
 		n = count;
 	memcpy(collect, victim, n);
@@ -390,7 +391,7 @@ static __initdata int (*actions[])(void) = {
 	[Reset]		= do_reset,
 };
 
-static int __init write_buffer(char *buf, unsigned len)
+static long __init write_buffer(char *buf, unsigned long len)
 {
 	count = len;
 	victim = buf;
@@ -400,11 +401,11 @@ static int __init write_buffer(char *buf, unsigned len)
 	return len - count;
 }
 
-static int __init flush_buffer(void *bufv, unsigned len)
+static long __init flush_buffer(void *bufv, unsigned long len)
 {
 	char *buf = (char *) bufv;
-	int written;
-	int origLen = len;
+	long written;
+	long origLen = len;
 	if (message)
 		return -1;
 	while ((written = write_buffer(buf, len)) < len && !message) {
@@ -423,13 +424,13 @@ static int __init flush_buffer(void *bufv, unsigned len)
 	return origLen;
 }
 
-static unsigned my_inptr;   /* index of next byte to be processed in inbuf */
+static unsigned long my_inptr; /* index of next byte to be processed in inbuf */
 
 #include <linux/decompress/generic.h>
 
-static char * __init unpack_to_rootfs(char *buf, unsigned len)
+static char * __init unpack_to_rootfs(char *buf, unsigned long len)
 {
-	int written, res;
+	long written;
 	decompress_fn decompress;
 	const char *compress_name;
 	static __initdata char msg_buf[64];
@@ -461,8 +462,9 @@ static char * __init unpack_to_rootfs(char *buf, unsigned len)
 		}
 		this_header = 0;
 		decompress = decompress_method(buf, len, &compress_name);
+		pr_debug("Detected %s compressed data\n", compress_name);
 		if (decompress) {
-			res = decompress(buf, len, NULL, flush_buffer, NULL,
+			int res = decompress(buf, len, NULL, flush_buffer, NULL,
 				   &my_inptr, error);
 			if (res)
 				error("decompressor failed");
@@ -600,12 +602,17 @@ static int __init populate_rootfs(void)
 {
 	char *err;
 
-	if (do_skip_initramfs)
+	if (do_skip_initramfs) {
+		if (initrd_start)
+			free_initrd();
 		return default_rootfs();
+	}
 
+	/* Load the built in initramfs */
 	err = unpack_to_rootfs(__initramfs_start, __initramfs_size);
 	if (err)
 		panic(err);	/* Failed to decompress INTERNAL initramfs */
+	/* If available load the bootloader supplied initrd */
 	if (initrd_start) {
 #ifdef CONFIG_BLK_DEV_RAM
 		int fd;
@@ -632,6 +639,7 @@ static int __init populate_rootfs(void)
 			free_initrd();
 		}
 	done:
+		/* empty statement */;
 #else
 		printk(KERN_INFO "Unpacking initramfs...\n");
 		err = unpack_to_rootfs((char *)initrd_start,
@@ -640,12 +648,14 @@ static int __init populate_rootfs(void)
 			printk(KERN_EMERG "Initramfs unpacking failed: %s\n", err);
 		free_initrd();
 #endif
-		/*
-		 * Try loading default modules from initramfs.  This gives
-		 * us a chance to load before device_initcalls.
-		 */
-		load_default_modules();
 	}
+	flush_delayed_fput();
+	/*
+	 * Try loading default modules from initramfs.  This gives
+	 * us a chance to load before device_initcalls.
+	 */
+	load_default_modules();
+
 	return 0;
 }
 rootfs_initcall(populate_rootfs);

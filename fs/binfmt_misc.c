@@ -319,8 +319,13 @@ static Node *create_entry(const char __user *buffer, size_t count)
 		char *s = strchr(p, del);
 		if (!s)
 			goto Einval;
-		*s++ = '\0';
-		e->offset = simple_strtoul(p, &p, 10);
+		*s = '\0';
+		if (p != s) {
+			int r = kstrtoint(p, 10, &e->offset);
+			if (r != 0 || e->offset < 0)
+				goto Einval;
+		}
+		p = s;
 		if (*p++)
 			goto Einval;
 		e->magic = p;
@@ -341,7 +346,8 @@ static Node *create_entry(const char __user *buffer, size_t count)
 		if (e->mask &&
 		    string_unescape_inplace(e->mask, UNESCAPE_HEX) != e->size)
 			goto Einval;
-		if (e->size + e->offset > BINPRM_BUF_SIZE)
+		if (e->size > BINPRM_BUF_SIZE ||
+		    BINPRM_BUF_SIZE - e->size < e->offset)
 			goto Einval;
 	} else {
 		p = strchr(p, del);
@@ -396,12 +402,12 @@ static int parse_command(const char __user *buffer, size_t count)
 {
 	char s[4];
 
-	if (!count)
-		return 0;
 	if (count > 3)
 		return -EINVAL;
 	if (copy_from_user(s, buffer, count))
 		return -EFAULT;
+	if (!count)
+		return 0;
 	if (s[count-1] == '\n')
 		count--;
 	if (count == 1 && s[0] == '0')
@@ -656,6 +662,7 @@ static ssize_t bm_status_write(struct file * file, const char __user * buffer,
 
 			mutex_unlock(&root->d_inode->i_mutex);
 			dput(root);
+			break;
 		default: return res;
 	}
 	return count;

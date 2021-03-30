@@ -1,8 +1,8 @@
 /*
- * drivers/gpu/ion/ion_system_heap.c
+ * drivers/staging/android/ion/ion_system_heap.c
  *
  * Copyright (C) 2011 Google, Inc.
- * Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2015,2018, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -20,6 +20,7 @@
 #include <linux/err.h>
 #include <linux/highmem.h>
 #include <linux/mm.h>
+#include <linux/msm_ion.h>
 #include <linux/scatterlist.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
@@ -79,11 +80,19 @@ static struct page *alloc_buffer_page(struct ion_system_heap *heap,
 	struct page *page;
 	struct ion_page_pool *pool;
 
-	if (!cached)
-		pool = heap->uncached_pools[order_to_index(order)];
-	else
-		pool = heap->cached_pools[order_to_index(order)];
-	page = ion_page_pool_alloc(pool, from_pool);
+	if (*from_pool) {
+		if (!cached)
+			pool = heap->uncached_pools[order_to_index(order)];
+		else
+			pool = heap->cached_pools[order_to_index(order)];
+		page = ion_page_pool_alloc(pool, from_pool);
+	} else {
+		gfp_t gfp_mask = low_order_gfp_flags;
+
+		if (order)
+			gfp_mask = high_order_gfp_flags;
+		page = alloc_pages(gfp_mask, order);
+	}
 	if (!page)
 		return 0;
 
@@ -96,7 +105,8 @@ static void free_buffer_page(struct ion_system_heap *heap,
 {
 	bool cached = ion_buffer_cached(buffer);
 
-	if (!(buffer->private_flags & ION_PRIV_FLAG_SHRINKER_FREE)) {
+	if (!(buffer->private_flags & ION_PRIV_FLAG_SHRINKER_FREE) &&
+	    !(buffer->flags & ION_FLAG_POOL_FORCE_ALLOC)) {
 		struct ion_page_pool *pool;
 		if (cached)
 			pool = heap->cached_pools[order_to_index(order)];
@@ -129,6 +139,7 @@ static struct page_info *alloc_largest_available(struct ion_system_heap *heap,
 			continue;
 		if (max_order < orders[i])
 			continue;
+		from_pool = !(buffer->flags & ION_FLAG_POOL_FORCE_ALLOC);
 
 		page = alloc_buffer_page(heap, buffer, orders[i], &from_pool);
 		if (!page)
@@ -329,7 +340,8 @@ void ion_system_heap_free(struct ion_buffer *buffer)
 	LIST_HEAD(pages);
 	int i;
 
-	if (!(buffer->private_flags & ION_PRIV_FLAG_SHRINKER_FREE))
+	if (!(buffer->private_flags & ION_PRIV_FLAG_SHRINKER_FREE) &&
+	    !(buffer->flags & ION_FLAG_POOL_FORCE_ALLOC))
 		msm_ion_heap_buffer_zero(buffer);
 
 	for_each_sg(table->sgl, sg, table->nents, i)
@@ -463,8 +475,10 @@ static void ion_system_heap_destroy_pools(struct ion_page_pool **pools)
 {
 	int i;
 	for (i = 0; i < num_orders; i++)
-		if (pools[i])
+		if (pools[i]) {
 			ion_page_pool_destroy(pools[i]);
+			pools[i] = NULL;
+		}
 }
 
 /**

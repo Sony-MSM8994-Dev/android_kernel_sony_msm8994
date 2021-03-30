@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2015, 2017 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -377,7 +377,7 @@ static int hdmi_cec_msg_send(struct hdmi_cec_ctrl *cec_ctrl,
 		((msg->frame_size & 0x1F) << 4) | BIT(9));
 
 	if (!wait_for_completion_timeout(
-		&cec_ctrl->cec_msg_wr_done, HZ)) {
+		&cec_ctrl->cec_msg_wr_done, msecs_to_jiffies(1000))) {
 		DEV_ERR("%s: timedout", __func__);
 		hdmi_cec_dump_msg(cec_ctrl, msg);
 		return -ETIMEDOUT;

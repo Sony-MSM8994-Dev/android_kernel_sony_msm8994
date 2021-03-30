@@ -35,25 +35,23 @@
 "4:	mov	%w0, %w5\n"						\
 "	b	3b\n"							\
 "	.popsection\n"							\
-"	.pushsection __ex_table,\"a\"\n"				\
-"	.align	3\n"							\
-"	.quad	1b, 4b, 2b, 4b\n"					\
-"	.popsection\n"							\
+	_ASM_EXTABLE(1b, 4b)						\
+	_ASM_EXTABLE(2b, 4b)						\
 	: "=&r" (ret), "=&r" (oldval), "+Q" (*uaddr), "=&r" (tmp)	\
 	: "r" (oparg), "Ir" (-EFAULT)					\
 	: "memory")
 
 static inline int
-futex_atomic_op_inuser (int encoded_op, u32 __user *uaddr)
+futex_atomic_op_inuser(unsigned int encoded_op, u32 __user *uaddr)
 {
 	int op = (encoded_op >> 28) & 7;
 	int cmp = (encoded_op >> 24) & 15;
-	int oparg = (encoded_op << 8) >> 20;
-	int cmparg = (encoded_op << 20) >> 20;
+	int oparg = (int)(encoded_op << 8) >> 20;
+	int cmparg = (int)(encoded_op << 20) >> 20;
 	int oldval = 0, ret, tmp;
 
 	if (encoded_op & (FUTEX_OP_OPARG_SHIFT << 28))
-		oparg = 1 << oparg;
+		oparg = 1U << (oparg & 0x1f);
 
 	if (!access_ok(VERIFY_WRITE, uaddr, sizeof(u32)))
 		return -EFAULT;
@@ -123,10 +121,8 @@ futex_atomic_cmpxchg_inatomic(u32 *uval, u32 __user *uaddr,
 "4:	mov	%w0, %w6\n"
 "	b	3b\n"
 "	.popsection\n"
-"	.pushsection __ex_table,\"a\"\n"
-"	.align	3\n"
-"	.quad	1b, 4b, 2b, 4b\n"
-"	.popsection\n"
+	_ASM_EXTABLE(1b, 4b)
+	_ASM_EXTABLE(2b, 4b)
 	: "+r" (ret), "=&r" (val), "+Q" (*uaddr), "=&r" (tmp)
 	: "r" (oldval), "r" (newval), "Ir" (-EFAULT)
 	: "memory");

@@ -1222,7 +1222,7 @@ repeat:
 						gfp & GFP_RECLAIM_MASK);
 		if (error)
 			goto decused;
-		error = radix_tree_preload(gfp & GFP_RECLAIM_MASK);
+		error = radix_tree_maybe_preload(gfp & GFP_RECLAIM_MASK);
 		if (!error) {
 			error = shmem_add_to_page_cache(page, mapping, index,
 							gfp, NULL);
@@ -1311,6 +1311,18 @@ unlock:
 	return error;
 }
 
+/*
+ * This is like autoremove_wake_function, but it removes the wait queue
+ * entry unconditionally - even if something else had already woken the
+ * target.
+ */
+static int synchronous_wake_function(wait_queue_t *wait, unsigned mode, int sync, void *key)
+{
+	int ret = default_wake_function(wait, mode, sync, key);
+	list_del_init(&wait->task_list);
+	return ret;
+}
+
 static int shmem_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
 	struct inode *inode = file_inode(vma->vm_file);
@@ -1344,7 +1356,7 @@ static int shmem_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 		    vmf->pgoff >= shmem_falloc->start &&
 		    vmf->pgoff < shmem_falloc->next) {
 			wait_queue_head_t *shmem_falloc_waitq;
-			DEFINE_WAIT(shmem_fault_wait);
+			DEFINE_WAIT_FUNC(shmem_fault_wait, synchronous_wake_function);
 
 			ret = VM_FAULT_NOPAGE;
 			if ((vmf->flags & FAULT_FLAG_ALLOW_RETRY) &&
@@ -2155,6 +2167,7 @@ static long shmem_fallocate(struct file *file, int mode, loff_t offset,
 		spin_lock(&inode->i_lock);
 		inode->i_private = NULL;
 		wake_up_all(&shmem_falloc_waitq);
+		WARN_ON_ONCE(!list_empty(&shmem_falloc_waitq.task_list));
 		spin_unlock(&inode->i_lock);
 		error = 0;
 		goto out;

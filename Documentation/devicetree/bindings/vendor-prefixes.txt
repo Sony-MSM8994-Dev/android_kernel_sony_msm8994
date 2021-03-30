@@ -56,6 +56,7 @@ nvidia	NVIDIA
 nxp	NXP Semiconductors
 onnn	ON Semiconductor Corp.
 ovti	OmniVision Technologies, Inc.
+pericom	Pericom Semiconductor Corp.
 picochip	Picochip Ltd
 powervr	PowerVR (deprecated, use img)
 qca	Qualcomm Atheros, Inc.
@@ -72,6 +73,7 @@ stk	Sensortek Technology Corporation.(formerly Sitronix Technology Co., Ltd.)
 shinetech	Shine Tech Corporation, Ltd.
 sil	Silicon Image
 silabs	Silicon Laboratories
+silergy	Silergy Corp.
 simtek
 sirf	SiRF Technology, Inc.
 sne	Sony

@@ -331,7 +331,7 @@ out:
 	put_cpu();
 }
 
-static int __cpuinit profile_cpu_callback(struct notifier_block *info,
+static int profile_cpu_callback(struct notifier_block *info,
 					unsigned long action, void *__cpu)
 {
 	int node, cpu = (unsigned long)__cpu;
@@ -426,8 +426,7 @@ void profile_tick(int type)
 
 static int prof_cpu_mask_proc_show(struct seq_file *m, void *v)
 {
-	seq_cpumask(m, prof_cpu_mask);
-	seq_putc(m, '\n');
+	seq_printf(m, "%*pb\n", cpumask_pr_args(prof_cpu_mask));
 	return 0;
 }
 

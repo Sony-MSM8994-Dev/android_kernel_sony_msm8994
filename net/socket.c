@@ -88,7 +88,8 @@
 #include <linux/magic.h>
 #include <linux/slab.h>
 #include <linux/xattr.h>
-#include <linux/qmp_sphinx_instrumentation.h>
+#include <linux/seemp_api.h>
+#include <linux/seemp_instrumentation.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -526,11 +527,11 @@ static ssize_t sockfs_listxattr(struct dentry *dentry, char *buffer,
 	return used;
 }
 
-int sockfs_setattr(struct dentry *dentry, struct iattr *iattr)
+static int sockfs_setattr(struct dentry *dentry, struct iattr *iattr)
 {
 	int err = simple_setattr(dentry, iattr);
 
-	if (!err) {
+	if (!err && (iattr->ia_valid & ATTR_UID)) {
 		struct socket *sock = SOCKET_I(dentry->d_inode);
 
 		sock->sk->sk_uid = iattr->ia_uid;
@@ -1465,48 +1466,61 @@ SYSCALL_DEFINE4(socketpair, int, family, int, type, int, protocol,
 		err = fd1;
 		goto out_release_both;
 	}
+
 	fd2 = get_unused_fd_flags(flags);
 	if (unlikely(fd2 < 0)) {
 		err = fd2;
-		put_unused_fd(fd1);
-		goto out_release_both;
+		goto out_put_unused_1;
 	}
 
 	newfile1 = sock_alloc_file(sock1, flags, NULL);
 	if (unlikely(IS_ERR(newfile1))) {
 		err = PTR_ERR(newfile1);
-		put_unused_fd(fd1);
-		put_unused_fd(fd2);
-		goto out_release_both;
+		goto out_put_unused_both;
 	}
 
 	newfile2 = sock_alloc_file(sock2, flags, NULL);
 	if (IS_ERR(newfile2)) {
 		err = PTR_ERR(newfile2);
-		fput(newfile1);
-		put_unused_fd(fd1);
-		put_unused_fd(fd2);
-		sock_release(sock2);
-		goto out;
+		goto out_fput_1;
 	}
 
+	err = put_user(fd1, &usockvec[0]);
+	if (err)
+		goto out_fput_both;
+
+	err = put_user(fd2, &usockvec[1]);
+	if (err)
+		goto out_fput_both;
+
 	audit_fd_pair(fd1, fd2);
+
 	fd_install(fd1, newfile1);
 	fd_install(fd2, newfile2);
 	/* fd1 and fd2 may be already another descriptors.
 	 * Not kernel problem.
 	 */
 
-	err = put_user(fd1, &usockvec[0]);
-	if (!err)
-		err = put_user(fd2, &usockvec[1]);
-	if (!err)
-		return 0;
+	return 0;
 
-	sys_close(fd2);
-	sys_close(fd1);
-	return err;
+out_fput_both:
+	fput(newfile2);
+	fput(newfile1);
+	put_unused_fd(fd2);
+	put_unused_fd(fd1);
+	goto out;
 
+out_fput_1:
+	fput(newfile1);
+	put_unused_fd(fd2);
+	put_unused_fd(fd1);
+	sock_release(sock2);
+	goto out;
+
+out_put_unused_both:
+	put_unused_fd(fd2);
+out_put_unused_1:
+	put_unused_fd(fd1);
 out_release_both:
 	sock_release(sock2);
 out_release_1:
@@ -1807,7 +1821,7 @@ SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
 	struct iovec iov;
 	int fput_needed;
 
-	qmp_sphinx_logk_sendto(fd, buff, len, flags, addr, addr_len);
+	seemp_logk_sendto(fd, buff, len, flags, addr, addr_len);
 
 	if (len > INT_MAX)
 		len = INT_MAX;
@@ -1869,8 +1883,6 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
 	struct sockaddr_storage address;
 	int err, err2;
 	int fput_needed;
-
-	qmp_sphinx_logk_recvfrom(fd, ubuf, size, flags, addr, addr_len);
 
 	if (size > INT_MAX)
 		size = INT_MAX;
@@ -2018,6 +2030,9 @@ static int copy_msghdr_from_user(struct msghdr *kmsg,
 {
 	if (copy_from_user(kmsg, umsg, sizeof(struct msghdr)))
 		return -EFAULT;
+
+	if (kmsg->msg_name == NULL)
+		kmsg->msg_namelen = 0;
 
 	if (kmsg->msg_namelen < 0)
 		return -EINVAL;
@@ -2216,6 +2231,7 @@ int __sys_sendmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
 		if (err)
 			break;
 		++datagrams;
+		cond_resched();
 	}
 
 	fput_light(sock->file, fput_needed);
@@ -2435,6 +2451,7 @@ int __sys_recvmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
 		/* Out of band data, return right away */
 		if (msg_sys.msg_flags & MSG_OOB)
 			break;
+		cond_resched();
 	}
 
 	if (err == 0)
@@ -2444,7 +2461,6 @@ int __sys_recvmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
 		datagrams = err;
 		goto out_put;
 	}
-
 		/*
 		 * We may return less entries than requested (vlen) if the
 		 * sock is non block and there aren't enough datagrams...
@@ -2457,12 +2473,11 @@ int __sys_recvmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
 			 * app asks about it using getsockopt(SO_ERROR).
 			 */
 			sock->sk->sk_err = -err;
-		}
+	}
 
 out_put:
-		fput_light(sock->file, fput_needed);
-
-		return datagrams;
+	fput_light(sock->file, fput_needed);
+	return datagrams;
 }
 
 SYSCALL_DEFINE5(recvmmsg, int, fd, struct mmsghdr __user *, mmsg,

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -112,6 +112,9 @@ static struct
 
 		/* Counter for data notifications on the pipe */
 		atomic_t data_cnt;
+
+		/* flag to indicate control operation is in progress */
+		atomic_t control_op;
 
 		/* ION handle used for TSPP data buffer allocation */
 		struct ion_handle *ch_mem_heap_handle;
@@ -410,8 +413,9 @@ static int mpq_dmx_tspp_thread(void *arg)
 	do {
 		ret = wait_event_interruptible(
 			mpq_dmx_tspp_info.tsif[tsif].wait_queue,
-			atomic_read(&mpq_dmx_tspp_info.tsif[tsif].data_cnt) ||
-			kthread_should_stop());
+			(atomic_read(&mpq_dmx_tspp_info.tsif[tsif].data_cnt) &&
+			!atomic_read(&mpq_dmx_tspp_info.tsif[tsif].control_op))
+			|| kthread_should_stop());
 
 		if ((ret < 0) || kthread_should_stop()) {
 			MPQ_DVB_ERR_PRINT("%s: exit\n", __func__);
@@ -453,8 +457,17 @@ static int mpq_dmx_tspp_thread(void *arg)
 			 * Go through all filled descriptors
 			 * and perform demuxing on them
 			 */
-			while ((tspp_data_desc = tspp_get_buffer(0, channel_id))
-					!= NULL) {
+			do {
+				if (atomic_read(&mpq_dmx_tspp_info.tsif[tsif].
+						control_op)) {
+					/* restore for next iteration */
+					atomic_inc(data_cnt);
+					break;
+				}
+				tspp_data_desc = tspp_get_buffer(0, channel_id);
+				if (!tspp_data_desc)
+					break;
+
 				notif_size = tspp_data_desc->size /
 					TSPP_RAW_TTS_SIZE;
 				mpq_demux->hw_notification_size += notif_size;
@@ -467,7 +480,7 @@ static int mpq_dmx_tspp_thread(void *arg)
 				 */
 				tspp_release_buffer(0, channel_id,
 					tspp_data_desc->id);
-			}
+			} while (1);
 		}
 
 		if (mpq_demux->hw_notification_size &&
@@ -963,8 +976,11 @@ static int mpq_tspp_dmx_add_channel(struct dvb_demux_feed *feed)
 		return -EINVAL;
 	}
 
-	if (mutex_lock_interruptible(&mpq_dmx_tspp_info.tsif[tsif].mutex))
+	atomic_inc(&mpq_dmx_tspp_info.tsif[tsif].control_op);
+	if (mutex_lock_interruptible(&mpq_dmx_tspp_info.tsif[tsif].mutex)) {
+		atomic_dec(&mpq_dmx_tspp_info.tsif[tsif].control_op);
 		return -ERESTARTSYS;
+	}
 
 	/*
 	 * It is possible that this PID was already requested before.
@@ -975,8 +991,7 @@ static int mpq_tspp_dmx_add_channel(struct dvb_demux_feed *feed)
 	if (slot >= 0) {
 		/* PID already configured */
 		mpq_dmx_tspp_info.tsif[tsif].filters[slot].ref_count++;
-		mutex_unlock(&mpq_dmx_tspp_info.tsif[tsif].mutex);
-		return 0;
+		goto out;
 	}
 
 	channel_id = TSPP_CHANNEL_ID(tsif, TSPP_CHANNEL);
@@ -1205,8 +1220,7 @@ static int mpq_tspp_dmx_add_channel(struct dvb_demux_feed *feed)
 	MPQ_DVB_DBG_PRINT("%s: success, current_filter_count = %d\n",
 		__func__, mpq_dmx_tspp_info.tsif[tsif].current_filter_count);
 
-	mutex_unlock(&mpq_dmx_tspp_info.tsif[tsif].mutex);
-	return 0;
+	goto out;
 
 add_channel_free_filter_slot:
 	/* restore internal database state */
@@ -1250,7 +1264,9 @@ add_channel_failed:
 		if (allocation_mode == MPQ_DMX_TSPP_CONTIGUOUS_PHYS_ALLOC)
 			mpq_dmx_channel_mem_free(tsif);
 
+out:
 	mutex_unlock(&mpq_dmx_tspp_info.tsif[tsif].mutex);
+	atomic_dec(&mpq_dmx_tspp_info.tsif[tsif].control_op);
 	return ret;
 }
 
@@ -1267,7 +1283,7 @@ add_channel_failed:
 static int mpq_tspp_dmx_remove_channel(struct dvb_demux_feed *feed)
 {
 	int tsif;
-	int ret;
+	int ret = 0;
 	int channel_id;
 	int slot;
 	atomic_t *data_cnt;
@@ -1299,8 +1315,11 @@ static int mpq_tspp_dmx_remove_channel(struct dvb_demux_feed *feed)
 		return -EINVAL;
 	}
 
-	if (mutex_lock_interruptible(&mpq_dmx_tspp_info.tsif[tsif].mutex))
+	atomic_inc(&mpq_dmx_tspp_info.tsif[tsif].control_op);
+	if (mutex_lock_interruptible(&mpq_dmx_tspp_info.tsif[tsif].mutex)) {
+		atomic_dec(&mpq_dmx_tspp_info.tsif[tsif].control_op);
 		return -ERESTARTSYS;
+	}
 
 	channel_id = TSPP_CHANNEL_ID(tsif, TSPP_CHANNEL);
 	channel_ref_count = &mpq_dmx_tspp_info.tsif[tsif].channel_ref;
@@ -1315,7 +1334,7 @@ static int mpq_tspp_dmx_remove_channel(struct dvb_demux_feed *feed)
 			channel_id);
 
 		ret = -EINVAL;
-		goto remove_channel_failed;
+		goto out;
 	}
 
 	slot = mpq_tspp_get_filter_slot(tsif, feed->pid);
@@ -1329,7 +1348,7 @@ static int mpq_tspp_dmx_remove_channel(struct dvb_demux_feed *feed)
 			tsif);
 
 		ret = -EINVAL;
-		goto remove_channel_failed;
+		goto out;
 	}
 
 	/* since filter was found, ref_count > 0 so it's ok to decrement it */
@@ -1340,8 +1359,7 @@ static int mpq_tspp_dmx_remove_channel(struct dvb_demux_feed *feed)
 		 * there are still references to this pid, do not
 		 * remove the filter yet
 		 */
-		mutex_unlock(&mpq_dmx_tspp_info.tsif[tsif].mutex);
-		return 0;
+		goto out;
 	}
 
 	if (feed->pid == TSPP_PASS_THROUGH_PID)
@@ -1469,8 +1487,7 @@ static int mpq_tspp_dmx_remove_channel(struct dvb_demux_feed *feed)
 			mpq_dmx_channel_mem_free(tsif);
 	}
 
-	mutex_unlock(&mpq_dmx_tspp_info.tsif[tsif].mutex);
-	return 0;
+	goto out;
 
 remove_channel_failed_restore_count:
 	/* restore internal database state */
@@ -1492,8 +1509,9 @@ remove_channel_failed_restore_count:
 	else if (feed->pid == TSPP_NULL_PACKETS_PID)
 		mpq_dmx_tspp_info.tsif[tsif].pass_nulls_flag = 1;
 
-remove_channel_failed:
+out:
 	mutex_unlock(&mpq_dmx_tspp_info.tsif[tsif].mutex);
+	atomic_dec(&mpq_dmx_tspp_info.tsif[tsif].control_op);
 	return ret;
 }
 
@@ -1836,6 +1854,7 @@ static int __init mpq_dmx_tspp_plugin_init(void)
 		mpq_dmx_tspp_info.tsif[i].ch_mem_heap_virt_base = NULL;
 		mpq_dmx_tspp_info.tsif[i].ch_mem_heap_phys_base = 0;
 		atomic_set(&mpq_dmx_tspp_info.tsif[i].data_cnt, 0);
+		atomic_set(&mpq_dmx_tspp_info.tsif[i].control_op, 0);
 
 		for (j = 0; j < TSPP_MAX_PID_FILTER_NUM; j++) {
 			mpq_dmx_tspp_info.tsif[i].filters[j].pid = -1;

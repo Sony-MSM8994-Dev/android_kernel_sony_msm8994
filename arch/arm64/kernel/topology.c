@@ -22,7 +22,6 @@
 #include <linux/slab.h>
 
 #include <asm/cputype.h>
-#include <asm/smp_plat.h>
 #include <asm/topology.h>
 
 /*
@@ -285,6 +284,7 @@ static void __init parse_dt_cpu_power(void)
 	for_each_possible_cpu(cpu) {
 		const u32 *rate;
 		int len;
+		u32 efficiency;
 
 		/* Too early to use cpu->of_node */
 		cn = of_get_cpu_node(cpu, NULL);
@@ -293,16 +293,29 @@ static void __init parse_dt_cpu_power(void)
 			continue;
 		}
 
-		for (cpu_eff = table_efficiency; cpu_eff->compatible; cpu_eff++)
-			if (of_device_is_compatible(cn, cpu_eff->compatible))
-				break;
+		/*
+		 * The CPU efficiency value passed from the device tree
+		 * overrides the value defined in the table_efficiency[]
+		 */
+		if (of_property_read_u32(cn, "efficiency", &efficiency) < 0) {
 
-		if (cpu_eff->compatible == NULL) {
-			pr_warn("%s: Unknown CPU type\n", cn->full_name);
-			continue;
+			for (cpu_eff = table_efficiency;
+					cpu_eff->compatible; cpu_eff++)
+
+				if (of_device_is_compatible(cn,
+						cpu_eff->compatible))
+					break;
+
+			if (cpu_eff->compatible == NULL) {
+				pr_warn("%s: Unknown CPU type\n",
+						cn->full_name);
+				continue;
+			}
+
+			efficiency = cpu_eff->efficiency;
 		}
 
-		per_cpu(cpu_efficiency, cpu) = cpu_eff->efficiency;
+		per_cpu(cpu_efficiency, cpu) = efficiency;
 
 		rate = of_get_property(cn, "clock-frequency", &len);
 		if (!rate || len != 4) {
@@ -311,7 +324,7 @@ static void __init parse_dt_cpu_power(void)
 			continue;
 		}
 
-		capacity = ((be32_to_cpup(rate)) >> 20) * cpu_eff->efficiency;
+		capacity = ((be32_to_cpup(rate)) >> 20) * efficiency;
 
 		/* Save min capacity of the system */
 		if (capacity < min_capacity)
@@ -324,16 +337,12 @@ static void __init parse_dt_cpu_power(void)
 		cpu_capacity(cpu) = capacity;
 	}
 
-	/* If min and max capacities are equal we bypass the update of the
-	 * cpu_scale because all CPUs have the same capacity. Otherwise, we
-	 * compute a middle_capacity factor that will ensure that the capacity
+	/* compute a middle_capacity factor that will ensure that the capacity
 	 * of an 'average' CPU of the system will be as close as possible to
 	 * SCHED_POWER_SCALE, which is the default value, but with the
 	 * constraint explained near table_efficiency[].
 	 */
-	if (min_capacity == max_capacity)
-		return;
-	else if (4 * max_capacity < (3 * (max_capacity + min_capacity)))
+	if (4 * max_capacity < (3 * (max_capacity + min_capacity)))
 		middle_capacity = (min_capacity + max_capacity)
 				>> (SCHED_POWER_SHIFT+1);
 	else
@@ -372,12 +381,6 @@ static void update_siblings_masks(unsigned int cpuid)
 {
 	struct cpu_topology *cpu_topo, *cpuid_topo = &cpu_topology[cpuid];
 	int cpu;
-
-	if (cpuid_topo->cluster_id == -1) {
-		/* No topology information for this cpu ?! */
-		pr_err("CPU%u: No topology information configured\n", cpuid);
-		return;
-	}
 
 	/* update core and thread sibling masks */
 	for_each_possible_cpu(cpu) {
@@ -419,19 +422,15 @@ void store_cpu_topology(unsigned int cpuid)
 		/* Multiprocessor system : Multi-threads per core */
 		cpuid_topo->thread_id  = MPIDR_AFFINITY_LEVEL(mpidr, 0);
 		cpuid_topo->core_id    = MPIDR_AFFINITY_LEVEL(mpidr, 1);
-		cpuid_topo->cluster_id =
-			((mpidr & MPIDR_AFF_MASK(2)) >> mpidr_hash.shift_aff[2] |
-			 (mpidr & MPIDR_AFF_MASK(3)) >> mpidr_hash.shift_aff[3])
-			>> mpidr_hash.shift_aff[1] >> mpidr_hash.shift_aff[0];
+		cpuid_topo->cluster_id = MPIDR_AFFINITY_LEVEL(mpidr, 2) |
+					 MPIDR_AFFINITY_LEVEL(mpidr, 3) << 8;
 	} else {
 		/* Multiprocessor system : Single-thread per core */
 		cpuid_topo->thread_id  = -1;
 		cpuid_topo->core_id    = MPIDR_AFFINITY_LEVEL(mpidr, 0);
-		cpuid_topo->cluster_id =
-			((mpidr & MPIDR_AFF_MASK(1)) >> mpidr_hash.shift_aff[1] |
-			 (mpidr & MPIDR_AFF_MASK(2)) >> mpidr_hash.shift_aff[2] |
-			 (mpidr & MPIDR_AFF_MASK(3)) >> mpidr_hash.shift_aff[3])
-			>> mpidr_hash.shift_aff[0];
+		cpuid_topo->cluster_id = MPIDR_AFFINITY_LEVEL(mpidr, 1) |
+					 MPIDR_AFFINITY_LEVEL(mpidr, 2) << 8 |
+					 MPIDR_AFFINITY_LEVEL(mpidr, 3) << 16;
 	}
 
 	pr_debug("CPU%u: cluster %d core %d thread %d mpidr %llx\n",

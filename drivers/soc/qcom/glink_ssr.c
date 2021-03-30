@@ -25,7 +25,7 @@
 #include <soc/qcom/subsystem_restart.h>
 #include "glink_private.h"
 
-#define GLINK_SSR_REPLY_TIMEOUT	(HZ / 2)
+#define GLINK_SSR_REPLY_TIMEOUT	1000
 #define GLINK_SSR_EVENT_INIT ~0
 
 /* Global restart counter */
@@ -67,10 +67,12 @@ struct configure_and_open_ch_work {
 
 /**
  * struct close_ch_work - Work structure for used for closing glink_ssr channels
+ * edge:	The G-Link edge name for the channel being closed
  * handle:	G-Link channel handle to be closed
  * work:	Work structure
  */
 struct close_ch_work {
+	char edge[GLINK_NAME_SIZE];
 	void *handle;
 	struct work_struct work;
 };
@@ -79,7 +81,6 @@ static int glink_ssr_restart_notifier_cb(struct notifier_block *this,
 				  unsigned long code,
 				  void *data);
 static void delete_ss_info_notify_list(struct subsys_info *ss_info);
-static int notify_for_subsystem(struct subsys_info *ss_info);
 static int configure_and_open_channel(struct subsys_info *ss_info);
 static struct workqueue_struct *glink_ssr_wq;
 
@@ -89,6 +90,7 @@ static wait_queue_head_t waitqueue;
 
 static void link_state_cb_worker(struct work_struct *work)
 {
+	unsigned long flags;
 	struct configure_and_open_ch_work *ch_open_work =
 		container_of(work, struct configure_and_open_ch_work, work);
 	struct subsys_info *ss_info = ch_open_work->ss_info;
@@ -98,11 +100,24 @@ static void link_state_cb_worker(struct work_struct *work)
 			ch_open_work->transport);
 
 	if (ss_info && ch_open_work->link_state == GLINK_LINK_STATE_UP) {
-		configure_and_open_channel(ss_info);
-		ss_info->link_up = true;
+		spin_lock_irqsave(&ss_info->link_up_lock, flags);
+		if (!ss_info->link_up) {
+			ss_info->link_up = true;
+			spin_unlock_irqrestore(&ss_info->link_up_lock, flags);
+			if (!configure_and_open_channel(ss_info)) {
+				glink_unregister_link_state_cb(
+						ss_info->link_state_handle);
+				ss_info->link_state_handle = NULL;
+			}
+			kfree(ch_open_work);
+			return;
+		}
+		spin_unlock_irqrestore(&ss_info->link_up_lock, flags);
 	} else {
 		if (ss_info) {
+			spin_lock_irqsave(&ss_info->link_up_lock, flags);
 			ss_info->link_up = false;
+			spin_unlock_irqrestore(&ss_info->link_up_lock, flags);
 			ss_info->handle = NULL;
 		} else {
 			GLINK_ERR("<SSR> %s: ss_info is NULL\n", __func__);
@@ -239,9 +254,32 @@ void glink_ssr_notify_tx_done(void *handle, const void *priv,
 
 void close_ch_worker(struct work_struct *work)
 {
+	unsigned long flags;
+	void *link_state_handle;
+	struct subsys_info *ss_info;
 	struct close_ch_work *close_work =
 		container_of(work, struct close_ch_work, work);
+
 	glink_close(close_work->handle);
+
+	ss_info = get_info_for_edge(close_work->edge);
+	BUG_ON(!ss_info);
+
+	spin_lock_irqsave(&ss_info->link_up_lock, flags);
+	ss_info->link_up = false;
+	spin_unlock_irqrestore(&ss_info->link_up_lock, flags);
+
+	BUG_ON(ss_info->link_state_handle != NULL);
+	link_state_handle = glink_register_link_state_cb(ss_info->link_info,
+			NULL);
+
+	if (IS_ERR_OR_NULL(link_state_handle))
+		GLINK_ERR("<SSR> %s: %s, ret[%d]\n", __func__,
+				"Couldn't register link state cb",
+				(int)PTR_ERR(link_state_handle));
+	else
+		ss_info->link_state_handle = link_state_handle;
+
 	kfree(close_work);
 }
 
@@ -276,6 +314,8 @@ void glink_ssr_notify_state(void *handle, const void *priv, unsigned event)
 				return;
 			}
 
+			strlcpy(close_work->edge, cb_data->edge,
+					sizeof(close_work->edge));
 			close_work->handle = handle;
 			INIT_WORK(&close_work->work, close_ch_worker);
 			queue_work(glink_ssr_wq, &close_work->work);
@@ -365,7 +405,7 @@ static int glink_ssr_restart_notifier_cb(struct notifier_block *this,
  *
  * Return: 0 on success, standard error codes otherwise
  */
-static int notify_for_subsystem(struct subsys_info *ss_info)
+int notify_for_subsystem(struct subsys_info *ss_info)
 {
 	struct subsys_info *ss_info_channel;
 	struct subsys_info_leaf *ss_leaf_entry;
@@ -373,6 +413,7 @@ static int notify_for_subsystem(struct subsys_info *ss_info)
 	void *handle;
 	int wait_ret;
 	int ret;
+	unsigned long flags;
 
 	if (!ss_info) {
 		GLINK_ERR("<SSR> %s: ss_info structure invalid\n", __func__);
@@ -408,9 +449,12 @@ static int notify_for_subsystem(struct subsys_info *ss_info)
 		handle = ss_info_channel->handle;
 		ss_leaf_entry->cb_data = ss_info_channel->cb_data;
 
+		spin_lock_irqsave(&ss_info->link_up_lock, flags);
 		if (IS_ERR_OR_NULL(ss_info_channel->handle) ||
-			ss_info_channel->cb_data->event != GLINK_CONNECTED ||
-				!ss_info_channel->link_up) {
+				!ss_info_channel->cb_data ||
+				!ss_info_channel->link_up ||
+				ss_info_channel->cb_data->event
+						!= GLINK_CONNECTED) {
 
 			GLINK_INFO("<SSR> %s: %s:%s %s[%d], %s[%p], %s[%d]\n",
 				__func__, ss_leaf_entry->edge, "Not connected",
@@ -419,9 +463,11 @@ static int notify_for_subsystem(struct subsys_info *ss_info)
 				ss_info_channel->handle, "link_up",
 				ss_info_channel->link_up);
 
+			spin_unlock_irqrestore(&ss_info->link_up_lock, flags);
 			atomic_dec(&responses_remaining);
 			continue;
 		}
+		spin_unlock_irqrestore(&ss_info->link_up_lock, flags);
 
 		do_cleanup_data = kmalloc(sizeof(struct do_cleanup_msg),
 				GFP_KERNEL);
@@ -478,7 +524,7 @@ static int notify_for_subsystem(struct subsys_info *ss_info)
 
 	wait_ret = wait_event_timeout(waitqueue,
 			atomic_read(&responses_remaining) == 0,
-			GLINK_SSR_REPLY_TIMEOUT);
+			msecs_to_jiffies(GLINK_SSR_REPLY_TIMEOUT));
 
 	list_for_each_entry(ss_leaf_entry, &ss_info->notify_list,
 			notify_list_node) {
@@ -500,6 +546,7 @@ static int notify_for_subsystem(struct subsys_info *ss_info)
 	complete(&notifications_successful_complete);
 	return 0;
 }
+EXPORT_SYMBOL(notify_for_subsystem);
 
 /**
  * configure_and_open_channel() - configure and open a G-Link channel for
@@ -526,14 +573,17 @@ static int configure_and_open_channel(struct subsys_info *ss_info)
 	}
 	cb_data->responded = false;
 	cb_data->event = GLINK_SSR_EVENT_INIT;
+	cb_data->edge = ss_info->edge;
 	ss_info->cb_data = cb_data;
 
 	memset(&open_cfg, 0, sizeof(struct glink_open_config));
 
-	if (ss_info->xprt)
+	if (ss_info->xprt) {
 		open_cfg.transport = ss_info->xprt;
-	else
+	} else {
 		open_cfg.transport = NULL;
+		open_cfg.options = GLINK_OPT_INITIAL_XPORT;
+	}
 	open_cfg.edge = ss_info->edge;
 	open_cfg.name = "glink_ssr";
 	open_cfg.notify_rx = glink_ssr_notify_rx;
@@ -544,8 +594,9 @@ static int configure_and_open_channel(struct subsys_info *ss_info)
 
 	handle = glink_open(&open_cfg);
 	if (IS_ERR_OR_NULL(handle)) {
-		GLINK_ERR("<SSR> %s:%s %s: unable to open channel\n",
-				 open_cfg.edge, open_cfg.name, __func__);
+		GLINK_ERR("<SSR> %s:%s %s: unable to open channel, ret[%d]\n",
+				 open_cfg.edge, open_cfg.name, __func__,
+				 (int)PTR_ERR(handle));
 		kfree(cb_data);
 		cb_data = NULL;
 		ss_info->cb_data = NULL;
@@ -637,7 +688,8 @@ bool glink_ssr_wait_cleanup_done(unsigned ssr_timeout_multiplier)
 {
 	int wait_ret =
 		wait_for_completion_timeout(&notifications_successful_complete,
-			ssr_timeout_multiplier * GLINK_SSR_REPLY_TIMEOUT);
+			ssr_timeout_multiplier *
+			msecs_to_jiffies(GLINK_SSR_REPLY_TIMEOUT));
 	reinit_completion(&notifications_successful_complete);
 
 	if (!notifications_successful || !wait_ret)
@@ -733,7 +785,9 @@ static int glink_ssr_probe(struct platform_device *pdev)
 	ss_info->link_info->glink_link_state_notif_cb = glink_ssr_link_state_cb;
 	ss_info->link_up = false;
 	ss_info->handle = NULL;
+	ss_info->link_state_handle = NULL;
 	ss_info->cb_data = NULL;
+	spin_lock_init(&ss_info->link_up_lock);
 
 	nb = kmalloc(sizeof(struct restart_notifier_block), GFP_KERNEL);
 	if (!nb) {
@@ -809,6 +863,7 @@ static int glink_ssr_probe(struct platform_device *pdev)
 		ret = PTR_ERR(link_state_handle);
 		goto link_state_register_fail;
 	}
+	ss_info->link_state_handle = link_state_handle;
 
 	return 0;
 

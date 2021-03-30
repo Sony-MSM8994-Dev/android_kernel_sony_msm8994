@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -90,7 +90,7 @@ static void qti_ctrl_queue_notify(struct qti_ctrl_port *port)
 	}
 
 	cpkt = alloc_rmnet_ctrl_pkt(0, GFP_ATOMIC);
-	if (!cpkt) {
+	if (IS_ERR(cpkt)) {
 		pr_err("%s: Unable to allocate reset function pkt\n", __func__);
 		spin_unlock_irqrestore(&port->lock, flags);
 		return;
@@ -565,13 +565,13 @@ static long qti_ctrl_ioctl(struct file *fp, unsigned cmd, unsigned long arg)
 							port->gtype);
 		val = atomic_read(&port->connected);
 		if (!val) {
-			pr_err("EP_LOOKUP failed - not connected");
+			pr_err_ratelimited("EP_LOOKUP failed: not connected\n");
 			ret = -EAGAIN;
 			break;
 		}
 
 		if (port->ipa_prod_idx == -1 && port->ipa_cons_idx == -1) {
-			pr_err("EP_LOOKUP failed - ipa pipes were not updated\n");
+			pr_err_ratelimited("EP_LOOKUP ipa pipes not updated\n");
 			ret = -EAGAIN;
 			break;
 		}

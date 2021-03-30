@@ -332,7 +332,7 @@ static int put_v4l2_create32(struct v4l2_create_buffers __user *kp, struct v4l2_
 
 struct v4l2_standard32 {
 	__u32		     index;
-	compat_u64	     id;
+	__u32		     id[2]; /* __u64 would get the alignment wrong */
 	__u8		     name[24];
 	struct v4l2_fract    frameperiod; /* Frames, not fields */
 	__u32		     framelines;
@@ -352,7 +352,7 @@ static int put_v4l2_standard32(struct v4l2_standard __user *kp, struct v4l2_stan
 {
 	if (!access_ok(VERIFY_WRITE, up, sizeof(struct v4l2_standard32)) ||
 		convert_in_user(&kp->index, &up->index) ||
-		copy_in_user(&up->id, &kp->id, sizeof(__u64)) ||
+		copy_in_user(up->id, &kp->id, sizeof(__u64)) ||
 		copy_in_user(up->name, kp->name, 24) ||
 		copy_in_user(&up->frameperiod, &kp->frameperiod, sizeof(kp->frameperiod)) ||
 		convert_in_user(&kp->framelines, &up->framelines) ||
@@ -614,7 +614,7 @@ static int put_v4l2_buffer32(struct v4l2_buffer __user *kp, struct v4l2_buffer32
 	if (V4L2_TYPE_IS_PRIVATE(type)) {
 		if (convert_in_user(&kp->m.userptr, &up->m.userptr))
 			return -EFAULT;
-        }
+	}
 
 	if (V4L2_TYPE_IS_MULTIPLANAR(type)) {
 		num_planes = length;
@@ -699,10 +699,10 @@ struct v4l2_input32 {
 	__u32	     type;		/*  Type of input */
 	__u32	     audioset;		/*  Associated audios (bitfield) */
 	__u32        tuner;             /*  Associated tuner */
-	compat_u64   std;
+	v4l2_std_id  std;
 	__u32	     status;
 	__u32	     reserved[4];
-};
+} __attribute__ ((packed));
 
 /* The 64-bit v4l2_input struct has extra padding at the end of the struct.
    Otherwise it is identical to the 32-bit version. */
@@ -833,7 +833,8 @@ static int put_v4l2_ext_controls32(struct v4l2_ext_controls __user *kp, struct v
 		convert_in_user(&kp->error_idx, &up->error_idx) ||
 		copy_in_user(up->reserved, kp->reserved, sizeof(up->reserved)))
 			return -EFAULT;
-	if (!count)
+
+	if (!count || count > (U32_MAX/sizeof(*ucontrols)))
 		return 0;
 
 	if (get_user(p, &up->controls))
@@ -865,7 +866,6 @@ struct v4l2_event32 {
 		struct v4l2_event_vsync		vsync;
 		struct v4l2_event_ctrl		ctrl;
 		struct v4l2_event_frame_sync	frame_sync;
-		compat_s64		value64;
 		__u8			data[64];
 	} u;
 	__u32				pending;

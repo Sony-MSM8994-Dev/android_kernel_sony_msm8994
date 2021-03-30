@@ -388,12 +388,14 @@ static int32_t msm_cci_i2c_read(struct v4l2_subdev *sd,
 	if (c_ctrl->cci_info->retries > CCI_I2C_READ_MAX_RETRIES) {
 		pr_err("%s:%d More than max retries\n", __func__,
 			__LINE__);
+		rc = -EINVAL;
 		goto ERROR;
 	}
 
 	if (read_cfg->data == NULL) {
 		pr_err("%s:%d Data ptr is NULL\n", __func__,
 			__LINE__);
+		rc = -EINVAL;
 		goto ERROR;
 	}
 
@@ -419,6 +421,7 @@ static int32_t msm_cci_i2c_read(struct v4l2_subdev *sd,
 
 	if (read_cfg->addr_type >= MSM_CAMERA_I2C_ADDR_TYPE_MAX) {
 		CDBG("%s failed line %d\n", __func__, __LINE__);
+		rc = -EINVAL;
 		goto ERROR;
 	}
 
@@ -586,11 +589,6 @@ static int32_t msm_cci_i2c_write(struct v4l2_subdev *sd,
 	enum cci_i2c_master_t master;
 	enum cci_i2c_queue_t queue = QUEUE_0;
 	cci_dev = v4l2_get_subdevdata(sd);
-	if (c_ctrl->cci_info->cci_i2c_master >= MASTER_MAX
-			|| c_ctrl->cci_info->cci_i2c_master < 0) {
-		pr_err("%s:%d Invalid I2C master addr\n", __func__, __LINE__);
-		return -EINVAL;
-	}
 	if (cci_dev->cci_state != CCI_STATE_ENABLED) {
 		pr_err("%s invalid cci state %d\n",
 			__func__, cci_dev->cci_state);
@@ -619,6 +617,7 @@ static int32_t msm_cci_i2c_write(struct v4l2_subdev *sd,
 	if (c_ctrl->cci_info->retries > CCI_I2C_READ_MAX_RETRIES) {
 		pr_err("%s:%d More than max retries\n", __func__,
 			__LINE__);
+		rc = -EINVAL;
 		goto ERROR;
 	}
 
@@ -1027,6 +1026,8 @@ static int32_t msm_cci_config(struct v4l2_subdev *sd,
 	case MSM_CCI_GPIO_WRITE:
 		break;
 	default:
+		pr_err_ratelimited("%s:%d unsupported compat type 0x%x\n",
+				__func__, __LINE__, cci_ctrl->cmd);
 		rc = -ENOIOCTLCMD;
 	}
 	CDBG("%s line %d rc %d\n", __func__, __LINE__, rc);
@@ -1122,6 +1123,8 @@ static long msm_cci_subdev_ioctl(struct v4l2_subdev *sd,
 		break;
 	}
 	default:
+		pr_err_ratelimited("%s:%d unsupported compat type 0x%x\n",
+				__func__, __LINE__, cmd);
 		rc = -ENOIOCTLCMD;
 	}
 	CDBG("%s line %d rc %d\n", __func__, __LINE__, rc);

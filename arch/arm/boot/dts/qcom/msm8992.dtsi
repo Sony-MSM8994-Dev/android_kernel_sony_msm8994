@@ -23,7 +23,7 @@
 	interrupt-parent = <&intc>;
 
 	chosen {
-		bootargs = "sched_enable_hmp=1 sched_enable_power_aware=1";
+		bootargs = "sched_enable_hmp=1 sched_enable_power_aware=1 sched_same_power_cost_cpus=0-3";
 	};
 
 	aliases {
@@ -516,6 +516,7 @@
 		qcom,bark-time = <11000>;
 		qcom,pet-time = <10000>;
 		qcom,ipi-ping;
+		qcom,wakeup-enable;
 	};
 
 	qcom,msm-rtb {
@@ -2692,6 +2693,7 @@
 
 		USB3_GDSC-supply = <&gdsc_usb30>;
 		vdda33-supply = <&pm8994_l24>;
+		vdda18-supply = <&pm8994_l6>;
 		vbus_dwc3-supply = <&smbcharger_charger_otg>;
 		qcom,dwc-usb3-msm-tx-fifo-size = <29696>;
 		qcom,dwc-usb3-msm-qdss-tx-fifo-size = <8192>;
@@ -3004,7 +3006,7 @@
 		reg = <0xfc4b8000 0x1000>;
 		qcom,low-hyst-temp = <10>;
 		qcom,high-hyst-temp = <5>;
-		qcom,polling-interval = <50>;
+		qcom,polling-interval = <100>;
 
 		qcom,core-mapping {
 			qcom,cpu0-chars {

@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015, 2018 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2018 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -13,6 +13,7 @@
 #define pr_fmt(fmt) "%s:%d " fmt, __func__, __LINE__
 
 #include <linux/module.h>
+#include <linux/vmalloc.h>
 #include "msm_sd.h"
 #include "msm_actuator.h"
 #include "msm_cci.h"
@@ -53,7 +54,7 @@ static int32_t msm_actuator_piezo_set_default_focus(
 	CDBG("Enter\n");
 
 	if (a_ctrl->i2c_reg_tbl == NULL) {
-		pr_err("failed. i2c reg tabl is NULL");
+		pr_err("failed. i2c reg table is NULL");
 		return -EFAULT;
 	}
 
@@ -84,21 +85,18 @@ static int32_t msm_actuator_piezo_set_default_focus(
 static void msm_actuator_parse_i2c_params(struct msm_actuator_ctrl_t *a_ctrl,
 	int16_t next_lens_position, uint32_t hw_params, uint16_t delay)
 {
-	struct msm_actuator_reg_params_t *write_arr = a_ctrl->reg_tbl;
+	struct msm_actuator_reg_params_t *write_arr = NULL;
 	uint32_t hw_dword = hw_params;
 	uint16_t i2c_byte1 = 0, i2c_byte2 = 0;
 	uint16_t value = 0;
-	uint32_t size = a_ctrl->reg_tbl_size, i = 0;
-	struct msm_camera_i2c_reg_array *i2c_tbl = a_ctrl->i2c_reg_tbl;
+	uint32_t size = 0, i = 0;
+	struct msm_camera_i2c_reg_array *i2c_tbl = NULL;
 	CDBG("Enter\n");
 
-	if (a_ctrl == NULL) {
-		pr_err("failed. actuator ctrl is NULL");
-		return;
-	}
-
-	if (a_ctrl->i2c_reg_tbl == NULL) {
-		pr_err("failed. i2c reg tabl is NULL");
+	if ((!a_ctrl) ||
+		(!a_ctrl->reg_tbl) ||
+		(!a_ctrl->i2c_reg_tbl)) {
+		pr_err("failed. NULL actuator pointers");
 		return;
 	}
 
@@ -539,7 +537,7 @@ static int32_t msm_actuator_piezo_move_focus(
 	}
 
 	if (a_ctrl->i2c_reg_tbl == NULL) {
-		pr_err("failed. i2c reg tabl is NULL");
+		pr_err("failed. i2c reg table is NULL");
 		return -EFAULT;
 	}
 
@@ -614,7 +612,7 @@ static int32_t msm_actuator_move_focus(
 		return -EFAULT;
 	}
 	if (a_ctrl->i2c_reg_tbl == NULL) {
-		pr_err("failed. i2c reg tabl is NULL");
+		pr_err("failed. i2c reg table is NULL");
 		return -EFAULT;
 	}
 	if (dest_step_pos > a_ctrl->total_steps) {
@@ -693,13 +691,17 @@ static int32_t msm_actuator_bivcm_move_focus(
 	int dir = move_params->dir;
 	int32_t num_steps = move_params->num_steps;
 
+	if (a_ctrl->step_position_table == NULL) {
+		pr_err("Step Position Table is NULL");
+		return -EFAULT;
+	}
+
 	if (copy_from_user(&ringing_params_kernel,
 		&(move_params->ringing_params[a_ctrl->curr_region_index]),
 		sizeof(struct damping_params_t))) {
 		pr_err("copy_from_user failed\n");
 		return -EFAULT;
 	}
-
 
 	CDBG("called, dir %d, num_steps %d\n", dir, num_steps);
 
@@ -716,7 +718,7 @@ static int32_t msm_actuator_bivcm_move_focus(
 		return -EFAULT;
 	}
 	if (a_ctrl->i2c_reg_tbl == NULL) {
-		pr_err("failed. i2c reg tabl is NULL");
+		pr_err("failed. i2c reg table is NULL");
 		return -EFAULT;
 	}
 	if (dest_step_pos > a_ctrl->total_steps) {
@@ -1111,6 +1113,7 @@ static int32_t msm_actuator_set_position(
 	uint16_t delay;
 	uint32_t hw_params = 0;
 	struct msm_camera_i2c_reg_setting reg_setting;
+
 	CDBG("%s Enter %d\n", __func__, __LINE__);
 	if (set_pos->number_of_steps <= 0 ||
 		set_pos->number_of_steps > MAX_NUMBER_OF_STEPS) {
@@ -1126,12 +1129,18 @@ static int32_t msm_actuator_set_position(
 		return -EFAULT;
 	}
 
-	if (a_ctrl->actuator_state != ACT_OPS_ACTIVE) {
+	if (a_ctrl->i2c_reg_tbl == NULL) {
+		pr_err("failed. i2c reg table is NULL");
+		return -EFAULT;
+	}
+
+	if (a_ctrl->actuator_state != ACT_ENABLE_STATE) {
 		pr_err("failed. Invalid actuator state.");
 		return -EFAULT;
 	}
 
 	a_ctrl->i2c_tbl_index = 0;
+	hw_params = set_pos->hw_params;
 	for (index = 0; index < set_pos->number_of_steps; index++) {
 		next_lens_position = set_pos->pos[index];
 		delay = set_pos->delay[index];
@@ -1278,9 +1287,8 @@ static int32_t msm_actuator_set_param(struct msm_actuator_ctrl_t *a_ctrl,
 		set_info->actuator_params.init_setting_size
 		<= MAX_ACTUATOR_INIT_SET) {
 		if (a_ctrl->func_tbl->actuator_init_focus) {
-			init_settings = kzalloc(sizeof(struct reg_settings_t) *
-				(set_info->actuator_params.init_setting_size),
-				GFP_KERNEL);
+			init_settings = vzalloc(sizeof(struct reg_settings_t) *
+				(set_info->actuator_params.init_setting_size));
 			if (init_settings == NULL) {
 				kfree(a_ctrl->i2c_reg_tbl);
 				a_ctrl->i2c_reg_tbl = NULL;
@@ -1291,7 +1299,7 @@ static int32_t msm_actuator_set_param(struct msm_actuator_ctrl_t *a_ctrl,
 				(void *)set_info->actuator_params.init_settings,
 				set_info->actuator_params.init_setting_size *
 				sizeof(struct reg_settings_t))) {
-				kfree(init_settings);
+				vfree(init_settings);
 				kfree(a_ctrl->i2c_reg_tbl);
 				a_ctrl->i2c_reg_tbl = NULL;
 				pr_err("Error copying init_settings\n");
@@ -1300,7 +1308,7 @@ static int32_t msm_actuator_set_param(struct msm_actuator_ctrl_t *a_ctrl,
 			rc = a_ctrl->func_tbl->actuator_init_focus(a_ctrl,
 				set_info->actuator_params.init_setting_size,
 				init_settings);
-			kfree(init_settings);
+			vfree(init_settings);
 			init_settings = NULL;
 			if (rc < 0) {
 				kfree(a_ctrl->i2c_reg_tbl);
@@ -1517,6 +1525,7 @@ static long msm_actuator_subdev_ioctl(struct v4l2_subdev *sd,
 			return msm_actuator_close(sd, NULL);
 		}
 	default:
+		pr_err_ratelimited("unsupported compat type 0x%x\n", cmd);
 		return -ENOIOCTLCMD;
 	}
 }

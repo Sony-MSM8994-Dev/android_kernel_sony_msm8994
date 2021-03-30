@@ -72,6 +72,8 @@ static inline struct anon_vma *anon_vma_alloc(void)
 	anon_vma = kmem_cache_alloc(anon_vma_cachep, GFP_KERNEL);
 	if (anon_vma) {
 		atomic_set(&anon_vma->refcount, 1);
+		anon_vma->degree = 1;	/* Reference for first vma */
+		anon_vma->parent = anon_vma;
 		/*
 		 * Initialise the anon_vma root to point to itself. If called
 		 * from fork, the root will be reset to the parents anon_vma.
@@ -188,6 +190,8 @@ int anon_vma_prepare(struct vm_area_struct *vma)
 		if (likely(!vma->anon_vma)) {
 			vma->anon_vma = anon_vma;
 			anon_vma_chain_link(vma, avc, anon_vma);
+			/* vma reference or self-parent link for new root */
+			anon_vma->degree++;
 			allocated = NULL;
 			avc = NULL;
 		}
@@ -236,6 +240,14 @@ static inline void unlock_anon_vma_root(struct anon_vma *root)
 /*
  * Attach the anon_vmas from src to dst.
  * Returns 0 on success, -ENOMEM on failure.
+ *
+ * If dst->anon_vma is NULL this function tries to find and reuse existing
+ * anon_vma which has no vmas and only one child anon_vma. This prevents
+ * degradation of anon_vma hierarchy to endless linear chain in case of
+ * constantly forking task. On the other hand, an anon_vma with more than one
+ * child isn't reused even if there was no alive vma, thus rmap walker has a
+ * good chance of avoiding scanning the whole hierarchy when it searches where
+ * page is mapped.
  */
 int anon_vma_clone(struct vm_area_struct *dst, struct vm_area_struct *src)
 {
@@ -256,11 +268,32 @@ int anon_vma_clone(struct vm_area_struct *dst, struct vm_area_struct *src)
 		anon_vma = pavc->anon_vma;
 		root = lock_anon_vma_root(root, anon_vma);
 		anon_vma_chain_link(dst, avc, anon_vma);
+
+		/*
+		 * Reuse existing anon_vma if its degree lower than two,
+		 * that means it has no vma and only one anon_vma child.
+		 *
+		 * Do not chose parent anon_vma, otherwise first child
+		 * will always reuse it. Root anon_vma is never reused:
+		 * it has self-parent reference and at least one child.
+		 */
+		if (!dst->anon_vma && anon_vma != src->anon_vma &&
+				anon_vma->degree < 2)
+			dst->anon_vma = anon_vma;
 	}
+	if (dst->anon_vma)
+		dst->anon_vma->degree++;
 	unlock_anon_vma_root(root);
 	return 0;
 
  enomem_failure:
+	/*
+	 * dst->anon_vma is dropped here otherwise its degree can be incorrectly
+	 * decremented in unlink_anon_vmas().
+	 * We can safely do this because callers of anon_vma_clone() don't care
+	 * about dst->anon_vma if anon_vma_clone() failed.
+	 */
+	dst->anon_vma = NULL;
 	unlink_anon_vmas(dst);
 	return -ENOMEM;
 }
@@ -280,6 +313,9 @@ int anon_vma_fork(struct vm_area_struct *vma, struct vm_area_struct *pvma)
 	if (!pvma->anon_vma)
 		return 0;
 
+	/* Drop inherited anon_vma, we'll reuse existing or allocate new. */
+	vma->anon_vma = NULL;
+
 	/*
 	 * First, attach the new VMA to the parent VMA's anon_vmas,
 	 * so rmap can find non-COWed pages in child processes.
@@ -287,6 +323,10 @@ int anon_vma_fork(struct vm_area_struct *vma, struct vm_area_struct *pvma)
 	error = anon_vma_clone(vma, pvma);
 	if (error)
 		return error;
+
+	/* An existing anon_vma has been reused, all done then. */
+	if (vma->anon_vma)
+		return 0;
 
 	/* Then add our own anon_vma. */
 	anon_vma = anon_vma_alloc();
@@ -301,6 +341,7 @@ int anon_vma_fork(struct vm_area_struct *vma, struct vm_area_struct *pvma)
 	 * lock any of the anon_vmas in this anon_vma tree.
 	 */
 	anon_vma->root = pvma->anon_vma->root;
+	anon_vma->parent = pvma->anon_vma;
 	/*
 	 * With refcounts, an anon_vma can stay around longer than the
 	 * process it belongs to. The root anon_vma needs to be pinned until
@@ -311,6 +352,7 @@ int anon_vma_fork(struct vm_area_struct *vma, struct vm_area_struct *pvma)
 	vma->anon_vma = anon_vma;
 	anon_vma_lock_write(anon_vma);
 	anon_vma_chain_link(vma, avc, anon_vma);
+	anon_vma->parent->degree++;
 	anon_vma_unlock_write(anon_vma);
 
 	return 0;
@@ -341,12 +383,16 @@ void unlink_anon_vmas(struct vm_area_struct *vma)
 		 * Leave empty anon_vmas on the list - we'll need
 		 * to free them outside the lock.
 		 */
-		if (RB_EMPTY_ROOT(&anon_vma->rb_root))
+		if (RB_EMPTY_ROOT(&anon_vma->rb_root)) {
+			anon_vma->parent->degree--;
 			continue;
+		}
 
 		list_del(&avc->same_vma);
 		anon_vma_chain_free(avc);
 	}
+	if (vma->anon_vma)
+		vma->anon_vma->degree--;
 	unlock_anon_vma_root(root);
 
 	/*
@@ -357,6 +403,7 @@ void unlink_anon_vmas(struct vm_area_struct *vma)
 	list_for_each_entry_safe(avc, next, &vma->anon_vma_chain, same_vma) {
 		struct anon_vma *anon_vma = avc->anon_vma;
 
+		BUG_ON(anon_vma->degree);
 		put_anon_vma(anon_vma);
 
 		list_del(&avc->same_vma);
@@ -1453,12 +1500,15 @@ bool is_vma_temporary_stack(struct vm_area_struct *vma)
 
 /**
  * try_to_unmap_anon - unmap or unlock anonymous page using the object-based
- * rmap method
+ * rmap method if @vma is NULL
  * @page: the page to unmap/unlock
  * @flags: action and flags
+ * @target_vma: vma for unmapping a @page
  *
  * Find all the mappings of a page using the mapping pointer and the vma chains
  * contained in the anon_vma struct it points to.
+ *
+ * If @target_vma isn't NULL, this function unmap a page from the vma
  *
  * This function is only called from try_to_unmap/try_to_munlock for
  * anonymous pages.
@@ -1467,12 +1517,19 @@ bool is_vma_temporary_stack(struct vm_area_struct *vma)
  * vm_flags for that VMA.  That should be OK, because that vma shouldn't be
  * 'LOCKED.
  */
-static int try_to_unmap_anon(struct page *page, enum ttu_flags flags)
+static int try_to_unmap_anon(struct page *page, enum ttu_flags flags,
+					struct vm_area_struct *target_vma)
 {
+	int ret = SWAP_AGAIN;
+	unsigned long address;
 	struct anon_vma *anon_vma;
 	pgoff_t pgoff;
 	struct anon_vma_chain *avc;
-	int ret = SWAP_AGAIN;
+
+	if (target_vma) {
+		address = vma_address(page, target_vma);
+		return try_to_unmap_one(page, target_vma, address, flags);
+	}
 
 	anon_vma = page_lock_anon_vma_read(page);
 	if (!anon_vma)
@@ -1481,7 +1538,6 @@ static int try_to_unmap_anon(struct page *page, enum ttu_flags flags)
 	pgoff = page->index << (PAGE_CACHE_SHIFT - PAGE_SHIFT);
 	anon_vma_interval_tree_foreach(avc, &anon_vma->rb_root, pgoff, pgoff) {
 		struct vm_area_struct *vma = avc->vma;
-		unsigned long address;
 
 		/*
 		 * During exec, a temporary VMA is setup and later moved.
@@ -1509,6 +1565,7 @@ static int try_to_unmap_anon(struct page *page, enum ttu_flags flags)
  * try_to_unmap_file - unmap/unlock file page using the object-based rmap method
  * @page: the page to unmap/unlock
  * @flags: action and flags
+ * @target_vma: vma for unmapping @page
  *
  * Find all the mappings of a page using the mapping pointer and the vma chains
  * contained in the address_space struct it points to.
@@ -1520,7 +1577,8 @@ static int try_to_unmap_anon(struct page *page, enum ttu_flags flags)
  * vm_flags for that VMA.  That should be OK, because that vma shouldn't be
  * 'LOCKED.
  */
-static int try_to_unmap_file(struct page *page, enum ttu_flags flags)
+static int try_to_unmap_file(struct page *page, enum ttu_flags flags,
+				struct vm_area_struct *target_vma)
 {
 	struct address_space *mapping = page->mapping;
 	pgoff_t pgoff = page->index << (PAGE_CACHE_SHIFT - PAGE_SHIFT);
@@ -1530,16 +1588,26 @@ static int try_to_unmap_file(struct page *page, enum ttu_flags flags)
 	unsigned long max_nl_cursor = 0;
 	unsigned long max_nl_size = 0;
 	unsigned int mapcount;
+	unsigned long address;
 
 	if (PageHuge(page))
 		pgoff = page->index << compound_order(page);
 
 	mutex_lock(&mapping->i_mmap_mutex);
-	vma_interval_tree_foreach(vma, &mapping->i_mmap, pgoff, pgoff) {
-		unsigned long address = vma_address(page, vma);
-		ret = try_to_unmap_one(page, vma, address, flags);
-		if (ret != SWAP_AGAIN || !page_mapped(page))
+	if (target_vma) {
+		/* We don't handle non-linear vma on ramfs */
+		if (unlikely(!list_empty(&mapping->i_mmap_nonlinear)))
 			goto out;
+		address = vma_address(page, target_vma);
+		ret = try_to_unmap_one(page, target_vma, address, flags);
+		goto out;
+	} else {
+		vma_interval_tree_foreach(vma, &mapping->i_mmap, pgoff, pgoff) {
+			address = vma_address(page, vma);
+			ret = try_to_unmap_one(page, vma, address, flags);
+			if (ret != SWAP_AGAIN || !page_mapped(page))
+				goto out;
+		}
 	}
 
 	if (list_empty(&mapping->i_mmap_nonlinear))
@@ -1620,9 +1688,12 @@ out:
  * try_to_unmap - try to remove all page table mappings to a page
  * @page: the page to get unmapped
  * @flags: action and flags
+ * @vma : target vma for reclaim
  *
  * Tries to remove all the page table entries which are mapping this
  * page, used in the pageout path.  Caller must hold the page lock.
+ * If @vma is not NULL, this function try to remove @page from only @vma
+ * without peeking all mapped vma for @page.
  * Return values are:
  *
  * SWAP_SUCCESS	- we succeeded in removing all mappings
@@ -1630,7 +1701,8 @@ out:
  * SWAP_FAIL	- the page is unswappable
  * SWAP_MLOCK	- page is mlocked.
  */
-int try_to_unmap(struct page *page, enum ttu_flags flags)
+int try_to_unmap(struct page *page, enum ttu_flags flags,
+				struct vm_area_struct *vma)
 {
 	int ret;
 
@@ -1638,11 +1710,11 @@ int try_to_unmap(struct page *page, enum ttu_flags flags)
 	VM_BUG_ON(!PageHuge(page) && PageTransHuge(page));
 
 	if (unlikely(PageKsm(page)))
-		ret = try_to_unmap_ksm(page, flags);
+		ret = try_to_unmap_ksm(page, flags, vma);
 	else if (PageAnon(page))
-		ret = try_to_unmap_anon(page, flags);
+		ret = try_to_unmap_anon(page, flags, vma);
 	else
-		ret = try_to_unmap_file(page, flags);
+		ret = try_to_unmap_file(page, flags, vma);
 	if (ret != SWAP_MLOCK && !page_mapped(page))
 		ret = SWAP_SUCCESS;
 	return ret;
@@ -1668,11 +1740,11 @@ int try_to_munlock(struct page *page)
 	VM_BUG_ON(!PageLocked(page) || PageLRU(page));
 
 	if (unlikely(PageKsm(page)))
-		return try_to_unmap_ksm(page, TTU_MUNLOCK);
+		return try_to_unmap_ksm(page, TTU_MUNLOCK, NULL);
 	else if (PageAnon(page))
-		return try_to_unmap_anon(page, TTU_MUNLOCK);
+		return try_to_unmap_anon(page, TTU_MUNLOCK, NULL);
 	else
-		return try_to_unmap_file(page, TTU_MUNLOCK);
+		return try_to_unmap_file(page, TTU_MUNLOCK, NULL);
 }
 
 void __put_anon_vma(struct anon_vma *anon_vma)
@@ -1710,6 +1782,7 @@ static int rmap_walk_anon(struct page *page, int (*rmap_one)(struct page *,
 	anon_vma_interval_tree_foreach(avc, &anon_vma->rb_root, pgoff, pgoff) {
 		struct vm_area_struct *vma = avc->vma;
 		unsigned long address = vma_address(page, vma);
+		cond_resched();
 		ret = rmap_one(page, vma, address, arg);
 		if (ret != SWAP_AGAIN)
 			break;
@@ -1731,6 +1804,8 @@ static int rmap_walk_file(struct page *page, int (*rmap_one)(struct page *,
 	mutex_lock(&mapping->i_mmap_mutex);
 	vma_interval_tree_foreach(vma, &mapping->i_mmap, pgoff, pgoff) {
 		unsigned long address = vma_address(page, vma);
+
+		cond_resched();
 		ret = rmap_one(page, vma, address, arg);
 		if (ret != SWAP_AGAIN)
 			break;

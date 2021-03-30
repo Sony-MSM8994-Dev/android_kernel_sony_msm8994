@@ -190,14 +190,14 @@ static int kobject_add_internal(struct kobject *kobj)
 
 		/* be noisy on error issues */
 		if (error == -EEXIST)
-			WARN(1, "%s failed for %s with "
-			     "-EEXIST, don't try to register things with "
-			     "the same name in the same directory.\n",
-			     __func__, kobject_name(kobj));
+			pr_err("%s failed for %s with -EEXIST, "
+			       "don't try to register things with "
+			       "the same name in the same directory.\n",
+			       __func__, kobject_name(kobj));
 		else
-			WARN(1, "%s failed for %s (error: %d parent: %s)\n",
-			     __func__, kobject_name(kobj), error,
-			     parent ? kobject_name(parent) : "'none'");
+			pr_err("%s failed for %s (error: %d parent: %s)\n",
+			       __func__, kobject_name(kobj), error,
+			       parent ? kobject_name(parent) : "'none'");
 	} else
 		kobj->state_in_sysfs = 1;
 
@@ -220,8 +220,10 @@ int kobject_set_name_vargs(struct kobject *kobj, const char *fmt,
 		return 0;
 
 	kobj->name = kvasprintf(GFP_KERNEL, fmt, vargs);
-	if (!kobj->name)
+	if (!kobj->name) {
+		kobj->name = old_name;
 		return -ENOMEM;
+	}
 
 	/* ewww... some of these buggers have '/' in the name ... */
 	while ((s = strchr(kobj->name, '/')))
@@ -319,7 +321,7 @@ static int kobject_add_varg(struct kobject *kobj, struct kobject *parent,
  *
  * If @parent is set, then the parent of the @kobj will be set to it.
  * If @parent is NULL, then the parent of the @kobj will be set to the
- * kobject associted with the kset assigned to this kobject.  If no kset
+ * kobject associated with the kset assigned to this kobject.  If no kset
  * is assigned to the kobject, then the kobject will be located in the
  * root of the sysfs tree.
  *
@@ -737,6 +739,7 @@ void kset_unregister(struct kset *k)
 {
 	if (!k)
 		return;
+	kobject_del(&k->kobj);
 	kobject_put(&k->kobj);
 }
 
@@ -805,7 +808,7 @@ static struct kset *kset_create(const char *name,
 	kset = kzalloc(sizeof(*kset), GFP_KERNEL);
 	if (!kset)
 		return NULL;
-	retval = kobject_set_name(&kset->kobj, name);
+	retval = kobject_set_name(&kset->kobj, "%s", name);
 	if (retval) {
 		kfree(kset);
 		return NULL;

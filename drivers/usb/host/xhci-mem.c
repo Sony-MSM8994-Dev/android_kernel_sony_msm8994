@@ -56,7 +56,7 @@ static struct xhci_segment *xhci_segment_alloc(struct xhci_hcd *xhci,
 	/* If the cycle state is 0, set the cycle bit to 1 for all the TRBs */
 	if (cycle_state == 0) {
 		for (i = 0; i < TRBS_PER_SEGMENT; i++)
-			seg->trbs[i].link.control |= TRB_CYCLE;
+			seg->trbs[i].link.control |= cpu_to_le32(TRB_CYCLE);
 	}
 	seg->dma = dma;
 	seg->next = NULL;
@@ -307,7 +307,8 @@ static void xhci_reinit_cached_ring(struct xhci_hcd *xhci,
 				sizeof(union xhci_trb)*TRBS_PER_SEGMENT);
 		if (cycle_state == 0) {
 			for (i = 0; i < TRBS_PER_SEGMENT; i++)
-				seg->trbs[i].link.control |= TRB_CYCLE;
+				seg->trbs[i].link.control |=
+					cpu_to_le32(TRB_CYCLE);
 		}
 		/* All endpoint rings have link TRBs */
 		xhci_link_segments(xhci, seg, seg->next, type);
@@ -516,7 +517,7 @@ struct xhci_ring *xhci_stream_id_to_ring(
 	if (!ep->stream_info)
 		return NULL;
 
-	if (stream_id > ep->stream_info->num_streams)
+	if (stream_id >= ep->stream_info->num_streams)
 		return NULL;
 	return ep->stream_info->stream_rings[stream_id];
 }
@@ -590,7 +591,7 @@ static int xhci_test_radix_tree(struct xhci_hcd *xhci,
  *
  * The radix tree maps the upper portion of the TRB DMA address to a ring
  * segment that has the same upper portion of DMA addresses.  For example, say I
- * have segments of size 1KB, that are always 64-byte aligned.  A segment may
+ * have segments of size 1KB, that are always 1KB aligned.  A segment may
  * start at 0x10c91000 and end at 0x10c913f0.  If I use the upper 10 bits, the
  * key to the stream ID is 0x43244.  I can use the DMA address of the TRB to
  * pass the radix tree a key to get the right stream ID:
@@ -939,6 +940,8 @@ void xhci_free_virt_device(struct xhci_hcd *xhci, int slot_id)
 	if (dev->out_ctx)
 		xhci_free_container_ctx(xhci, dev->out_ctx);
 
+	if (dev->udev && dev->udev->slot_id)
+		dev->udev->slot_id = 0;
 	kfree(xhci->devs[slot_id]);
 	xhci->devs[slot_id] = NULL;
 }
@@ -960,6 +963,12 @@ void xhci_free_virt_devices_depth_first(struct xhci_hcd *xhci, int slot_id)
 	if (!vdev)
 		return;
 
+	if (vdev->real_port == 0 ||
+			vdev->real_port > HCS_MAX_PORTS(xhci->hcs_params1)) {
+		xhci_dbg(xhci, "Bad vdev->real_port.\n");
+		goto out;
+	}
+
 	tt_list_head = &(xhci->rh_bw[vdev->real_port - 1].tts);
 	list_for_each_entry_safe(tt_info, next, tt_list_head, tt_list) {
 		/* is this a hub device that added a tt_info to the tts list */
@@ -973,6 +982,7 @@ void xhci_free_virt_devices_depth_first(struct xhci_hcd *xhci, int slot_id)
 			}
 		}
 	}
+out:
 	/* we are now at a leaf device */
 	xhci_free_virt_device(xhci, slot_id);
 }
@@ -989,10 +999,9 @@ int xhci_alloc_virt_device(struct xhci_hcd *xhci, int slot_id,
 		return 0;
 	}
 
-	xhci->devs[slot_id] = kzalloc(sizeof(*xhci->devs[slot_id]), flags);
-	if (!xhci->devs[slot_id])
+	dev = kzalloc(sizeof(*dev), flags);
+	if (!dev)
 		return 0;
-	dev = xhci->devs[slot_id];
 
 	/* Allocate the (output) device context that will be used in the HC. */
 	dev->out_ctx = xhci_alloc_container_ctx(xhci, XHCI_CTX_TYPE_DEVICE, flags);
@@ -1041,9 +1050,18 @@ int xhci_alloc_virt_device(struct xhci_hcd *xhci, int slot_id,
 		 &xhci->dcbaa->dev_context_ptrs[slot_id],
 		 le64_to_cpu(xhci->dcbaa->dev_context_ptrs[slot_id]));
 
+	xhci->devs[slot_id] = dev;
+
 	return 1;
 fail:
-	xhci_free_virt_device(xhci, slot_id);
+	if (dev->eps[0].ring)
+		xhci_ring_free(xhci, dev->eps[0].ring);
+	if (dev->in_ctx)
+		xhci_free_container_ctx(xhci, dev->in_ctx);
+	if (dev->out_ctx)
+		xhci_free_container_ctx(xhci, dev->out_ctx);
+	kfree(dev);
+
 	return 0;
 }
 
@@ -1105,6 +1123,7 @@ int xhci_setup_addressable_virt_dev(struct xhci_hcd *xhci, struct usb_device *ud
 	struct xhci_ep_ctx	*ep0_ctx;
 	struct xhci_slot_ctx    *slot_ctx;
 	u32			port_num;
+	u32			max_packets;
 	struct usb_device *top_dev;
 
 	dev = xhci->devs[udev->slot_id];
@@ -1122,15 +1141,20 @@ int xhci_setup_addressable_virt_dev(struct xhci_hcd *xhci, struct usb_device *ud
 	switch (udev->speed) {
 	case USB_SPEED_SUPER:
 		slot_ctx->dev_info |= cpu_to_le32(SLOT_SPEED_SS);
+		max_packets = MAX_PACKET(512);
 		break;
 	case USB_SPEED_HIGH:
 		slot_ctx->dev_info |= cpu_to_le32(SLOT_SPEED_HS);
+		max_packets = MAX_PACKET(64);
 		break;
+	/* USB core guesses at a 64-byte max packet first for FS devices */
 	case USB_SPEED_FULL:
 		slot_ctx->dev_info |= cpu_to_le32(SLOT_SPEED_FS);
+		max_packets = MAX_PACKET(64);
 		break;
 	case USB_SPEED_LOW:
 		slot_ctx->dev_info |= cpu_to_le32(SLOT_SPEED_LS);
+		max_packets = MAX_PACKET(8);
 		break;
 	case USB_SPEED_WIRELESS:
 		xhci_dbg(xhci, "FIXME xHCI doesn't support wireless speeds\n");
@@ -1138,7 +1162,7 @@ int xhci_setup_addressable_virt_dev(struct xhci_hcd *xhci, struct usb_device *ud
 		break;
 	default:
 		/* Speed was set earlier, this shouldn't happen. */
-		BUG();
+		return -EINVAL;
 	}
 	/* Find the root hub port this device is under */
 	port_num = xhci_find_real_port_number(xhci, udev);
@@ -1197,31 +1221,10 @@ int xhci_setup_addressable_virt_dev(struct xhci_hcd *xhci, struct usb_device *ud
 	/* Step 4 - ring already allocated */
 	/* Step 5 */
 	ep0_ctx->ep_info2 = cpu_to_le32(EP_TYPE(CTRL_EP));
-	/*
-	 * XXX: Not sure about wireless USB devices.
-	 */
-	switch (udev->speed) {
-	case USB_SPEED_SUPER:
-		ep0_ctx->ep_info2 |= cpu_to_le32(MAX_PACKET(512));
-		break;
-	case USB_SPEED_HIGH:
-	/* USB core guesses at a 64-byte max packet first for FS devices */
-	case USB_SPEED_FULL:
-		ep0_ctx->ep_info2 |= cpu_to_le32(MAX_PACKET(64));
-		break;
-	case USB_SPEED_LOW:
-		ep0_ctx->ep_info2 |= cpu_to_le32(MAX_PACKET(8));
-		break;
-	case USB_SPEED_WIRELESS:
-		xhci_dbg(xhci, "FIXME xHCI doesn't support wireless speeds\n");
-		return -EINVAL;
-		break;
-	default:
-		/* New speed? */
-		BUG();
-	}
+
 	/* EP 0 can handle "burst" sizes of 1, so Max Burst Size field is 0 */
-	ep0_ctx->ep_info2 |= cpu_to_le32(MAX_BURST(0) | ERROR_COUNT(3));
+	ep0_ctx->ep_info2 |= cpu_to_le32(MAX_BURST(0) | ERROR_COUNT(3) |
+					 max_packets);
 
 	ep0_ctx->deq = cpu_to_le64(dev->eps[0].ring->first_seg->dma |
 				   dev->eps[0].ring->cycle_state);
@@ -1274,7 +1277,7 @@ static unsigned int xhci_microframes_to_exponent(struct usb_device *udev,
 	interval = fls(desc_interval) - 1;
 	interval = clamp_val(interval, min_exponent, max_exponent);
 	if ((1 << interval) != desc_interval)
-		dev_warn(&udev->dev,
+		dev_dbg(&udev->dev,
 			 "ep %#x - rounding interval to %d microframes, ep desc says %d microframes\n",
 			 ep->desc.bEndpointAddress,
 			 1 << interval,
@@ -1394,7 +1397,7 @@ static u32 xhci_get_endpoint_type(struct usb_device *udev,
 		else
 			type = EP_TYPE(INT_OUT_EP);
 	} else {
-		BUG();
+		type = 0;
 	}
 	return type;
 }
@@ -1440,9 +1443,15 @@ int xhci_endpoint_init(struct xhci_hcd *xhci,
 	unsigned int max_burst;
 	enum xhci_ring_type type;
 	u32 max_esit_payload;
+	u32 endpoint_type;
 
 	ep_index = xhci_get_endpoint_index(&ep->desc);
 	ep_ctx = xhci_get_ep_ctx(xhci, virt_dev->in_ctx, ep_index);
+
+	endpoint_type = xhci_get_endpoint_type(udev, ep);
+	if (!endpoint_type)
+		return -EINVAL;
+	ep_ctx->ep_info2 = cpu_to_le32(endpoint_type);
 
 	type = usb_endpoint_type(&ep->desc);
 	/* Set up the endpoint ring */
@@ -1472,11 +1481,9 @@ int xhci_endpoint_init(struct xhci_hcd *xhci,
 	 * CErr shall be set to 0 for Isoch endpoints.
 	 */
 	if (!usb_endpoint_xfer_isoc(&ep->desc))
-		ep_ctx->ep_info2 = cpu_to_le32(ERROR_COUNT(3));
+		ep_ctx->ep_info2 |= cpu_to_le32(ERROR_COUNT(3));
 	else
-		ep_ctx->ep_info2 = cpu_to_le32(ERROR_COUNT(0));
-
-	ep_ctx->ep_info2 |= cpu_to_le32(xhci_get_endpoint_type(udev, ep));
+		ep_ctx->ep_info2 |= cpu_to_le32(ERROR_COUNT(0));
 
 	/* Set the max packet size and max burst */
 	max_packet = GET_MAX_PACKET(usb_endpoint_maxp(&ep->desc));
@@ -1698,7 +1705,7 @@ static int scratchpad_alloc(struct xhci_hcd *xhci, gfp_t flags)
 	xhci->dcbaa->dev_context_ptrs[0] = cpu_to_le64(xhci->scratchpad->sp_dma);
 	for (i = 0; i < num_sp; i++) {
 		dma_addr_t dma;
-		void *buf = dma_alloc_coherent(dev, xhci->page_size, &dma,
+		void *buf = dma_zalloc_coherent(dev, xhci->page_size, &dma,
 				flags);
 		if (!buf)
 			goto fail_sp5;
@@ -1835,7 +1842,7 @@ void xhci_mem_cleanup(struct xhci_hcd *xhci)
 
 	if (xhci->lpm_command)
 		xhci_free_command(xhci, xhci->lpm_command);
-	xhci->cmd_ring_reserved_trbs = 0;
+	xhci->lpm_command = NULL;
 	if (xhci->cmd_ring)
 		xhci_ring_free(xhci, xhci->cmd_ring);
 	xhci->cmd_ring = NULL;
@@ -1905,6 +1912,7 @@ void xhci_mem_cleanup(struct xhci_hcd *xhci)
 	}
 
 no_bw:
+	xhci->cmd_ring_reserved_trbs = 0;
 	xhci->num_usb2_ports = 0;
 	xhci->num_usb3_ports = 0;
 	xhci->num_active_eps = 0;
@@ -2370,11 +2378,12 @@ int xhci_mem_init(struct xhci_hcd *xhci, gfp_t flags)
 	/*
 	 * Initialize the ring segment pool.  The ring must be a contiguous
 	 * structure comprised of TRBs.  The TRBs must be 16 byte aligned,
-	 * however, the command ring segment needs 64-byte aligned segments,
-	 * so we pick the greater alignment need.
+	 * however, the command ring segment needs 64-byte aligned segments
+	 * and our use of dma addresses in the trb_address_map radix tree needs
+	 * TRB_SEGMENT_SIZE alignment, so we pick the greater alignment need.
 	 */
 	xhci->segment_pool = dma_pool_create("xHCI ring segments", dev,
-			TRB_SEGMENT_SIZE, 64, xhci->page_size);
+			TRB_SEGMENT_SIZE, TRB_SEGMENT_SIZE, xhci->page_size);
 
 	/* See Table 46 and Note on Figure 55 */
 	xhci->device_pool = dma_pool_create("xHCI input/output contexts", dev,

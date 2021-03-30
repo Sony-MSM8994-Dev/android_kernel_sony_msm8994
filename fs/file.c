@@ -97,7 +97,7 @@ static void copy_fdtable(struct fdtable *nfdt, struct fdtable *ofdt)
 	cpy = ofdt->max_fds * sizeof(struct file *);
 	set = (nfdt->max_fds - ofdt->max_fds) * sizeof(struct file *);
 	memcpy(nfdt->fd, ofdt->fd, cpy);
-	memset((char *)nfdt->fd + cpy, 0, set);
+	memset((char *)(nfdt->fd) + cpy, 0, set);
 
 	copy_fd_bitmaps(nfdt, ofdt, ofdt->max_fds);
 }
@@ -353,6 +353,7 @@ struct files_struct *dup_fd(struct files_struct *oldf, int *errorp)
 
 	old_fds = old_fdt->fd;
 	new_fds = new_fdt->fd;
+
 
 	for (i = open_files; i != 0; i--) {
 		struct file *f = *old_fds++;
@@ -769,7 +770,7 @@ struct file *fget_light(unsigned int fd, int *fput_needed)
 
 	*fput_needed = 0;
 	if (atomic_read(&files->count) == 1) {
-		file = fcheck_files(files, fd);
+		file = __fcheck_files(files, fd);
 		if (file && (file->f_mode & FMODE_PATH))
 			file = NULL;
 	} else {
@@ -797,7 +798,7 @@ struct file *fget_raw_light(unsigned int fd, int *fput_needed)
 
 	*fput_needed = 0;
 	if (atomic_read(&files->count) == 1) {
-		file = fcheck_files(files, fd);
+		file = __fcheck_files(files, fd);
 	} else {
 		rcu_read_lock();
 		file = fcheck_files(files, fd);

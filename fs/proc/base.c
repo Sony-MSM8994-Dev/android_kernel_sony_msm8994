@@ -88,7 +88,8 @@
 #include <linux/slab.h>
 #include <linux/flex_array.h>
 #include <linux/posix-timers.h>
-#include <linux/qmp_sphinx_instrumentation.h>
+#include <linux/cpufreq.h>
+#include <linux/oom_score_notifier.h>
 #ifdef CONFIG_HARDWALL
 #include <asm/hardwall.h>
 #endif
@@ -938,6 +939,7 @@ static ssize_t oom_adj_write(struct file *file, const char __user *buf,
 	char buffer[PROC_NUMBUF];
 	int oom_adj;
 	unsigned long flags;
+	int old_oom_score_adj;
 	int err;
 
 	memset(buffer, 0, sizeof(buffer));
@@ -962,9 +964,6 @@ static ssize_t oom_adj_write(struct file *file, const char __user *buf,
 		err = -ESRCH;
 		goto out;
 	}
-
-	qmp_sphinx_logk_oom_adjust_write(task->pid,
-			task->cred->uid, oom_adj);
 
 	task_lock(task);
 	if (!task->mm) {
@@ -1000,7 +999,16 @@ static ssize_t oom_adj_write(struct file *file, const char __user *buf,
 		  current->comm, task_pid_nr(current), task_pid_nr(task),
 		  task_pid_nr(task));
 
+	old_oom_score_adj = task->signal->oom_score_adj;
 	task->signal->oom_score_adj = oom_adj;
+#ifdef CONFIG_OOM_SCORE_NOTIFIER
+	err = oom_score_notify_update(task, old_oom_score_adj);
+	if (err) {
+		/* rollback and error handle. */
+		task->signal->oom_score_adj = old_oom_score_adj;
+		goto err_sighand;
+	}
+#endif
 	trace_oom_score_adj_update(task);
 err_sighand:
 	unlock_task_sighand(task, &flags);
@@ -1044,6 +1052,7 @@ static ssize_t oom_score_adj_write(struct file *file, const char __user *buf,
 	char buffer[PROC_NUMBUF];
 	unsigned long flags;
 	int oom_score_adj;
+	int old_oom_score_adj;
 	int err;
 
 	memset(buffer, 0, sizeof(buffer));
@@ -1069,9 +1078,6 @@ static ssize_t oom_score_adj_write(struct file *file, const char __user *buf,
 		goto out;
 	}
 
-	qmp_sphinx_logk_oom_adjust_write(task->pid,
-			task->cred->uid, oom_score_adj);
-
 	task_lock(task);
 	if (!task->mm) {
 		err = -EINVAL;
@@ -1089,7 +1095,16 @@ static ssize_t oom_score_adj_write(struct file *file, const char __user *buf,
 		goto err_sighand;
 	}
 
+	old_oom_score_adj = task->signal->oom_score_adj;
 	task->signal->oom_score_adj = (short)oom_score_adj;
+#ifdef CONFIG_OOM_SCORE_NOTIFIER
+	err = oom_score_notify_update(task, old_oom_score_adj);
+	if (err) {
+		/* rollback and error handle. */
+		task->signal->oom_score_adj = old_oom_score_adj;
+		goto err_sighand;
+	}
+#endif
 	if (has_capability_noaudit(current, CAP_SYS_RESOURCE))
 		task->signal->oom_score_adj_min = (short)oom_score_adj;
 	trace_oom_score_adj_update(task);
@@ -2263,7 +2278,7 @@ static int show_timer(struct seq_file *m, void *v)
 	notify = timer->it_sigev_notify;
 
 	seq_printf(m, "ID: %d\n", timer->it_id);
-	seq_printf(m, "signal: %d/%p\n", timer->sigq->info.si_signo,
+	seq_printf(m, "signal: %d/%px\n", timer->sigq->info.si_signo,
 			timer->sigq->info.si_value.sival_ptr);
 	seq_printf(m, "notify: %s/%s.%d\n",
 		nstr[notify & ~SIGEV_THREAD_ID],
@@ -2826,6 +2841,47 @@ static int proc_pid_personality(struct seq_file *m, struct pid_namespace *ns,
 	return err;
 }
 
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+static int cpufreq_stats_show(struct seq_file *m, void *v)
+{
+	struct inode *inode = m->private;
+	struct task_struct *p;
+	unsigned int *freq_table = NULL;
+	int cpu, i, max_state;
+	p = get_proc_task(inode);
+	if (!p)
+		return -ESRCH;
+	for (cpu = 0; cpu < NR_CPUS; cpu++) {
+		max_state = p->cpufreq_stats[cpu].max_state;
+		if(max_state > 0) {
+			freq_table = kmalloc(max_state * sizeof(unsigned int),
+					     GFP_KERNEL);
+			update_freq_table(freq_table, cpu, max_state);
+			for (i = 0; i < max_state; i++) {
+				seq_printf(m, "%d  %u  %llu\n", cpu,
+					   freq_table[i],
+					   (unsigned long long)jiffies_64_to_clock_t(
+							   p->cpufreq_stats[cpu].cumulative_time_in_state[i]));
+			}
+			kfree(freq_table);
+		}
+	}
+	put_task_struct(p);
+	return 0;
+}
+
+static int cpufreq_stats_open(struct inode *inode, struct file *filp)
+{
+	return single_open(filp, cpufreq_stats_show, inode);
+}
+
+static const struct file_operations proc_pid_cpufreq_stats_operations = {
+	.open           = cpufreq_stats_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+#endif
 /*
  * Thread groups
  */
@@ -2856,6 +2912,9 @@ static const struct pid_entry tgid_base_stuff[] = {
 #endif
 #ifdef CONFIG_SCHED_DEBUG
 	REG("sched",      S_IRUGO|S_IWUSR, proc_pid_sched_operations),
+#endif
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+	REG("cpufreq_stats",      S_IRUGO|S_IWUSR, proc_pid_cpufreq_stats_operations),
 #endif
 #ifdef CONFIG_SCHED_AUTOGROUP
 	REG("autogroup",  S_IRUGO|S_IWUSR, proc_pid_sched_autogroup_operations),
@@ -3187,6 +3246,8 @@ int proc_pid_readdir(struct file * filp, void * dirent, filldir_t filldir)
 	for (iter = next_tgid(ns, iter);
 	     iter.task;
 	     iter.tgid += 1, iter = next_tgid(ns, iter)) {
+
+		cond_resched();
 		if (has_pid_permissions(ns, iter.task, 2))
 			__filldir = filldir;
 		else
@@ -3204,6 +3265,44 @@ out:
 }
 
 /*
+ * proc_tid_comm_permission is a special permission function exclusively
+ * used for the node /proc/<pid>/task/<tid>/comm.
+ * It bypasses generic permission checks in the case where a task of the same
+ * task group attempts to access the node.
+ * The rational behind this is that glibc and bionic access this node for
+ * cross thread naming (pthread_set/getname_np(!self)). However, if
+ * PR_SET_DUMPABLE gets set to 0 this node among others becomes uid=0 gid=0,
+ * which locks out the cross thread naming implementation.
+ * This function makes sure that the node is always accessible for members of
+ * same thread group.
+ */
+static int proc_tid_comm_permission(struct inode *inode, int mask)
+{
+	bool is_same_tgroup;
+	struct task_struct *task;
+
+	task = get_proc_task(inode);
+	if (!task)
+		return -ESRCH;
+	is_same_tgroup = same_thread_group(current, task);
+	put_task_struct(task);
+
+	if (likely(is_same_tgroup && !(mask & MAY_EXEC))) {
+		/* This file (/proc/<pid>/task/<tid>/comm) can always be
+		 * read or written by the members of the corresponding
+		 * thread group.
+		 */
+		return 0;
+	}
+
+	return generic_permission(inode, mask);
+}
+
+static const struct inode_operations proc_tid_comm_inode_operations = {
+		.permission = proc_tid_comm_permission,
+};
+
+/*
  * Tasks
  */
 static const struct pid_entry tid_base_stuff[] = {
@@ -3218,7 +3317,12 @@ static const struct pid_entry tid_base_stuff[] = {
 #ifdef CONFIG_SCHED_DEBUG
 	REG("sched",     S_IRUGO|S_IWUSR, proc_pid_sched_operations),
 #endif
-	REG("comm",      S_IRUGO|S_IWUSR, proc_pid_set_comm_operations),
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+	REG("cpufreq_stats",      S_IRUGO|S_IWUSR, proc_pid_cpufreq_stats_operations),
+#endif
+	NOD("comm",      S_IFREG|S_IRUGO|S_IWUSR,
+			 &proc_tid_comm_inode_operations,
+			 &proc_pid_set_comm_operations, {}),
 #ifdef CONFIG_HAVE_ARCH_TRACEHOOK
 	INF("syscall",   S_IRUGO, proc_pid_syscall),
 #endif

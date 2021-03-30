@@ -1,7 +1,7 @@
 /*
  * u_audio.c -- ALSA audio utilities for Gadget stack
  *
- * Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
  * Copyright (C) 2008 Bryan Wu <cooloney@kernel.org>
  * Copyright (C) 2008 Analog Devices, Inc
  *
@@ -44,6 +44,10 @@ MODULE_PARM_DESC(fn_cap, "Capture PCM device file name");
 static char *fn_cntl = FILE_CONTROL;
 module_param(fn_cntl, charp, S_IRUGO);
 MODULE_PARM_DESC(fn_cntl, "Control device file name");
+
+static unsigned sample_rate = 16000;
+module_param(sample_rate, uint, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(sample_rate, "Sample rate for playback and capture");
 
 static struct gaudio *the_card;
 
@@ -152,13 +156,13 @@ static int playback_prepare_params(struct gaudio_snd_dev *snd)
        /*
 	* SNDRV_PCM_ACCESS_RW_INTERLEAVED,
 	* SNDRV_PCM_FORMAT_S16_LE
-	* CHANNELS: 2
-	* RATE: 8000
+	* CHANNELS: 1
+	* RATE: 16K default, user configurable
 	*/
 	snd->access = SNDRV_PCM_ACCESS_RW_INTERLEAVED;
 	snd->format = SNDRV_PCM_FORMAT_S16_LE;
-	snd->channels = 2;
-	snd->rate = 8000;
+	snd->channels = 1;
+	snd->rate = sample_rate;
 
 	params = kzalloc(sizeof(*params), GFP_KERNEL);
 	if (!params)
@@ -244,12 +248,12 @@ static int capture_prepare_params(struct gaudio_snd_dev *snd)
 	 * SNDRV_PCM_ACCESS_RW_INTERLEAVED,
 	 * SNDRV_PCM_FORMAT_S16_LE
 	 * CHANNELS: 1
-	 * RATE: 8000
+	 * RATE: 16K default, user configurable
 	 */
 	snd->access = SNDRV_PCM_ACCESS_RW_INTERLEAVED;
 	snd->format = SNDRV_PCM_FORMAT_S16_LE;
 	snd->channels = 1;
-	snd->rate = 8000;
+	snd->rate = sample_rate;
 
 	params = kzalloc(sizeof(*params), GFP_KERNEL);
 	if (!params) {
@@ -292,8 +296,6 @@ static int capture_prepare_params(struct gaudio_snd_dev *snd)
 
 	runtime->frame_bits = snd_pcm_format_physical_width(runtime->format);
 
-	kfree(params);
-
 	swparams = kzalloc(sizeof(*swparams), GFP_KERNEL);
 	if (!swparams) {
 		pr_err("Failed to allocate sw params");
@@ -318,6 +320,7 @@ static int capture_prepare_params(struct gaudio_snd_dev *snd)
 		pr_err("SNDRV_PCM_IOCTL_SW_PARAMS failed: %d\n", (int)result);
 
 	kfree(swparams);
+	kfree(params);
 
 	pr_debug("capture params: access %x, format %x, channels %d, rate %d\n",
 		snd->access, snd->format, snd->channels, snd->rate);
@@ -335,13 +338,13 @@ static int playback_default_hw_params(struct gaudio_snd_dev *snd)
        /*
 	* SNDRV_PCM_ACCESS_RW_INTERLEAVED,
 	* SNDRV_PCM_FORMAT_S16_LE
-	* CHANNELS: 2
-	* RATE: 8000
+	* CHANNELS: 1
+	* RATE: 16K default, user configurable
 	*/
 	snd->access = SNDRV_PCM_ACCESS_RW_INTERLEAVED;
 	snd->format = SNDRV_PCM_FORMAT_S16_LE;
-	snd->channels = 2;
-	snd->rate = 8000;
+	snd->channels = 1;
+	snd->rate = sample_rate;
 
 	params = kzalloc(sizeof(*params), GFP_KERNEL);
 	if (!params)
@@ -379,12 +382,12 @@ static int capture_default_hw_params(struct gaudio_snd_dev *snd)
 	 * SNDRV_PCM_ACCESS_RW_INTERLEAVED,
 	 * SNDRV_PCM_FORMAT_S16_LE
 	 * CHANNELS: 1
-	 * RATE: 8000
+	 * RATE: 16K default, user configurable
 	 */
 	snd->access = SNDRV_PCM_ACCESS_RW_INTERLEAVED;
 	snd->format = SNDRV_PCM_FORMAT_S16_LE;
 	snd->channels = 1;
-	snd->rate = 8000;
+	snd->rate = sample_rate;
 
 	params = kzalloc(sizeof(*params), GFP_KERNEL);
 	if (!params)
@@ -605,10 +608,6 @@ static int gaudio_open_snd_dev(struct gaudio *card)
 	struct gaudio_snd_dev *snd;
 	int res = 0;
 
-	if (!card) {
-		pr_err("%s: Card is NULL", __func__);
-		return -ENODEV;
-	}
 	/* Open control device */
 	snd = &card->control;
 	snd->filp = filp_open(fn_cntl, O_RDWR, 0);
@@ -674,18 +673,24 @@ static int gaudio_close_snd_dev(struct gaudio *gau)
 	pr_debug("Enter");
 	/* Close control device */
 	snd = &gau->control;
-	if (snd->filp)
+	if (snd->filp) {
 		filp_close(snd->filp, NULL);
+		snd->filp = NULL;
+	}
 
 	/* Close PCM playback device and setup substream */
 	snd = &gau->playback;
-	if (snd->filp)
+	if (snd->filp) {
 		filp_close(snd->filp, NULL);
+		snd->filp = NULL;
+	}
 
 	/* Close PCM capture device and setup substream */
 	snd = &gau->capture;
-	if (snd->filp)
+	if (snd->filp) {
 		filp_close(snd->filp, NULL);
+		snd->filp = NULL;
+	}
 
 	return 0;
 }

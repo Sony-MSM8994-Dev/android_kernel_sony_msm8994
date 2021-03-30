@@ -690,7 +690,7 @@ static int find_vchannel_name_index(const char *vchannel_name)
 {
 	int i;
 
-	for (i = 0; i < MAX_NUM_OF_MUX_CHANNEL; i++) {
+	for (i = 0; i < rmnet_index; i++) {
 		if (0 == strcmp(mux_channel[i].vchannel_name, vchannel_name))
 			return i;
 	}
@@ -1277,6 +1277,8 @@ static int ipa_wwan_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 				mutex_unlock(&add_mux_channel_lock);
 				return -EFAULT;
 			}
+			extend_ioctl_data.u.rmnet_mux_val.vchannel_name
+				[IFNAMSIZ-1] = '\0';
 			IPAWANDBG("ADD_MUX_CHANNEL(%d, name: %s)\n",
 			extend_ioctl_data.u.rmnet_mux_val.mux_id,
 			extend_ioctl_data.u.rmnet_mux_val.vchannel_name);
@@ -1959,8 +1961,6 @@ static int ipa_wwan_remove(struct platform_device *pdev)
 	ipa_del_a7_qmap_hdr();
 	ipa_del_mux_qmap_hdrs();
 	wwan_del_ul_flt_rule_to_ipa();
-	/* clean up cached QMI msg/handlers */
-	ipa_qmi_service_exit();
 	ipa_cleanup_deregister_intf();
 	atomic_set(&is_initialized, 0);
 	pr_info("rmnet_ipa completed deinitialization\n");
@@ -2086,6 +2086,9 @@ static int ssr_notifier_cb(struct notifier_block *this,
 		}
 		if (SUBSYS_BEFORE_POWERUP == code) {
 			pr_info("IPA received MPSS BEFORE_POWERUP\n");
+			if (atomic_read(&is_ssr))
+				/* clean up cached QMI msg/handlers */
+				ipa_qmi_service_exit();
 			ipa_proxy_clk_vote();
 			pr_info("IPA BEFORE_POWERUP handling is complete\n");
 			return NOTIFY_DONE;
@@ -2305,7 +2308,7 @@ int rmnet_ipa_set_data_quota(struct wan_ioctl_set_data_quota *data)
 	if (index == MAX_NUM_OF_MUX_CHANNEL) {
 		IPAWANERR("%s is an invalid iface name\n",
 			  data->interface_name);
-		return -EFAULT;
+		return -ENODEV;
 	}
 
 	mux_id = mux_channel[index].mux_id;
@@ -2426,7 +2429,7 @@ int rmnet_ipa_query_tethering_stats(struct wan_ioctl_query_tether_stats *data,
 		kfree(req);
 		kfree(resp);
 		return rc;
-	} else if (reset) {
+	} else if (data == NULL) {
 		kfree(req);
 		kfree(resp);
 		return 0;
@@ -2622,10 +2625,8 @@ static int __init ipa_wwan_init(void)
 	atomic_set(&is_ssr, 0);
 
 	mutex_init(&add_mux_channel_lock);
-
 	ipa_qmi_init();
 
-	mutex_init(&add_mux_channel_lock);
 	/* Register for Modem SSR */
 	subsys = subsys_notif_register_notifier(SUBSYS_MODEM, &ssr_notifier);
 	if (!IS_ERR(subsys))

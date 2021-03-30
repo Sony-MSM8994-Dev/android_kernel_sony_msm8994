@@ -498,8 +498,11 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 		}
 	}
 
-	writel_relaxed(0x00, phy->base + PCIE_USB3_PHY_SW_RESET);
 	writel_relaxed(0x03, phy->base + PCIE_USB3_PHY_START);
+	writel_relaxed(0x00, phy->base + PCIE_USB3_PHY_SW_RESET);
+
+	/* Make sure above write completed to bring PHY out of reset */
+	mb();
 
 	if (!phy->switch_pipe_clk_src)
 		/* this clock wasn't enabled before, enable it now */
@@ -516,6 +519,9 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 
 	if (!init_timeout_usec) {
 		dev_err(uphy->dev, "QMP PHY initialization timeout\n");
+		dev_err(uphy->dev, "USB3_PHY_PCS_STATUS:%x\n",
+				readl_relaxed(phy->base +
+						PCIE_USB3_PHY_PCS_STATUS));
 		return -EBUSY;
 	};
 

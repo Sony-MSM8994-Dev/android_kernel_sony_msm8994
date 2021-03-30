@@ -37,6 +37,7 @@ config ARM64
 	select HAVE_ARCH_MMAP_RND_COMPAT_BITS if COMPAT
 	select HAVE_ARCH_SECCOMP_FILTER
 	select HAVE_ARCH_AUDITSYSCALL
+	select HAVE_ARCH_BITREVERSE
 	select HAVE_ARCH_TRACEHOOK
 	select HAVE_C_RECORDMCOUNT
 	select HAVE_CC_STACKPROTECTOR
@@ -59,6 +60,7 @@ config ARM64
 	select HAVE_PERF_REGS
 	select HAVE_PERF_USER_STACK_DUMP
 	select IRQ_DOMAIN
+	select IRQ_FORCED_THREADING
 	select MODULES_USE_ELF_RELA
 	select NO_BOOTMEM
 	select OF
@@ -116,6 +118,9 @@ config ILLEGAL_POINTER_VALUE
 
 config LOCKDEP_SUPPORT
 	def_bool y
+
+config FIQ_GLUE
+	bool
 
 config TRACE_IRQFLAGS_SUPPORT
 	def_bool y
@@ -545,9 +550,7 @@ config SWP_EMULATE
 
 	  If unsure, say Y.
 
-config HZ
-	int
-	default 100
+source kernel/Kconfig.hz
 
 config ARCH_HAS_HOLES_MEMORYMODEL
 	def_bool y if SPARSEMEM
@@ -630,6 +633,7 @@ config ARMV7_COMPAT_CPUINFO
 	 If you want to execute ARMv7 applications, say Y
 
 source "mm/Kconfig"
+source "arch/arm64/mm/Kconfig"
 
 config XEN_DOM0
 	def_bool y
@@ -660,6 +664,14 @@ config SECCOMP
 	  and the task is only allowed to execute a few safe syscalls
 	  defined by each seccomp mode.
 
+config ARM64_FLUSH_CONSOLE_ON_RESTART
+	bool "Force flush the console on restart"
+	help
+	  If the console is locked while the system is rebooted, the messages
+	  in the temporary logbuffer would not have propogated to all the
+	  console drivers. This option forces the console lock to be
+	  released if it failed to be acquired, which will cause all the
+	  pending messages to be flushed.
 
 endmenu
 
@@ -784,6 +796,24 @@ source "drivers/cpuidle/Kconfig"
 
 endmenu
 
+menu "Expermimental Security Enhancements"
+
+config KUSER_HELPERS_SELECTIVE_DISABLE
+	bool "Disable KUSER_HELPERS selectively"
+	depends on ARM64
+	help
+	  Kuser_Helpers is a set of functions in the vector page at a fixed address that
+	  are used to support applications compiled for legacy ARM <7.  These functions
+	  being at a fixed address creates an ASLR bypass.
+
+	  Do not enable this feature unless you know what you are doing, this is
+	  experimental, and will break any application that uses the Kuser_Helpers or
+	  registers a signal handler and uses the kernel trampolines.
+
+	  If unsure, say N.
+
+endmenu
+
 source "net/Kconfig"
 
 source "drivers/Kconfig"
@@ -804,5 +834,3 @@ source "arch/arm64/crypto/Kconfig"
 endif
 
 source "lib/Kconfig"
-
-source "arch/arm64/mm/Kconfig"

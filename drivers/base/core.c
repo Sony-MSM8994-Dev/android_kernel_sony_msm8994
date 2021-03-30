@@ -835,7 +835,7 @@ static struct kobject *get_device_parent(struct device *dev,
 }
 
 static inline bool live_in_glue_dir(struct kobject *kobj,
-				    struct device *dev)
+					struct device *dev)
 {
 	if (!kobj || !dev->class ||
 	    kobj->kset != &dev->class->p->glue_dirs)
@@ -1026,6 +1026,7 @@ int device_add(struct device *dev)
 	struct device *parent = NULL;
 	struct kobject *kobj;
 	struct class_interface *class_intf;
+	struct kobject *glue_dir = NULL;
 	int error = -EINVAL;
 	struct kobject *glue_dir = NULL;
 

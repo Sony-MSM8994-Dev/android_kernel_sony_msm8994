@@ -142,8 +142,10 @@ static void aio_free_ring(struct kioctx *ctx)
 	for (i = 0; i < ctx->nr_pages; i++)
 		put_page(ctx->ring_pages[i]);
 
-	if (ctx->ring_pages && ctx->ring_pages != ctx->internal_pages)
+	if (ctx->ring_pages && ctx->ring_pages != ctx->internal_pages) {
 		kfree(ctx->ring_pages);
+		ctx->ring_pages = NULL;
+	}
 }
 
 static int aio_setup_ring(struct kioctx *ctx)
@@ -296,9 +298,8 @@ static void free_ioctx(struct kioctx *ctx)
 	while (!list_empty(&ctx->active_reqs)) {
 		req = list_first_entry(&ctx->active_reqs,
 				       struct kiocb, ki_list);
-
-		list_del_init(&req->ki_list);
 		kiocb_cancel(ctx, req, &res);
+		list_del_init(&req->ki_list);
 	}
 
 	spin_unlock_irq(&ctx->ctx_lock);
@@ -628,7 +629,7 @@ void aio_complete(struct kiocb *iocb, long res, long res2)
 
 	/*
 	 * Add a completion event to the ring buffer. Must be done holding
-	 * ctx->ctx_lock to prevent other code from messing with the tail
+	 * ctx->completion_lock to prevent other code from messing with the tail
 	 * pointer since we might be called from irq context.
 	 */
 	spin_lock_irqsave(&ctx->completion_lock, flags);
@@ -715,6 +716,12 @@ static long aio_read_events_ring(struct kioctx *ctx,
 	ring = kmap_atomic(ctx->ring_pages[0]);
 	head = ring->head;
 	kunmap_atomic(ring);
+
+	/*
+	 * Ensure that once we've read the current tail pointer, that
+	 * we also see the events that were stored up to the tail.
+	 */
+	smp_rmb();
 
 	pr_debug("h%u t%u m%u\n", head, ctx->tail, ctx->nr_events);
 
@@ -1034,10 +1041,8 @@ rw_common:
 		       req->ki_opcode == IOCB_CMD_PWRITEV)
 			? aio_setup_vectored_rw(rw, req, compat)
 			: aio_setup_single_vector(rw, req);
-		if (ret)
-			return ret;
-
-		ret = rw_verify_area(rw, file, &req->ki_pos, req->ki_nbytes);
+		if (!ret)
+			ret = rw_verify_area(rw, file, &req->ki_pos, req->ki_nbytes);
 		if (ret < 0)
 			return ret;
 
@@ -1161,7 +1166,9 @@ long do_io_submit(aio_context_t ctx_id, long nr,
 	struct kioctx *ctx;
 	long ret = 0;
 	int i = 0;
+#ifndef CONFIG_AIO_SSD_ONLY
 	struct blk_plug plug;
+#endif
 
 	if (unlikely(nr < 0))
 		return -EINVAL;
@@ -1178,7 +1185,9 @@ long do_io_submit(aio_context_t ctx_id, long nr,
 		return -EINVAL;
 	}
 
+#ifndef CONFIG_AIO_SSD_ONLY
 	blk_start_plug(&plug);
+#endif
 
 	/*
 	 * AKPM: should this return a partial result if some of the IOs were
@@ -1202,7 +1211,9 @@ long do_io_submit(aio_context_t ctx_id, long nr,
 		if (ret)
 			break;
 	}
+#ifndef CONFIG_AIO_SSD_ONLY
 	blk_finish_plug(&plug);
+#endif
 
 	put_ioctx(ctx);
 	return i ? i : ret;

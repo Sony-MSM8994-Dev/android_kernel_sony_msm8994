@@ -21,11 +21,15 @@ running a Linux kernel.  Also, not all tools are necessary on all
 systems; obviously, if you don't have any ISDN hardware, for example,
 you probably needn't concern yourself with isdn4k-utils.
 
-o  Gnu C                  3.2                     # gcc --version
+====================== ===============  ========================================
+        Program        Minimal version       Command to check the version
+====================== ===============  ========================================
+
+o  Gnu C                  4.8                     # gcc --version
 o  Gnu make               3.80                    # make --version
 o  binutils               2.12                    # ld -v
 o  util-linux             2.10o                   # fdformat --version
-o  module-init-tools      0.9.10                  # depmod -V
+o  kmod                   13                      # depmod -V
 o  e2fsprogs              1.41.4                  # e2fsck -V
 o  jfsutils               1.1.3                   # fsck.jfs -V
 o  reiserfsprogs          3.6.3                   # reiserfsck -V
@@ -73,6 +77,11 @@ Perl
 You will need perl 5 and the following modules: Getopt::Long, Getopt::Std,
 File::Basename, and File::Find to build the kernel.
 
+BC
+--
+
+You will need bc to build kernels 3.10 and higher
+
 
 System utilities
 ================
@@ -113,12 +122,6 @@ produces better output than ksymoops).  If for some reason your kernel
 is not build with CONFIG_KALLSYMS and you have no way to rebuild and
 reproduce the Oops with that option, then you can still decode that Oops
 with ksymoops.
-
-Module-Init-Tools
------------------
-
-A new module loader is now in the kernel that requires module-init-tools
-to use.  It is backward compatible with the 2.4.x series kernels.
 
 Mkinitrd
 --------
@@ -314,13 +317,14 @@ Util-linux
 ----------
 o  <ftp://ftp.kernel.org/pub/linux/utils/util-linux/>
 
+Kmod
+----
+o  <https://www.kernel.org/pub/linux/utils/kernel/kmod/>
+o  <https://git.kernel.org/pub/scm/utils/kernel/kmod/kmod.git>
+
 Ksymoops
 --------
 o  <ftp://ftp.kernel.org/pub/linux/utils/kernel/ksymoops/v2.4/>
-
-Module-Init-Tools
------------------
-o  <ftp://ftp.kernel.org/pub/linux/kernel/people/rusty/modules/>
 
 Mkinitrd
 --------
@@ -356,7 +360,7 @@ o  <http://sourceforge.net/projects/linuxquota/>
 
 DocBook Stylesheets
 -------------------
-o  <http://nwalsh.com/docbook/dsssl/>
+o  <http://sourceforge.net/projects/docbook/files/docbook-dsssl/>
 
 XMLTO XSLT Frontend
 -------------------
@@ -364,7 +368,7 @@ o  <http://cyberelk.net/tim/xmlto/>
 
 Intel P6 microcode
 ------------------
-o  <http://www.urbanmyth.org/microcode/>
+o  <https://downloadcenter.intel.com/>
 
 Powertweak
 ----------
@@ -372,7 +376,7 @@ o  <http://powertweak.sourceforge.net/>
 
 udev
 ----
-o <http://www.kernel.org/pub/linux/utils/kernel/hotplug/udev.html>
+o <http://www.freedesktop.org/software/systemd/man/udev.html>
 
 FUSE
 ----
@@ -380,7 +384,7 @@ o <http://sourceforge.net/projects/fuse>
 
 mcelog
 ------
-o <ftp://ftp.kernel.org/pub/linux/utils/cpu/mce/>
+o <http://www.mcelog.org/>
 
 Networking
 **********

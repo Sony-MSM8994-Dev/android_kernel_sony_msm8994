@@ -119,6 +119,9 @@ int cfg80211_dev_rename(struct cfg80211_registered_device *rdev,
 
 	assert_cfg80211_lock();
 
+	if (strlen(newname) > NL80211_WIPHY_NAME_MAXLEN)
+		return -EINVAL;
+
 	/* prohibit calling the thing phy%d when %d is not its number */
 	sscanf(newname, PHY_NAME "%d%n", &wiphy_idx, &taken);
 	if (taken == strlen(newname) && wiphy_idx != rdev->wiphy_idx) {
@@ -305,6 +308,59 @@ static void cfg80211_event_work(struct work_struct *work)
 	rtnl_unlock();
 }
 
+void cfg80211_destroy_ifaces(struct cfg80211_registered_device *rdev)
+{
+	struct cfg80211_iface_destroy *item;
+
+	ASSERT_RTNL();
+
+	spin_lock_irq(&rdev->destroy_list_lock);
+	while ((item = list_first_entry_or_null(&rdev->destroy_list,
+						struct cfg80211_iface_destroy,
+						list))) {
+		struct wireless_dev *wdev, *tmp;
+		u32 nlportid = item->nlportid;
+
+		list_del(&item->list);
+		kfree(item);
+		spin_unlock_irq(&rdev->destroy_list_lock);
+
+		list_for_each_entry_safe(wdev, tmp, &rdev->wdev_list, list) {
+			if (nlportid == wdev->owner_nlportid)
+				rdev_del_virtual_intf(rdev, wdev);
+		}
+
+		spin_lock_irq(&rdev->destroy_list_lock);
+	}
+	spin_unlock_irq(&rdev->destroy_list_lock);
+}
+
+static void cfg80211_destroy_iface_wk(struct work_struct *work)
+{
+	struct cfg80211_registered_device *rdev;
+
+	rdev = container_of(work, struct cfg80211_registered_device,
+			    destroy_work);
+
+	rtnl_lock();
+	cfg80211_destroy_ifaces(rdev);
+	rtnl_unlock();
+}
+
+static void cfg80211_sched_scan_stop_wk(struct work_struct *work)
+{
+	struct cfg80211_registered_device *rdev;
+
+	rdev = container_of(work, struct cfg80211_registered_device,
+			   sched_scan_stop_wk);
+
+	rtnl_lock();
+
+	__cfg80211_stop_sched_scan(rdev, false);
+
+	rtnl_unlock();
+}
+
 /* exported functions */
 
 struct wiphy *wiphy_new(const struct cfg80211_ops *ops, int sizeof_priv)
@@ -313,6 +369,7 @@ struct wiphy *wiphy_new(const struct cfg80211_ops *ops, int sizeof_priv)
 
 	struct cfg80211_registered_device *rdev;
 	int alloc_size;
+	int rv;
 
 	WARN_ON(ops->add_key && (!ops->del_key || !ops->set_default_key));
 	WARN_ON(ops->auth && (!ops->assoc || !ops->deauth || !ops->disassoc));
@@ -346,7 +403,11 @@ struct wiphy *wiphy_new(const struct cfg80211_ops *ops, int sizeof_priv)
 	mutex_unlock(&cfg80211_mutex);
 
 	/* give it a proper name */
-	dev_set_name(&rdev->wiphy.dev, PHY_NAME "%d", rdev->wiphy_idx);
+	rv = dev_set_name(&rdev->wiphy.dev, PHY_NAME "%d", rdev->wiphy_idx);
+	if (rv < 0) {
+		kfree(rdev);
+		return NULL;
+	}
 
 	mutex_init(&rdev->mtx);
 	mutex_init(&rdev->devlist_mtx);
@@ -367,6 +428,11 @@ struct wiphy *wiphy_new(const struct cfg80211_ops *ops, int sizeof_priv)
 	device_initialize(&rdev->wiphy.dev);
 	rdev->wiphy.dev.class = &ieee80211_class;
 	rdev->wiphy.dev.platform_data = rdev;
+
+	INIT_LIST_HEAD(&rdev->destroy_list);
+	spin_lock_init(&rdev->destroy_list_lock);
+	INIT_WORK(&rdev->destroy_work, cfg80211_destroy_iface_wk);
+	INIT_WORK(&rdev->sched_scan_stop_wk, cfg80211_sched_scan_stop_wk);
 
 #ifdef CONFIG_CFG80211_DEFAULT_PS
 	rdev->wiphy.flags |= WIPHY_FLAG_PS_ON_BY_DEFAULT;
@@ -736,6 +802,8 @@ void wiphy_unregister(struct wiphy *wiphy)
 	cancel_work_sync(&rdev->conn_work);
 	flush_work(&rdev->event_work);
 	cancel_delayed_work_sync(&rdev->dfs_update_channels_wk);
+	flush_work(&rdev->destroy_work);
+	flush_work(&rdev->sched_scan_stop_wk);
 
 	if (rdev->wowlan && rdev->ops->set_wakeup)
 		rdev_set_wakeup(rdev, false);

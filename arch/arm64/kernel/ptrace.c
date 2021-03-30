@@ -224,13 +224,13 @@ static int ptrace_hbp_fill_attr_ctrl(unsigned int note_type,
 				     struct arch_hw_breakpoint_ctrl ctrl,
 				     struct perf_event_attr *attr)
 {
-	int err, len, type, disabled = !ctrl.enabled;
+	int err, len, type, offset, disabled = !ctrl.enabled;
 
 	attr->disabled = disabled;
 	if (disabled)
 		return 0;
 
-	err = arch_bp_generic_fields(ctrl, &len, &type);
+	err = arch_bp_generic_fields(ctrl, &len, &type, &offset);
 	if (err)
 		return err;
 
@@ -249,6 +249,7 @@ static int ptrace_hbp_fill_attr_ctrl(unsigned int note_type,
 
 	attr->bp_len	= len;
 	attr->bp_type	= type;
+	attr->bp_addr	+= offset;
 
 	return 0;
 }
@@ -301,7 +302,7 @@ static int ptrace_hbp_get_addr(unsigned int note_type,
 	if (IS_ERR(bp))
 		return PTR_ERR(bp);
 
-	*addr = bp ? bp->attr.bp_addr : 0;
+	*addr = bp ? counter_arch_bp(bp)->address : 0;
 	return 0;
 }
 
@@ -707,8 +708,10 @@ static int compat_gpr_get(struct task_struct *target,
 			kbuf += sizeof(reg);
 		} else {
 			ret = copy_to_user(ubuf, &reg, sizeof(reg));
-			if (ret)
+			if (ret) {
+				ret = -EFAULT;
 				break;
+			}
 
 			ubuf += sizeof(reg);
 		}
@@ -746,8 +749,10 @@ static int compat_gpr_set(struct task_struct *target,
 			kbuf += sizeof(reg);
 		} else {
 			ret = copy_from_user(&reg, ubuf, sizeof(reg));
-			if (ret)
-				return ret;
+			if (ret) {
+				ret = -EFAULT;
+				break;
+			}
 
 			ubuf += sizeof(reg);
 		}
@@ -822,8 +827,10 @@ static int compat_vfp_set(struct task_struct *target,
 
 	if (count && !ret) {
 		ret = get_user(fpscr, (compat_ulong_t *)ubuf);
-		uregs->fpsr = fpscr & VFP_FPSCR_STAT_MASK;
-		uregs->fpcr = fpscr & VFP_FPSCR_CTRL_MASK;
+		if (!ret) {
+			uregs->fpsr = fpscr & VFP_FPSCR_STAT_MASK;
+			uregs->fpcr = fpscr & VFP_FPSCR_CTRL_MASK;
+		}
 	}
 
 	return ret;

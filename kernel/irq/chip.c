@@ -213,6 +213,19 @@ void irq_enable(struct irq_desc *desc)
 	irq_state_clr_masked(desc);
 }
 
+/**
+ * irq_disable - Mark interrupt disabled
+ * @desc:	irq descriptor which should be disabled
+ *
+ * If the chip does not implement the irq_disable callback, we
+ * use a lazy disable approach. That means we mark the interrupt
+ * disabled, but leave the hardware unmasked. That's an
+ * optimization because we avoid the hardware access for the
+ * common case where no interrupt happens after we marked it
+ * disabled. If an interrupt happens, then the interrupt flow
+ * handler masks the line at the hardware level and marks it
+ * pending.
+ */
 void irq_disable(struct irq_desc *desc)
 {
 	irq_state_set_disabled(desc);
@@ -504,19 +517,29 @@ handle_edge_irq(unsigned int irq, struct irq_desc *desc)
 	raw_spin_lock(&desc->lock);
 
 	desc->istate &= ~(IRQS_REPLAY | IRQS_WAITING);
+
 	/*
-	 * If we're currently running this IRQ, or its disabled,
-	 * we shouldn't process the IRQ. Mark it pending, handle
-	 * the necessary masking and go out
+	 * If the handler is currently running, mark it pending,
+	 * handle the necessary masking and go out
 	 */
-	if (unlikely(irqd_irq_disabled(&desc->irq_data) ||
-		     irqd_irq_inprogress(&desc->irq_data) || !desc->action)) {
+	if (unlikely(irqd_irq_inprogress(&desc->irq_data))) {
 		if (!irq_check_poll(desc)) {
 			desc->istate |= IRQS_PENDING;
 			mask_ack_irq(desc);
 			goto out_unlock;
 		}
 	}
+
+	/*
+	 * If its disabled or no action available then mask it and get
+	 * out of here.
+	 */
+	if (irqd_irq_disabled(&desc->irq_data) || !desc->action) {
+		desc->istate |= IRQS_PENDING;
+		mask_ack_irq(desc);
+		goto out_unlock;
+	}
+
 	kstat_incr_irqs_this_cpu(irq, desc);
 
 	/* Start handling the irq */
@@ -565,18 +588,27 @@ void handle_edge_eoi_irq(unsigned int irq, struct irq_desc *desc)
 	raw_spin_lock(&desc->lock);
 
 	desc->istate &= ~(IRQS_REPLAY | IRQS_WAITING);
+
 	/*
-	 * If we're currently running this IRQ, or its disabled,
-	 * we shouldn't process the IRQ. Mark it pending, handle
-	 * the necessary masking and go out
+	 * If the handler is currently running, mark it pending,
+	 * handle the necessary masking and go out
 	 */
-	if (unlikely(irqd_irq_disabled(&desc->irq_data) ||
-		     irqd_irq_inprogress(&desc->irq_data) || !desc->action)) {
+	if (unlikely(irqd_irq_inprogress(&desc->irq_data))) {
 		if (!irq_check_poll(desc)) {
 			desc->istate |= IRQS_PENDING;
 			goto out_eoi;
 		}
 	}
+
+	/*
+	 * If its disabled or no action available then mask it and get
+	 * out of here.
+	 */
+	if (irqd_irq_disabled(&desc->irq_data) || !desc->action) {
+		desc->istate |= IRQS_PENDING;
+		goto out_eoi;
+	}
+
 	kstat_incr_irqs_this_cpu(irq, desc);
 
 	do {

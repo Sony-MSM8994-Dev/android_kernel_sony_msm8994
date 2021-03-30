@@ -172,7 +172,7 @@ static int qcota_release(struct inode *inode, struct file *file)
 	podev =  file->private_data;
 
 	if (podev != NULL && podev->magic != OTA_MAGIC) {
-		pr_err("%s: invalid handle %p\n",
+		pr_err("%s: invalid handle %pK\n",
 			__func__, podev);
 	}
 
@@ -192,7 +192,7 @@ static bool  _next_v_mp_req(struct ota_async_req *areq)
 
 	p = areq->req.f8_v_mp_req.qce_f8_req.data_in;
 	p += areq->req.f8_v_mp_req.qce_f8_req.data_len;
-	p = (uint8_t *) ALIGN(((unsigned int)p), L1_CACHE_BYTES);
+	p = (uint8_t *) ALIGN(((uintptr_t)p), L1_CACHE_BYTES);
 
 	areq->req.f8_v_mp_req.qce_f8_req.data_out = p;
 	areq->req.f8_v_mp_req.qce_f8_req.data_in = p;
@@ -239,6 +239,9 @@ static void req_done(unsigned long data)
 		if (!list_empty(&podev->ready_commands)) {
 			new_req = container_of(podev->ready_commands.next,
 						struct ota_async_req, rlist);
+			if (!new_req)
+				break;
+
 			list_del(&new_req->rlist);
 			pqce->active_command = new_req;
 			spin_unlock_irqrestore(&podev->lock, flags);
@@ -246,7 +249,7 @@ static void req_done(unsigned long data)
 			new_req->err = 0;
 			/* start a new request */
 			ret = start_req(pqce, new_req);
-			if (unlikely(new_req && ret)) {
+			if (unlikely(ret)) {
 				new_req->err = ret;
 				complete(&new_req->complete);
 				ret = 0;
@@ -441,7 +444,7 @@ static long qcota_ioctl(struct file *file,
 
 	podev =  file->private_data;
 	if (podev == NULL || podev->magic != OTA_MAGIC) {
-		pr_err("%s: invalid handle %p\n",
+		pr_err("%s: invalid handle %pK\n",
 			__func__, podev);
 		return -ENOENT;
 	}
@@ -628,7 +631,7 @@ static long qcota_ioctl(struct file *file,
 				return -EFAULT;
 			}
 			p += areq.req.f8_v_mp_req.cipher_iov[i].size;
-			p = (uint8_t *) ALIGN(((unsigned int)p),
+			p = (uint8_t *) ALIGN(((uintptr_t)p),
 							L1_CACHE_BYTES);
 		}
 
@@ -655,7 +658,7 @@ static long qcota_ioctl(struct file *file,
 				return -EFAULT;
 			}
 			p += areq.req.f8_v_mp_req.cipher_iov[i].size;
-			p = (uint8_t *) ALIGN(((unsigned int)p),
+			p = (uint8_t *) ALIGN(((uintptr_t)p),
 							L1_CACHE_BYTES);
 		}
 		kfree(k_buf);

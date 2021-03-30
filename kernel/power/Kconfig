@@ -26,6 +26,19 @@ config WAKELOCK
 	bool
 	default y
 
+config POWERSUSPEND
+	bool "Power suspend"
+	default y
+	---help---
+	  Call early suspend handlers when the user requested sleep state
+	  changes.
+
+config POWERSUSPEND_DEBUG
+	bool "Powersuspend driver debugging code"
+	depends on POWERSUSPEND
+	help
+	  Output debugging info in dmesg [POWERSUSPEND]
+
 config HIBERNATE_CALLBACKS
 	bool
 
@@ -338,3 +351,11 @@ config PARTIALRESUME
 	  Partial resume will occur only if all wakeup sources have
 	  partial-resume handlers associated with them, and they all return
 	  true.
+
+config QUICK_WAKEUP
+	bool "Quick wakeup"
+	depends on SUSPEND
+	default n
+	---help---
+	  Allow kernel driver to do periodic jobs without resuming the full system
+	  This option can increase battery life on android powered smartphone.

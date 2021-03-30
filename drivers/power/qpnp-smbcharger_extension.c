@@ -1041,7 +1041,8 @@ void somc_chg_aicl_set_keep_state(bool state)
 {
 	chg_params->aicl_keep_state = state;
 	if (state)
-		schedule_delayed_work(&chg_params->power_supply_changed_work,
+		queue_delayed_work(system_power_efficient_wq,
+			&chg_params->power_supply_changed_work,
 			msecs_to_jiffies(BATT_STATUS_UPDATE_MS));
 }
 
@@ -1375,7 +1376,8 @@ static void somc_chg_aicl_work(struct work_struct *work)
 
 	somc_chg_weak_detect_weak_charger();
 
-	schedule_delayed_work(&chg_params->aicl_work,
+	queue_delayed_work(system_power_efficient_wq,
+			&chg_params->aicl_work,
 			msecs_to_jiffies(AICL_PERIOD_MS));
 
 	return;
@@ -1413,7 +1415,8 @@ void somc_chg_aicl_start_work(void)
 							msecs_to_jiffies(AICL_WAKE_PERIOD));
 			somc_chg_set_thermal_limited_iusb_max(IUSBMAX_MIN_0MA);
 			somc_chg_forced_iusb_dec_clear_params();
-			schedule_delayed_work(&chg_params->aicl_work,
+			queue_delayed_work(system_power_efficient_wq,
+				&chg_params->aicl_work,
 				msecs_to_jiffies(AICL_PERIOD_MS));
 	}
 }
@@ -1435,7 +1438,8 @@ static void somc_chg_weak_set_state(bool state)
 		if (state)
 			pr_info("Detect weak charger. AICL current %d mA\n",
 				*chg_params->usb_max_current_ma);
-		schedule_delayed_work(&chg_params->power_supply_changed_work,
+		queue_delayed_work(system_power_efficient_wq,
+			&chg_params->power_supply_changed_work,
 			msecs_to_jiffies(SWITCH_STATE_UPDATE_MS));
 	}
 }
@@ -1977,7 +1981,8 @@ void somc_chg_voltage_check_start(struct chg_somc_params *params)
 
 	params->vol_check.is_running = true;
 	pr_info("voltage check start\n");
-	schedule_delayed_work(&params->vol_check.work,
+	queue_delayed_work(system_power_efficient_wq,
+				&params->vol_check.work,
 				msecs_to_jiffies(VOLTAGE_CHECK_DELAY_MS));
 
 out:
@@ -2009,7 +2014,8 @@ static void somc_chg_voltage_check_work(struct work_struct *work)
 				params->vol_check.usb_current_limit);
 
 	if (params->vol_check.is_running)
-		schedule_delayed_work(&params->vol_check.work,
+		queue_delayed_work(system_power_efficient_wq,
+				&params->vol_check.work,
 				msecs_to_jiffies(VOLTAGE_CHECK_DELAY_MS));
 	somc_chg_current_change_mutex_unlock(params->dev);
 }
@@ -2086,7 +2092,8 @@ int somc_chg_invalid_set_state(struct chg_somc_params *params, int status)
 	if (params->invalid_state.enabled) {
 		pr_info("%d\n", !!status);
 		switch_set_state(&params->invalid_state.swdev, !!status);
-		schedule_delayed_work(&params->power_supply_changed_work,
+		queue_delayed_work(system_power_efficient_wq,
+			&params->power_supply_changed_work,
 			msecs_to_jiffies(SWITCH_STATE_UPDATE_MS));
 	}
 	params->invalid_state.state = !!status;

@@ -1,6 +1,7 @@
 config SDFAT_FS
 	tristate "sdFAT fs support"
 	default y
+
 	select NLS
 	select NLS_UTF8
 	select NLS_CODEPAGE_437

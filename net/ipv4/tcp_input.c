@@ -2513,7 +2513,7 @@ static bool tcp_try_undo_loss(struct sock *sk, bool frto_undo)
  *	losses and/or application stalls), do not perform any further cwnd
  *	reductions, but instead slow start up to ssthresh.
  */
-static void tcp_init_cwnd_reduction(struct sock *sk, const bool set_ssthresh)
+static void tcp_init_cwnd_reduction(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 
@@ -2523,8 +2523,7 @@ static void tcp_init_cwnd_reduction(struct sock *sk, const bool set_ssthresh)
 	tp->prior_cwnd = tp->snd_cwnd;
 	tp->prr_delivered = 0;
 	tp->prr_out = 0;
-	if (set_ssthresh)
-		tp->snd_ssthresh = inet_csk(sk)->icsk_ca_ops->ssthresh(sk);
+	tp->snd_ssthresh = inet_csk(sk)->icsk_ca_ops->ssthresh(sk);
 	TCP_ECN_queue_cwr(tp);
 }
 
@@ -2564,14 +2563,14 @@ static inline void tcp_end_cwnd_reduction(struct sock *sk)
 }
 
 /* Enter CWR state. Disable cwnd undo since congestion is proven with ECN */
-void tcp_enter_cwr(struct sock *sk, const int set_ssthresh)
+void tcp_enter_cwr(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 
 	tp->prior_ssthresh = 0;
 	if (inet_csk(sk)->icsk_ca_state < TCP_CA_CWR) {
 		tp->undo_marker = 0;
-		tcp_init_cwnd_reduction(sk, set_ssthresh);
+		tcp_init_cwnd_reduction(sk);
 		tcp_set_ca_state(sk, TCP_CA_CWR);
 	}
 }
@@ -2600,12 +2599,10 @@ static void tcp_try_to_open(struct sock *sk, int flag, int newly_acked_sacked)
 		tp->retrans_stamp = 0;
 
 	if (flag & FLAG_ECE)
-		tcp_enter_cwr(sk, 1);
+		tcp_enter_cwr(sk);
 
 	if (inet_csk(sk)->icsk_ca_state != TCP_CA_CWR) {
 		tcp_try_keep_open(sk);
-		if (inet_csk(sk)->icsk_ca_state != TCP_CA_Open)
-			tcp_moderate_cwnd(tp);
 	} else {
 		tcp_cwnd_reduction(sk, newly_acked_sacked, 0);
 	}
@@ -2708,7 +2705,7 @@ static void tcp_enter_recovery(struct sock *sk, bool ece_ack)
 	if (inet_csk(sk)->icsk_ca_state < TCP_CA_CWR) {
 		if (!ece_ack)
 			tp->prior_ssthresh = tcp_current_ssthresh(sk);
-		tcp_init_cwnd_reduction(sk, true);
+		tcp_init_cwnd_reduction(sk);
 	}
 	tcp_set_ca_state(sk, TCP_CA_Recovery);
 }
@@ -3144,11 +3141,20 @@ static int tcp_clean_rtx_queue(struct sock *sk, int prior_fackets,
 
 		if (tcp_is_reno(tp)) {
 			tcp_remove_reno_sacks(sk, pkts_acked);
+
+			/* If any of the cumulatively ACKed segments was
+			 * retransmitted, non-SACK case cannot confirm that
+			 * progress was due to original transmission due to
+			 * lack of TCPCB_SACKED_ACKED bits even if some of
+			 * the packets may have been never retransmitted.
+			 */
+			if (flag & FLAG_RETRANS_DATA_ACKED)
+				flag &= ~FLAG_ORIG_SACK_ACKED;
 		} else {
 			int delta;
 
 			/* Non-retransmitted hole got filled? That's reordering */
-			if (reord < prior_fackets)
+			if (reord < prior_fackets && reord <= tp->fackets_out)
 				tcp_update_reordering(sk, tp->fackets_out - reord, 0);
 
 			delta = tcp_is_fack(tp) ? pkts_acked :
@@ -3229,11 +3235,24 @@ static inline bool tcp_ack_is_dubious(const struct sock *sk, const int flag)
 		inet_csk(sk)->icsk_ca_state != TCP_CA_Open;
 }
 
+/* Decide wheather to run the increase function of congestion control. */
 static inline bool tcp_may_raise_cwnd(const struct sock *sk, const int flag)
 {
-	const struct tcp_sock *tp = tcp_sk(sk);
-	return (!(flag & FLAG_ECE) || tp->snd_cwnd < tp->snd_ssthresh) &&
-		!tcp_in_cwnd_reduction(sk);
+	if (tcp_in_cwnd_reduction(sk))
+		return false;
+
+	/* If reordering is high then always grow cwnd whenever data is
+	 * delivered regardless of its ordering. Otherwise stay conservative
+	 * and only grow cwnd on in-order delivery in Open state, and retain
+	 * cwnd in Disordered state (RFC5681). A stretched ACK with
+	 * new SACK or ECE mark may first advance cwnd here and later reduce
+	 * cwnd in tcp_fastretrans_alert() based on more states.
+	 */
+	if (tcp_sk(sk)->reordering > sysctl_tcp_reordering)
+		return flag & FLAG_FORWARD_PROGRESS;
+
+	return inet_csk(sk)->icsk_ca_state == TCP_CA_Open &&
+	       flag & FLAG_DATA_ACKED;
 }
 
 /* Check that window update is acceptable.
@@ -3356,7 +3375,7 @@ static void tcp_process_tlp_ack(struct sock *sk, u32 ack, int flag)
 		tp->tlp_high_seq = 0;
 		/* Don't reduce cwnd if DSACK arrives for TLP retrans. */
 		if (!(flag & FLAG_DSACKING_ACK)) {
-			tcp_init_cwnd_reduction(sk, true);
+			tcp_init_cwnd_reduction(sk);
 			tcp_set_ca_state(sk, TCP_CA_CWR);
 			tcp_end_cwnd_reduction(sk);
 			tcp_try_keep_open(sk);
@@ -3364,6 +3383,14 @@ static void tcp_process_tlp_ack(struct sock *sk, u32 ack, int flag)
 					 LINUX_MIB_TCPLOSSPROBERECOVERY);
 		}
 	}
+}
+
+static inline void tcp_in_ack_event(struct sock *sk, u32 flags)
+{
+	const struct inet_connection_sock *icsk = inet_csk(sk);
+
+	if (icsk->icsk_ca_ops->in_ack_event)
+		icsk->icsk_ca_ops->in_ack_event(sk, flags);
 }
 
 /* This routine deals with incoming acks, but not outgoing ones. */
@@ -3421,7 +3448,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		tp->snd_una = ack;
 		flag |= FLAG_WIN_UPDATE;
 
-		tcp_ca_event(sk, CA_EVENT_FAST_ACK);
+		tcp_in_ack_event(sk, 0);
 
 		NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPHPACKS);
 	} else {
@@ -3438,7 +3465,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		if (TCP_ECN_rcv_ecn_echo(tp, tcp_hdr(skb)))
 			flag |= FLAG_ECE;
 
-		tcp_ca_event(sk, CA_EVENT_SLOW_ACK);
+		tcp_in_ack_event(sk, CA_ACK_SLOWPATH);
 	}
 
 	/* We passed data and got it acked, remove any soft error
@@ -3462,16 +3489,14 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	if (flag & FLAG_SET_XMIT_TIMER)
 		tcp_set_xmit_timer(sk);
 
+	/* Advance cwnd if state allows */
+	if (tcp_may_raise_cwnd(sk, flag))
+		tcp_cong_avoid(sk, ack, prior_in_flight);
+
 	if (tcp_ack_is_dubious(sk, flag)) {
-		/* Advance CWND, if state allows this. */
-		if ((flag & FLAG_DATA_ACKED) && tcp_may_raise_cwnd(sk, flag))
-			tcp_cong_avoid(sk, ack, prior_in_flight);
 		is_dupack = !(flag & (FLAG_SND_UNA_ADVANCED | FLAG_NOT_DUP));
 		tcp_fastretrans_alert(sk, pkts_acked, prior_sacked,
 				      prior_packets, is_dupack, flag);
-	} else {
-		if (flag & FLAG_DATA_ACKED)
-			tcp_cong_avoid(sk, ack, prior_in_flight);
 	}
 
 	if ((flag & FLAG_FORWARD_PROGRESS) || !(flag & FLAG_NOT_DUP)) {
@@ -3685,11 +3710,8 @@ const u8 *tcp_parse_md5sig_option(const struct tcphdr *th)
 	int length = (th->doff << 2) - sizeof(*th);
 	const u8 *ptr = (const u8 *)(th + 1);
 
-	/* If the TCP option is too short, we can short cut */
-	if (length < TCPOLEN_MD5SIG)
-		return NULL;
-
-	while (length > 0) {
+	/* If not enough data remaining, we can short cut */
+	while (length >= TCPOLEN_MD5SIG) {
 		int opcode = *ptr++;
 		int opsize;
 
@@ -5384,10 +5406,6 @@ void tcp_finish_connect(struct sock *sk, struct sk_buff *skb)
 	else
 		tp->pred_flags = 0;
 
-	if (!sock_flag(sk, SOCK_DEAD)) {
-		sk->sk_state_change(sk);
-		sk_wake_async(sk, SOCK_WAKE_IO, POLL_OUT);
-	}
 }
 
 static bool tcp_rcv_fastopen_synack(struct sock *sk, struct sk_buff *synack,
@@ -5439,6 +5457,7 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct tcp_fastopen_cookie foc = { .len = -1 };
 	int saved_clamp = tp->rx_opt.mss_clamp;
+	bool fastopen_fail;
 
 	tcp_parse_options(skb, &tp->rx_opt, 0, &foc);
 	if (tp->rx_opt.saw_tstamp && tp->rx_opt.rcv_tsecr)
@@ -5541,10 +5560,15 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 
 		tcp_finish_connect(sk, skb);
 
-		if ((tp->syn_fastopen || tp->syn_data) &&
-		    tcp_rcv_fastopen_synack(sk, skb, &foc))
-			return -1;
+		fastopen_fail = (tp->syn_fastopen || tp->syn_data) &&
+				tcp_rcv_fastopen_synack(sk, skb, &foc);
 
+		if (!sock_flag(sk, SOCK_DEAD)) {
+			sk->sk_state_change(sk);
+			sk_wake_async(sk, SOCK_WAKE_IO, POLL_OUT);
+		}
+		if (fastopen_fail)
+			return -1;
 		if (sk->sk_write_pending ||
 		    icsk->icsk_accept_queue.rskq_defer_accept ||
 		    icsk->icsk_ack.pingpong) {

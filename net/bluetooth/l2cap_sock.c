@@ -104,6 +104,8 @@ static int l2cap_sock_bind(struct socket *sock, struct sockaddr *addr, int alen)
 		chan->sec_level = BT_SECURITY_SDP;
 
 	bacpy(&bt_sk(sk)->src, &la.l2_bdaddr);
+	bacpy(&chan->src, &la.l2_bdaddr);
+	chan->src_type = la.l2_bdaddr_type;
 
 	chan->state = BT_BOUND;
 	sk->sk_state = BT_BOUND;
@@ -267,10 +269,12 @@ static int l2cap_sock_getname(struct socket *sock, struct sockaddr *addr,
 		la->l2_psm = chan->psm;
 		bacpy(&la->l2_bdaddr, &bt_sk(sk)->dst);
 		la->l2_cid = cpu_to_le16(chan->dcid);
+		la->l2_bdaddr_type = chan->dst_type;
 	} else {
 		la->l2_psm = chan->sport;
 		bacpy(&la->l2_bdaddr, &bt_sk(sk)->src);
 		la->l2_cid = cpu_to_le16(chan->scid);
+		la->l2_bdaddr_type = chan->src_type;
 	}
 
 	return 0;
@@ -878,8 +882,19 @@ static int l2cap_sock_shutdown(struct socket *sock, int how)
 	lock_sock(sk);
 
 	if (!sk->sk_shutdown) {
-		if (chan->mode == L2CAP_MODE_ERTM)
+		if (chan->mode == L2CAP_MODE_ERTM) {
+			release_sock(sk);
+			l2cap_chan_unlock(chan);
+			if (conn)
+				mutex_unlock(&conn->chan_lock);
+
 			err = __l2cap_wait_ack(sk);
+
+			if (conn)
+				mutex_lock(&conn->chan_lock);
+			l2cap_chan_lock(chan);
+			lock_sock(sk);
+		}
 
 		sk->sk_shutdown = SHUTDOWN_MASK;
 
@@ -1041,6 +1056,9 @@ static void l2cap_sock_teardown_cb(struct l2cap_chan *chan, int err)
 
 		sk->sk_err = err;
 
+		/* parent can be valid only when L2CAP connection is confirmed
+		 * and accept ioctl call was scheduled on a timeout
+		 */
 		if (parent) {
 			bt_accept_unlink(sk);
 			parent->sk_data_ready(parent, 0);

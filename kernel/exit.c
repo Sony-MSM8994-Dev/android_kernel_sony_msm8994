@@ -53,7 +53,7 @@
 #include <linux/oom.h>
 #include <linux/writeback.h>
 #include <linux/shm.h>
-#include <linux/cpufreq.h>
+#include <linux/oom_score_notifier.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -94,6 +94,8 @@ static void __exit_signal(struct task_struct *tsk)
 	spin_lock(&sighand->siglock);
 
 	posix_cpu_timers_exit(tsk);
+	oom_score_notify_free(tsk);
+
 	if (group_dead) {
 		posix_cpu_timers_exit_group(tsk);
 		tty = sig->tty;
@@ -834,6 +836,7 @@ void do_exit(long code)
 	 */
 	perf_event_exit_task(tsk);
 
+	sched_autogroup_exit_task(tsk);
 	cgroup_exit(tsk, 1);
 
 	module_put(task_thread_info(tsk)->exec_domain->module);
@@ -1666,6 +1669,10 @@ SYSCALL_DEFINE4(wait4, pid_t, upid, int __user *, stat_addr,
 	if (options & ~(WNOHANG|WUNTRACED|WCONTINUED|
 			__WNOTHREAD|__WCLONE|__WALL))
 		return -EINVAL;
+
+	/* -INT_MIN is not defined */
+	if (upid == INT_MIN)
+		return -ESRCH;
 
 	if (upid == -1)
 		type = PIDTYPE_MAX;

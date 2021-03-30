@@ -50,7 +50,7 @@ struct mutex {
 	atomic_t		count;
 	spinlock_t		wait_lock;
 	struct list_head	wait_list;
-#if defined(CONFIG_DEBUG_MUTEXES) || defined(CONFIG_SMP)
+#if defined(CONFIG_DEBUG_MUTEXES) || defined(CONFIG_MUTEX_SPIN_ON_OWNER)
 	struct task_struct	*owner;
 #endif
 #ifdef CONFIG_MUTEX_SPIN_ON_OWNER
@@ -130,8 +130,8 @@ static inline int mutex_is_locked(struct mutex *lock)
 }
 
 /*
- * See kernel/mutex.c for detailed documentation of these APIs.
- * Also see Documentation/mutex-design.txt.
+ * See kernel/locking/mutex.c for detailed documentation of these APIs.
+ * Also see Documentation/locking/mutex-design.txt.
  */
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 extern void mutex_lock_nested(struct mutex *lock, unsigned int subclass);

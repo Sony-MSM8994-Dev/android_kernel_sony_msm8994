@@ -1003,8 +1003,12 @@ static int restart_notifier_cb(struct notifier_block *this,
 		remote_spin_release(&remote_spinlock, notifier->processor);
 		remote_spin_release_all(notifier->processor);
 		break;
+	case SUBSYS_SOC_RESET:
+		if (!(smem_ramdump_dev && notifdata->enable_mini_ramdumps))
+			break;
 	case SUBSYS_RAMDUMP_NOTIFICATION:
-		if (!(smem_ramdump_dev && notifdata->enable_ramdump))
+		if (!(smem_ramdump_dev && (notifdata->enable_mini_ramdumps
+						|| notifdata->enable_ramdump)))
 			break;
 		SMEM_DBG("%s: saving ramdump\n", __func__);
 		/*
@@ -1136,6 +1140,13 @@ static void smem_init_security_partition(struct smem_toc_entry *entry,
 
 	hdr = smem_areas[0].virt_addr + entry->offset;
 
+	if (entry->host0 != SMEM_APPS && entry->host1 != SMEM_APPS) {
+		SMEM_INFO(
+			"Non-APSS Partition %d offset:%x host0:%d host1:%d\n",
+			num, entry->offset, entry->host0, entry->host1);
+		return;
+	}
+
 	if (hdr->identifier != SMEM_PART_HDR_IDENTIFIER) {
 		LOG_ERR("Smem partition %d hdr magic is bad\n", num);
 		BUG();
@@ -1194,10 +1205,7 @@ static void smem_init_security(void)
 		SMEM_DBG("Partition %d host0:%d host1:%d\n", i,
 							toc->entry[i].host0,
 							toc->entry[i].host1);
-
-		if (toc->entry[i].host0 == SMEM_APPS ||
-					toc->entry[i].host1 == SMEM_APPS)
-			smem_init_security_partition(&toc->entry[i], i);
+		smem_init_security_partition(&toc->entry[i], i);
 	}
 
 	SMEM_DBG("%s done\n", __func__);

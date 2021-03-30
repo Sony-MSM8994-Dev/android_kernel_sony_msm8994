@@ -224,6 +224,7 @@ int ehci_bus_suspend(struct usb_hcd *hcd)
 	int			port;
 	int			mask;
 	int			changed;
+	bool			fs_idle_delay;
 
 	ehci_dbg(ehci, "suspend root hub\n");
 
@@ -258,6 +259,7 @@ int ehci_bus_suspend(struct usb_hcd *hcd)
 	ehci->bus_suspended = 0;
 	ehci->owned_ports = 0;
 	changed = 0;
+	fs_idle_delay = false;
 	port = HCS_N_PORTS(ehci->hcs_params);
 	while (port--) {
 		u32 __iomem	*reg = &ehci->regs->port_status [port];
@@ -268,8 +270,8 @@ int ehci_bus_suspend(struct usb_hcd *hcd)
 		if (t1 & PORT_OWNER)
 			set_bit(port, &ehci->owned_ports);
 		else if ((t1 & PORT_PE) && !(t1 & PORT_SUSPEND)) {
-			/*clear RS bit before setting SUSP bit
-			* and wait for HCH to get set*/
+			/* clear RS bit before setting SUSP bit
+			 * and wait for HCH to get set*/
 			if (ehci->susp_sof_bug) {
 				spin_unlock_irq(&ehci->lock);
 				ehci_halt(ehci);
@@ -296,16 +298,31 @@ int ehci_bus_suspend(struct usb_hcd *hcd)
 		if (t1 != t2) {
 			ehci_vdbg (ehci, "port %d, %08x -> %08x\n",
 				port + 1, t1, t2);
+			/* On some controllers, Wake-On-Disconnect will
+			 * generate false wakeup signals until the bus
+			 * switches over to full-speed idle.  For their
+			 * sake, add a delay if we need one.
+			 */
+			if ((t2 & PORT_WKDISC_E) &&
+					ehci_port_speed(ehci, t2) ==
+						USB_PORT_STAT_HIGH_SPEED)
+				fs_idle_delay = true;
 			ehci_writel(ehci, t2, reg);
 			changed = 1;
 		}
 	}
+	spin_unlock_irq(&ehci->lock);
+
+	if ((changed && ehci->has_hostpc) || fs_idle_delay) {
+		/*
+		 * Wait for HCD to enter low-power mode or for the bus
+		 * to switch to full-speed idle.
+		 */
+		usleep_range(5000, 5500);
+	}
 
 	if (changed && ehci->has_hostpc) {
-		spin_unlock_irq(&ehci->lock);
-		msleep(5);	/* 5 ms for HCD to enter low-power mode */
 		spin_lock_irq(&ehci->lock);
-
 		port = HCS_N_PORTS(ehci->hcs_params);
 		while (port--) {
 			u32 __iomem	*hostpc_reg = &ehci->regs->hostpc[port];
@@ -318,8 +335,8 @@ int ehci_bus_suspend(struct usb_hcd *hcd)
 					port, (t3 & HOSTPC_PHCD) ?
 					"succeeded" : "failed");
 		}
+		spin_unlock_irq(&ehci->lock);
 	}
-	spin_unlock_irq(&ehci->lock);
 
 	/* Apparently some devices need a >= 1-uframe delay here */
 	if (ehci->bus_suspended)
@@ -338,6 +355,7 @@ int ehci_bus_suspend(struct usb_hcd *hcd)
 
 	end_unlink_async(ehci);
 	unlink_empty_async_suspended(ehci);
+	ehci_handle_start_intr_unlinks(ehci);
 	ehci_handle_intr_unlinks(ehci);
 	end_free_itds(ehci);
 
@@ -474,10 +492,13 @@ int __maybe_unused ehci_bus_resume(struct usb_hcd *hcd)
 		goto skip_clear_resume;
 	}
 
-	/* msleep for 20ms only if code is trying to resume port */
+	/*
+	 * msleep for USB_RESUME_TIMEOUT ms only if code is trying to resume
+	 * port
+	 */
 	if (resume_needed) {
 		spin_unlock_irq(&ehci->lock);
-		msleep(20);
+		msleep(USB_RESUME_TIMEOUT);
 		spin_lock_irq(&ehci->lock);
 		if (ehci->shutdown)
 			goto shutdown;
@@ -958,7 +979,9 @@ static int ehci_hub_control (
 			temp &= ~PORT_WAKE_BITS;
 			ehci_writel(ehci, temp | PORT_RESUME, status_reg);
 			ehci->reset_done[wIndex] = jiffies
-					+ msecs_to_jiffies(20);
+					+ msecs_to_jiffies(USB_RESUME_TIMEOUT);
+			set_bit(wIndex, &ehci->resuming_ports);
+			usb_hcd_start_port_resume(&hcd->self, wIndex);
 			break;
 		case USB_PORT_FEAT_C_SUSPEND:
 			clear_bit(wIndex, &ehci->port_c_suspend);
@@ -1023,11 +1046,11 @@ static int ehci_hub_control (
 			}
 		}
 
-		/* whoever resumes must GetPortStatus to complete it!! */
-		if (temp & PORT_RESUME) {
+		/* no reset or resume pending */
+		if (!ehci->reset_done[wIndex]) {
 
 			/* Remote Wakeup received? */
-			if (!ehci->reset_done[wIndex]) {
+			if (temp & PORT_RESUME) {
 				/* resume signaling for 20 msec */
 				ehci->reset_done[wIndex] = jiffies
 						+ msecs_to_jiffies(20);
@@ -1038,38 +1061,34 @@ static int ehci_hub_control (
 						ehci->reset_done[wIndex]);
 			}
 
-			/* resume completed? */
-			else if (time_after_eq(jiffies,
-					ehci->reset_done[wIndex])) {
-				clear_bit(wIndex, &ehci->suspended_ports);
-				set_bit(wIndex, &ehci->port_c_suspend);
-				ehci->reset_done[wIndex] = 0;
-				usb_hcd_end_port_resume(&hcd->self, wIndex);
+		/* reset or resume not yet complete */
+		} else if (!time_after_eq(jiffies, ehci->reset_done[wIndex])) {
+			;	/* wait until it is complete */
 
-				/* stop resume signaling */
-				temp &= ~(PORT_RWC_BITS |
-						PORT_SUSPEND | PORT_RESUME);
-				ehci_writel(ehci, temp, status_reg);
-				clear_bit(wIndex, &ehci->resuming_ports);
-				retval = handshake(ehci, status_reg,
-					   PORT_RESUME, 0, 2000 /* 2msec */);
-				if (retval != 0) {
-					ehci_err(ehci,
-						"port %d resume error %d\n",
+		/* resume completed */
+		} else if (test_bit(wIndex, &ehci->resuming_ports)) {
+			clear_bit(wIndex, &ehci->suspended_ports);
+			set_bit(wIndex, &ehci->port_c_suspend);
+			ehci->reset_done[wIndex] = 0;
+			usb_hcd_end_port_resume(&hcd->self, wIndex);
+
+			/* stop resume signaling */
+			temp &= ~(PORT_RWC_BITS | PORT_SUSPEND | PORT_RESUME);
+			ehci_writel(ehci, temp, status_reg);
+			clear_bit(wIndex, &ehci->resuming_ports);
+			retval = handshake(ehci, status_reg,
+					PORT_RESUME, 0, 2000 /* 2msec */);
+			if (retval != 0) {
+				ehci_err(ehci, "port %d resume error %d\n",
 						wIndex + 1, retval);
-					goto error;
-				}
-				temp = ehci_readl(ehci, status_reg);
+				goto error;
 			}
-		}
+			temp = ehci_readl(ehci, status_reg);
 
 		/* whoever resets must GetPortStatus to complete it!! */
-		if ((temp & PORT_RESET)
-				&& time_after_eq(jiffies,
-					ehci->reset_done[wIndex])) {
+		} else {
 			status |= USB_PORT_STAT_C_RESET << 16;
 			ehci->reset_done [wIndex] = 0;
-			clear_bit(wIndex, &ehci->resuming_ports);
 
 			/* force reset to complete */
 			ehci_writel(ehci, temp & ~(PORT_RWC_BITS | PORT_RESET),
@@ -1088,11 +1107,6 @@ static int ehci_hub_control (
 			/* see what we found out */
 			temp = check_reset_complete (ehci, wIndex, status_reg,
 					ehci_readl(ehci, status_reg));
-		}
-
-		if (!(temp & (PORT_RESUME|PORT_RESET))) {
-			ehci->reset_done[wIndex] = 0;
-			clear_bit(wIndex, &ehci->resuming_ports);
 		}
 
 		/* transfer dedicated ports to the companion hc */
@@ -1230,7 +1244,7 @@ static int ehci_hub_control (
 						status_reg);
 			break;
 		case USB_PORT_FEAT_RESET:
-			if (temp & PORT_RESUME)
+			if (temp & (PORT_SUSPEND|PORT_RESUME))
 				goto error;
 			/* line status bits may report this as low speed,
 			 * which can be fine if this root hub has a

@@ -246,7 +246,11 @@ int pm_qos_update_target(struct pm_qos_constraints *c,
 
 	spin_unlock_irqrestore(&pm_qos_lock, flags);
 
-	if (prev_value != curr_value) {
+	/*
+	 * if cpu mask bits are set, call the notifier call chain
+	 * to update the new qos restriction for the cores
+	 */
+	if (!cpumask_empty(&cpus)) {
 		blocking_notifier_call_chain(c->notifiers,
 					     (unsigned long)curr_value,
 					     &cpus);
@@ -469,7 +473,6 @@ void pm_qos_add_request(struct pm_qos_request *req,
 #ifdef CONFIG_SMP
 	case PM_QOS_REQ_AFFINE_IRQ:
 		if (irq_can_set_affinity(req->irq)) {
-			int ret = 0;
 			struct irq_desc *desc = irq_to_desc(req->irq);
 			struct cpumask *mask = desc->irq_data.affinity;
 
@@ -479,13 +482,6 @@ void pm_qos_add_request(struct pm_qos_request *req,
 			req->irq_notify.notify = pm_qos_irq_notify;
 			req->irq_notify.release = pm_qos_irq_release;
 
-			ret = irq_set_affinity_notifier(req->irq,
-					&req->irq_notify);
-			if (ret) {
-				WARN(1, KERN_ERR "IRQ affinity notify set failed\n");
-				req->type = PM_QOS_REQ_ALL_CORES;
-				cpumask_setall(&req->cpus_affine);
-			}
 		} else {
 			req->type = PM_QOS_REQ_ALL_CORES;
 			cpumask_setall(&req->cpus_affine);
@@ -506,6 +502,24 @@ void pm_qos_add_request(struct pm_qos_request *req,
 	INIT_DELAYED_WORK(&req->work, pm_qos_work_fn);
 	pm_qos_update_target(pm_qos_array[pm_qos_class]->constraints,
 			     req, PM_QOS_ADD_REQ, value);
+
+#ifdef CONFIG_SMP
+	if (req->type == PM_QOS_REQ_AFFINE_IRQ &&
+			irq_can_set_affinity(req->irq)) {
+		int ret = 0;
+
+		ret = irq_set_affinity_notifier(req->irq,
+					&req->irq_notify);
+		if (ret) {
+			WARN(1, "IRQ affinity notify set failed\n");
+			req->type = PM_QOS_REQ_ALL_CORES;
+			cpumask_setall(&req->cpus_affine);
+			pm_qos_update_target(
+				pm_qos_array[pm_qos_class]->constraints,
+				req, PM_QOS_UPDATE_REQ, value);
+		}
+	}
+#endif
 }
 EXPORT_SYMBOL_GPL(pm_qos_add_request);
 
@@ -559,7 +573,8 @@ void pm_qos_update_request_timeout(struct pm_qos_request *req, s32 new_value,
 			pm_qos_array[req->pm_qos_class]->constraints,
 			req, PM_QOS_UPDATE_REQ, new_value);
 
-	schedule_delayed_work(&req->work, usecs_to_jiffies(timeout_us));
+	queue_delayed_work(system_power_efficient_wq,
+			   &req->work, usecs_to_jiffies(timeout_us));
 }
 
 /**
@@ -582,6 +597,16 @@ void pm_qos_remove_request(struct pm_qos_request *req)
 	}
 
 	cancel_delayed_work_sync(&req->work);
+
+#ifdef CONFIG_SMP
+	if (req->type == PM_QOS_REQ_AFFINE_IRQ) {
+		int ret = 0;
+		/* Get the current affinity */
+		ret = irq_release_affinity_notifier(&req->irq_notify);
+		if (ret)
+			WARN(1, "IRQ affinity notify set failed\n");
+	}
+#endif
 
 	pm_qos_update_target(pm_qos_array[req->pm_qos_class]->constraints,
 			     req, PM_QOS_REMOVE_REQ,
@@ -644,7 +669,7 @@ static int find_pm_qos_object_by_minor(int minor)
 {
 	int pm_qos_class;
 
-	for (pm_qos_class = 0;
+	for (pm_qos_class = PM_QOS_CPU_DMA_LATENCY;
 		pm_qos_class < PM_QOS_NUM_CLASSES; pm_qos_class++) {
 		if (minor ==
 			pm_qos_array[pm_qos_class]->pm_qos_power_miscdev.minor)
@@ -658,7 +683,7 @@ static int pm_qos_power_open(struct inode *inode, struct file *filp)
 	long pm_qos_class;
 
 	pm_qos_class = find_pm_qos_object_by_minor(iminor(inode));
-	if (pm_qos_class >= 0) {
+	if (pm_qos_class >= PM_QOS_CPU_DMA_LATENCY) {
 		struct pm_qos_request *req = kzalloc(sizeof(*req), GFP_KERNEL);
 		if (!req)
 			return -ENOMEM;
@@ -751,7 +776,7 @@ static int __init pm_qos_power_init(void)
 
 	BUILD_BUG_ON(ARRAY_SIZE(pm_qos_array) != PM_QOS_NUM_CLASSES);
 
-	for (i = 1; i < PM_QOS_NUM_CLASSES; i++) {
+	for (i = PM_QOS_CPU_DMA_LATENCY; i < PM_QOS_NUM_CLASSES; i++) {
 		ret = register_pm_qos_misc(pm_qos_array[i]);
 		if (ret < 0) {
 			printk(KERN_ERR "pm_qos_param: %s setup failed\n",

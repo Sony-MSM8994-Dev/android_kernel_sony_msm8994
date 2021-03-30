@@ -70,7 +70,6 @@
 #include <linux/shmem_fs.h>
 #include <linux/slab.h>
 #include <linux/perf_event.h>
-#include <linux/file.h>
 #include <linux/ptrace.h>
 #include <linux/blkdev.h>
 #include <linux/elevator.h>
@@ -369,6 +368,7 @@ static noinline void __init_refok rest_init(void)
 	const struct sched_param param = { .sched_priority = 1 };
 
 	rcu_scheduler_starting();
+	smpboot_thread_init();
 	/*
 	 * We need to spawn init first so that it obtains pid 1, however
 	 * the init task will end up wanting to create kthreads, which, if
@@ -545,9 +545,9 @@ asmlinkage void __init start_kernel(void)
 	if (WARN(!irqs_disabled(), "Interrupts were enabled *very* early, fixing it\n"))
 		local_irq_disable();
 	idr_init_cache();
-	perf_event_init();
 	rcu_init();
 	tick_nohz_init();
+	rcu_init_nohz();
 	radix_tree_init();
 	/* init some links before init_ISA_irqs() */
 	early_irq_init();
@@ -558,6 +558,7 @@ asmlinkage void __init start_kernel(void)
 	softirq_init();
 	timekeeping_init();
 	time_init();
+	perf_event_init();
 	sched_clock_postinit();
 	profile_init();
 	call_function_init();
@@ -697,7 +698,7 @@ int __init_or_module do_one_initcall(initcall_t fn)
 
 	if (preempt_count() != count) {
 		sprintf(msgbuf, "preemption imbalance ");
-		preempt_count() = count;
+		preempt_count_set(count);
 	}
 	if (irqs_disabled()) {
 		strlcat(msgbuf, "disabled interrupts ", sizeof(msgbuf));
@@ -826,8 +827,6 @@ static int __ref kernel_init(void *unused)
 	mark_rodata_ro();
 	system_state = SYSTEM_RUNNING;
 	numa_default_policy();
-
-	flush_delayed_fput();
 
 	if (ramdisk_execute_command) {
 		if (!run_init_process(ramdisk_execute_command))

@@ -156,6 +156,7 @@ spinlock_t  reg_lock;
 static int is_print_reg_error = 1;
 static unsigned long jiffi1, jiffi2;
 struct mutex cmd_credit;
+struct mutex mutex_register_proto;
 
 /* setting custom baudrate received from UIM */
 struct ktermios ktermios;
@@ -208,6 +209,10 @@ static struct hci_uart_proto *hup[HCI_UART_MAX_PROTO];
 
 static struct platform_device *brcm_plt_devices[MAX_BRCM_DEVICES];
 
+
+/*******************************************************************************
+**  Function forward-declarations and Function callback declarations
+*******************************************************************************/
 /**
   * internal functions to read chip name and
  * download patchram file
@@ -1040,6 +1045,7 @@ int brcm_hci_uart_tx_wakeup(struct hci_uart *hu)
     struct tty_struct *tty = hu->tty;
     struct sk_buff *skb;
     unsigned long lock_flags;
+    bool wakeup = true;
     if (test_and_set_bit(HCI_UART_SENDING, &hu->tx_state))
     {
         set_bit(HCI_UART_TX_WAKEUP, &hu->tx_state);
@@ -1054,6 +1060,12 @@ int brcm_hci_uart_tx_wakeup(struct hci_uart *hu)
 
         while ((skb = brcm_hci_uart_dequeue(hu))) {
             int len;
+            if (wakeup) {
+                BT_LDISC_DBG(V4L2_DBG_TX, "hci_uart_tx_wakeup");
+                brcm_btsleep_wake(sleep);
+                wakeup = false;
+            }
+
             spin_lock_irqsave(&hu->lock, lock_flags);
 
             len = tty->ops->write(tty, skb->data, skb->len);
@@ -1144,9 +1156,16 @@ long brcm_sh_ldisc_register(struct sh_proto_s *new_proto)
     unsigned long flags, diff;
     struct hci_uart *hu;
 
+    mutex_lock(&mutex_register_proto);
+    BT_LDISC_ERR("mutex lock for mutex_register_proto");
     hu_ref(&hu, 0);
     BT_LDISC_DBG(V4L2_DBG_OPEN, "%p",hu);
-
+    if(new_proto == NULL)
+    {
+        pr_err("new_proto is NULL");
+        mutex_unlock(&mutex_register_proto);
+        return -EINVAL;
+    }
     if(new_proto->type != 0)
     {
         BT_LDISC_DBG(V4L2_DBG_OPEN, "(%d) ", new_proto->type);
@@ -1167,9 +1186,11 @@ long brcm_sh_ldisc_register(struct sh_proto_s *new_proto)
         {
             jiffi2 = jiffies;
             diff = (long)jiffi2 - (long)jiffi1;
-            if ( ((diff *1000)/HZ) >= 1000)
+            if ( ((diff * HZ * 10) / HZ) >= 1000)
                 is_print_reg_error = 1;
         }
+        mutex_unlock(&mutex_register_proto);
+        BT_LDISC_ERR("mutex unlock for mutex_register_proto 1");
         return -1;
     }
 
@@ -1178,6 +1199,8 @@ long brcm_sh_ldisc_register(struct sh_proto_s *new_proto)
     {
         spin_unlock_irqrestore(&reg_lock, flags);
         pr_err("protocol %d not supported", new_proto->type);
+        mutex_unlock(&mutex_register_proto);
+        BT_LDISC_ERR("mutex unlock for mutex_register_proto 2");
         return -EPROTONOSUPPORT;
     }
 
@@ -1186,6 +1209,8 @@ long brcm_sh_ldisc_register(struct sh_proto_s *new_proto)
     {
         spin_unlock_irqrestore(&reg_lock, flags);
         BT_LDISC_DBG(V4L2_DBG_OPEN, "protocol %d already registered", new_proto->type);
+        mutex_unlock(&mutex_register_proto);
+        BT_LDISC_ERR("mutex unlock for mutex_register_proto 3");
         return -EALREADY;
     }
     if (test_bit(LDISC_REG_IN_PROGRESS, &hu->sh_ldisc_state)) {
@@ -1198,6 +1223,8 @@ long brcm_sh_ldisc_register(struct sh_proto_s *new_proto)
 
         set_bit(LDISC_REG_PENDING, &hu->sh_ldisc_state);
         spin_unlock_irqrestore(&reg_lock, flags);
+        mutex_unlock(&mutex_register_proto);
+        BT_LDISC_ERR("mutex unlock for mutex_register_proto 4");
         return -EINPROGRESS;
     } else if (hu->protos_registered == LDISC_EMPTY) {
         BT_LDISC_DBG(V4L2_DBG_OPEN, " chnl_id list empty :%d ", new_proto->type);
@@ -1214,6 +1241,9 @@ long brcm_sh_ldisc_register(struct sh_proto_s *new_proto)
                 (test_bit(LDISC_REG_PENDING, &hu->sh_ldisc_state))) {
                 pr_err(" ldisc registration failed ");
             }
+            return err == -EBUSY ? err : -EINVAL;
+            mutex_unlock(&mutex_register_proto);
+            BT_LDISC_ERR("mutex unlock for mutex_register_proto 5");
             return -EINVAL;
         }
 
@@ -1228,6 +1258,8 @@ long brcm_sh_ldisc_register(struct sh_proto_s *new_proto)
         if (hu->is_registered[new_proto->type] == true) {
             pr_err(" proto %d already registered ",
                    new_proto->type);
+            mutex_unlock(&mutex_register_proto);
+            BT_LDISC_ERR("mutex unlock for mutex_register_proto 6");
             return -EALREADY;
         }
 
@@ -1242,6 +1274,8 @@ long brcm_sh_ldisc_register(struct sh_proto_s *new_proto)
         resetErrFlags(new_proto);
 
         BT_LDISC_DBG(V4L2_DBG_OPEN, "exiting %s with err = %ld", __func__, err);
+        mutex_unlock(&mutex_register_proto);
+        BT_LDISC_ERR("mutex unlock for mutex_register_proto 7");
         return err;
     }
     /* if firmware patchram is already downloaded & new protocol driver registers */
@@ -1253,6 +1287,8 @@ long brcm_sh_ldisc_register(struct sh_proto_s *new_proto)
         new_proto->write = brcm_sh_ldisc_write;
         spin_unlock_irqrestore(&reg_lock, flags);
         resetErrFlags(new_proto);
+        mutex_unlock(&mutex_register_proto);
+        BT_LDISC_ERR("mutex unlock for mutex_register_proto 8");
         return err;
     }
 
@@ -1272,7 +1308,7 @@ EXPORT_SYMBOL(brcm_sh_ldisc_register);
 ** Returns - 0 if success; errno otherwise
 **
 *******************************************************************************/
-long brcm_sh_ldisc_unregister(enum proto_type type)
+long brcm_sh_ldisc_unregister(enum proto_type type, bool btsleep_open)
 {
     long err = 0;
     unsigned long flags;
@@ -1320,7 +1356,7 @@ long brcm_sh_ldisc_unregister(enum proto_type type)
         }
 
         /* all chnl_ids now unregistered */
-        brcm_sh_ldisc_stop(hu);
+        brcm_sh_ldisc_stop(hu, btsleep_open);
     }
 
     return err;
@@ -1690,13 +1726,14 @@ error_state:
 /**
  * brcm_sh_ldisc_stop - called  on the last un-registration */
 
-long brcm_sh_ldisc_stop(struct hci_uart *hu)
+long brcm_sh_ldisc_stop(struct hci_uart *hu, bool btsleep_open)
 {
     long err = 0;
 
     INIT_COMPLETION(hu->ldisc_installed);
 
-    brcm_btsleep_stop(sleep);
+    if(btsleep_open)
+        brcm_btsleep_stop(sleep);
     hu->ldisc_install = V4L2_STATUS_OFF;
 
     /* send uninstall notification to UIM */
@@ -1730,7 +1767,9 @@ long brcm_sh_ldisc_start(struct hci_uart *hu)
     BT_LDISC_DBG(V4L2_DBG_INIT, " %p",tty);
 
     do {
-        brcm_btsleep_start(sleep);
+        if(brcm_btsleep_start(sleep) == -EBUSY)
+            return -EBUSY;
+
         INIT_COMPLETION(hu->ldisc_installed);
         /* send notification to UIM */
         hu->ldisc_install = V4L2_STATUS_ON;
@@ -1745,7 +1784,7 @@ long brcm_sh_ldisc_start(struct hci_uart *hu)
         if (!err) { /* timeout */
             pr_err("line disc installation timed out ");
             INIT_COMPLETION(hu->tty_close_complete);
-            err = brcm_sh_ldisc_stop(hu);
+            err = brcm_sh_ldisc_stop(hu, 1);
             cl_err = wait_for_completion_timeout(&hu->tty_close_complete,
                     msecs_to_jiffies(TTY_CLOSE_TIME));
             if (!cl_err) { /* timeout */
@@ -1760,7 +1799,7 @@ long brcm_sh_ldisc_start(struct hci_uart *hu)
             if (err != 0) {
                 pr_err("patchram download failed");
                 INIT_COMPLETION(hu->tty_close_complete);
-                brcm_sh_ldisc_stop(hu);
+                brcm_sh_ldisc_stop(hu, 1);
                 cl_err = wait_for_completion_timeout(&hu->tty_close_complete,
                         msecs_to_jiffies(TTY_CLOSE_TIME));
                 if (!cl_err) { /* timeout */
@@ -1995,6 +2034,9 @@ long brcm_sh_ldisc_write(struct sk_buff *skb)
             if (!wait_for_completion_timeout(&hu->cmd_rcvd,
                     msecs_to_jiffies(CMD_WR_TIME))) {
                 pr_err(" waiting for command response - timed out");
+
+                /* Release lock before exiting */
+                mutex_unlock(&cmd_credit);
                 return 0;
             }
             mutex_unlock(&cmd_credit);
@@ -2533,6 +2575,8 @@ static int __init bcmbt_ldisc_init(void)
 {
     platform_driver_register(&bcmbt_ldisc_platform_driver);
     mutex_init(&cmd_credit);
+    BT_LDISC_ERR("bcmbt_ldisc_init");
+    mutex_init(&mutex_register_proto);
     return 0;
 }
 
@@ -2540,6 +2584,7 @@ static void __exit bcmbt_ldisc_exit(void)
 {
     platform_driver_unregister(&bcmbt_ldisc_platform_driver);
     mutex_destroy(&cmd_credit);
+    mutex_destroy(&mutex_register_proto);
 
 #if V4L2_SNOOP_ENABLE
     if(ldisc_snoop_enable_param)

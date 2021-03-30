@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2015, 2018 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -11,6 +11,7 @@
  * GNU General Public License for more details.
  *
  */
+
 #include <linux/slab.h>
 #include <linux/completion.h>
 #include <linux/pagemap.h>
@@ -49,6 +50,9 @@
 #define RPC_HASH_SZ	(1 << RPC_HASH_BITS)
 #define BALIGN		32
 #define NUM_CHANNELS    2
+#define FASTRPC_CTX_MAGIC (0xbeeddeed)
+#define FASTRPC_CTX_MAX (256)
+#define FASTRPC_CTXID_MASK (0xFF0)
 
 #define LOCK_MMAP(kernel)\
 		do {\
@@ -166,7 +170,6 @@ struct overlap {
 	uintptr_t mend;
 	uintptr_t offset;
 };
-
 
 struct smq_invoke_ctx {
 	struct hlist_node hn;
@@ -513,7 +516,6 @@ bail:
 	return err;
 }
 
-
 static void context_free(struct smq_invoke_ctx *ctx, int remove);
 
 static int context_alloc(struct fastrpc_apps *me, uint32_t kernel,
@@ -569,7 +571,7 @@ static int context_alloc(struct fastrpc_apps *me, uint32_t kernel,
 		}
 	}
 	ctx->sc = invoke->sc;
-	if (REMOTE_SCALARS_INBUFS(ctx->sc) + REMOTE_SCALARS_OUTBUFS(ctx->sc)) {
+	if (bufs) {
 		VERIFY(err, 0 == context_build_overlap(ctx));
 		if (err)
 			goto bail;
@@ -1132,6 +1134,10 @@ static int fastrpc_invoke_send(struct fastrpc_apps *me,
 {
 	struct smq_msg msg;
 	int err = 0, len;
+
+	VERIFY(err, 0 != me->channel[ctx->fdata->cid].chan);
+	if (err)
+		goto bail;
 	msg.pid = current->tgid;
 	msg.tid = current->pid;
 	if (kernel)
@@ -1145,6 +1151,7 @@ static int fastrpc_invoke_send(struct fastrpc_apps *me,
 	len = smd_write(me->channel[ctx->fdata->cid].chan, &msg, sizeof(msg));
 	spin_unlock(&me->wrlock);
 	VERIFY(err, len == sizeof(msg));
+ bail:
 	return err;
 }
 
@@ -1898,7 +1905,6 @@ smd_bail:
 	return err;
 }
 
-
 static long fastrpc_device_ioctl(struct file *file, unsigned int ioctl_num,
 				 unsigned long ioctl_param)
 {
@@ -1962,6 +1968,9 @@ static long fastrpc_device_ioctl(struct file *file, unsigned int ioctl_num,
 	case FASTRPC_IOCTL_INIT:
 		VERIFY(err, 0 == copy_from_user(&init, param,
 						sizeof(init)));
+		if (err)
+			goto bail;
+		VERIFY(err, init.filelen >= 0 && init.memlen >= 0);
 		if (err)
 			goto bail;
 		VERIFY(err, 0 == fastrpc_init_process(fdata, &init));

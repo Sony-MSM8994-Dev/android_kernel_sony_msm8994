@@ -82,8 +82,8 @@
 
 #define NUMBER_OF_SMB2_COMMANDS	0x0013
 
-/* BB FIXME - analyze following length BB */
-#define MAX_SMB2_HDR_SIZE 0x78 /* 4 len + 64 hdr + (2*24 wct) + 2 bct + 2 pad */
+/* 4 len + 52 transform hdr + 64 hdr + 56 create rsp */
+#define MAX_SMB2_HDR_SIZE 0x00b0
 
 #define SMB2_PROTO_NUMBER __constant_cpu_to_le32(0x424d53fe)
 
@@ -170,6 +170,7 @@ struct smb2_negotiate_req {
 #define SMB20_PROT_ID 0x0202
 #define SMB21_PROT_ID 0x0210
 #define SMB30_PROT_ID 0x0300
+#define SMB302_PROT_ID 0x0302
 #define BAD_PROT_ID   0xFFFF
 
 /* SecurityMode flags */

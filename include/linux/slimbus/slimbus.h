@@ -156,6 +156,20 @@ struct slim_addrt {
 };
 
 /*
+ * struct slim_val_inf: slimbus value/information element transaction
+ * @start_offset: Specifies starting offset in information/value element map
+ * @num_bytes: number of bytes to be read/written
+ * @wbuf: buffer if this transaction has 'write' component in it
+ * @rbuf: buffer if this transaction has 'read' component in it
+ */
+struct slim_val_inf {
+	u16 start_offset;
+	u8 num_bytes;
+	u8 *wbuf;
+	u8 *rbuf;
+};
+
+/*
  * struct slim_msg_txn: Message to be sent by the controller.
  * Linux framework uses this structure with drivers implementing controller.
  * This structure has packet header, payload and buffer to be filled (if any)
@@ -212,13 +226,13 @@ enum slim_port_req {
 };
 
 /*
- * enum slim_port_cfg: Port configuration parameters requested.
- * User can request no configuration, packed data, or MSB aligned data port
+ * enum slim_port_opts: Port options requested.
+ * User can request no configuration, packed data, and/or MSB aligned data port
  */
-enum slim_port_cfg {
-	SLIM_CFG_NONE,
-	SLIM_CFG_PACKED,
-	SLIM_CFG_ALIGN_MSB,
+enum slim_port_opts {
+	SLIM_OPT_NONE = 0,
+	SLIM_OPT_NO_PACK = 1U,
+	SLIM_OPT_ALIGN_MSB = 1U << 1,
 };
 
 /* enum slim_port_flow: Port flow type (inbound/outbound). */
@@ -234,6 +248,16 @@ enum slim_port_err {
 	SLIM_P_UNDERFLOW,
 	SLIM_P_DISCONNECT,
 	SLIM_P_NOT_OWNED,
+};
+
+/*
+ * struct slim_port_cfg: Port config for the manager port
+ * port_opts: port options (bit-map) for this port
+ * watermark: watermark level set for this port
+ */
+struct slim_port_cfg {
+	u32 port_opts;
+	u32 watermark;
 };
 
 /*
@@ -253,7 +277,7 @@ struct slim_port {
 	enum slim_port_err	err;
 	enum slim_port_state	state;
 	enum slim_port_req	req;
-	enum slim_port_cfg	cfg;
+	struct slim_port_cfg	cfg;
 	enum slim_port_flow	flow;
 	struct slim_ch		*ch;
 	struct completion	*xcomp;
@@ -530,6 +554,10 @@ enum slim_clk_state {
  *	errors (e.g. overflow/underflow) if any.
  * @xfer_user_msg: Send user message to specified logical address. Underlying
  *	controller has to support sending user messages. Returns error if any.
+ * @xfer_bulk_wr: Send bulk of write messages to specified logical address.
+ *	Underlying controller has to support this. Typically useful to transfer
+ *	messages to download firmware, or messages where strict ordering for
+ *	slave is necessary
  */
 struct slim_controller {
 	struct device		dev;
@@ -580,6 +608,10 @@ struct slim_controller {
 	int			(*xfer_user_msg)(struct slim_controller *ctrl,
 				u8 la, u8 mt, u8 mc,
 				struct slim_ele_access *msg, u8 *buf, u8 len);
+	int (*xfer_bulk_wr)(struct slim_controller *ctrl,
+			u8 la, u8 mt, u8 mc, struct slim_val_inf msgs[],
+			int n, int (*comp_cb)(void *ctx, int err),
+			void *ctx);
 };
 #define to_slim_controller(d) container_of(d, struct slim_controller, dev)
 
@@ -767,6 +799,25 @@ extern int slim_xfer_msg(struct slim_controller *ctrl,
  */
 extern int slim_user_msg(struct slim_device *sb, u8 la, u8 mt, u8 mc,
 				struct slim_ele_access *msg, u8 *buf, u8 len);
+
+/*
+ * Queue bulk of message writes:
+ * slim_bulk_msg_write: Write bulk of messages (e.g. downloading FW)
+ * @sb: Client handle sending these messages
+ * @la: Destination device for these messages
+ * @mt: Message Type
+ * @mc: Message Code
+ * @msgs: List of messages to be written in bulk
+ * @n: Number of messages in the list
+ * @cb: Callback if client needs this to be non-blocking
+ * @ctx: Context for this callback
+ * If supported by controller, this message list will be sent in bulk to the HW
+ * If the client specifies this to be non-blocking, the callback will be
+ * called from atomic context.
+ */
+extern int slim_bulk_msg_write(struct slim_device *sb, u8 mt, u8 mc,
+			struct slim_val_inf msgs[], int n,
+			int (*comp_cb)(void *ctx, int err), void *ctx);
 /* end of message apis */
 
 /* Port management for manager device APIs */
@@ -792,6 +843,19 @@ extern int slim_alloc_mgrports(struct slim_device *sb, enum slim_port_req req,
 
 /* Deallocate the port(s) allocated using the API above */
 extern int slim_dealloc_mgrports(struct slim_device *sb, u32 *hdl, int hsz);
+
+/*
+ * slim_config_mgrports: Configure manager side ports
+ * @sb: device/client handle.
+ * @ph: array of port handles for which this configuration is valid
+ * @nports: Number of ports in ph
+ * @cfg: configuration requested for port(s)
+ * Configure port settings if they are different than the default ones.
+ * Returns success if the config could be applied. Returns -EISCONN if the
+ * port is in use
+ */
+extern int slim_config_mgrports(struct slim_device *sb, u32 *ph, int nports,
+				struct slim_port_cfg *cfg);
 
 /*
  * slim_port_xfer: Schedule buffer to be transferred/received using port-handle.

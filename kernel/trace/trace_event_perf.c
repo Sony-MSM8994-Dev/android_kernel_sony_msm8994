@@ -226,6 +226,7 @@ void perf_trace_del(struct perf_event *p_event, int flags)
 		hlist_del_rcu(&p_event->hlist_entry);
 	else
 		return;
+
 	tp_event->class->reg(tp_event, TRACE_REG_PERF_DEL, p_event);
 }
 

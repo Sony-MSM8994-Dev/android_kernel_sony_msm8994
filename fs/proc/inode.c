@@ -48,7 +48,7 @@ static void proc_evict_inode(struct inode *inode)
 		pde_put(de);
 	head = PROC_I(inode)->sysctl;
 	if (head) {
-		rcu_assign_pointer(PROC_I(inode)->sysctl, NULL);
+		RCU_INIT_POINTER(PROC_I(inode)->sysctl, NULL);
 		sysctl_head_put(head);
 	}
 	/* Release any associated namespace */
@@ -286,6 +286,32 @@ static int proc_reg_mmap(struct file *file, struct vm_area_struct *vma)
 	return rv;
 }
 
+static unsigned long
+proc_reg_get_unmapped_area(struct file *file, unsigned long orig_addr,
+			   unsigned long len, unsigned long pgoff,
+			   unsigned long flags)
+{
+	struct proc_dir_entry *pde = PDE(file_inode(file));
+	unsigned long rv = -EIO;
+
+	if (use_pde(pde)) {
+		typeof(proc_reg_get_unmapped_area) *get_area;
+
+		get_area = pde->proc_fops->get_unmapped_area;
+#ifdef CONFIG_MMU
+		if (!get_area)
+			get_area = current->mm->get_unmapped_area;
+#endif
+
+		if (get_area)
+			rv = get_area(file, orig_addr, len, pgoff, flags);
+		else
+			rv = orig_addr;
+		unuse_pde(pde);
+	}
+	return rv;
+}
+
 static int proc_reg_open(struct inode *inode, struct file *file)
 {
 	struct proc_dir_entry *pde = PDE(inode);
@@ -357,6 +383,7 @@ static const struct file_operations proc_reg_file_ops = {
 	.compat_ioctl	= proc_reg_compat_ioctl,
 #endif
 	.mmap		= proc_reg_mmap,
+	.get_unmapped_area = proc_reg_get_unmapped_area,
 	.open		= proc_reg_open,
 	.release	= proc_reg_release,
 };
@@ -369,6 +396,7 @@ static const struct file_operations proc_reg_file_ops_no_compat = {
 	.poll		= proc_reg_poll,
 	.unlocked_ioctl	= proc_reg_unlocked_ioctl,
 	.mmap		= proc_reg_mmap,
+	.get_unmapped_area = proc_reg_get_unmapped_area,
 	.open		= proc_reg_open,
 	.release	= proc_reg_release,
 };

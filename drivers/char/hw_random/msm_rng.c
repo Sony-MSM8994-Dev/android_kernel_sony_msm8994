@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -11,6 +11,7 @@
  * GNU General Public License for more details.
  *
  */
+
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
@@ -53,22 +54,18 @@
 #define MAX_HW_FIFO_DEPTH 16                     /* FIFO is 16 words deep */
 #define MAX_HW_FIFO_SIZE (MAX_HW_FIFO_DEPTH * 4) /* FIFO is 32 bits wide  */
 
-/* Global FIPS status  */
+/* Global FIPS status */
 #ifdef CONFIG_FIPS_ENABLE
 enum fips_status g_fips140_status = FIPS140_STATUS_FAIL;
 EXPORT_SYMBOL(g_fips140_status);
-
 #else
 enum fips_status g_fips140_status = FIPS140_STATUS_NA;
 EXPORT_SYMBOL(g_fips140_status);
-
 #endif
 
-/*FIPS140-2 call back for DRBG self test */
+/* FIPS140-2 call back for DRBG self test */
 void *drbg_call_back;
 EXPORT_SYMBOL(drbg_call_back);
-
-
 
 enum {
 	FIPS_NOT_STARTED = 0,
@@ -108,7 +105,8 @@ static long msm_rng_ioctl(struct file *filp, unsigned int cmd,
  *  back to caller
  *
  */
-int msm_rng_direct_read(struct msm_rng_device *msm_rng_dev, void *data)
+int msm_rng_direct_read(struct msm_rng_device *msm_rng_dev,
+				void *data, size_t max)
 {
 	struct platform_device *pdev;
 	void __iomem *base;
@@ -122,19 +120,20 @@ int msm_rng_direct_read(struct msm_rng_device *msm_rng_dev, void *data)
 	base = msm_rng_dev->base;
 
 	mutex_lock(&msm_rng_dev->rng_lock);
-
 	if (msm_rng_dev->qrng_perf_client) {
 		ret = msm_bus_scale_client_update_request(
 				msm_rng_dev->qrng_perf_client, 1);
 		if (ret)
 			pr_err("bus_scale_client_update_req failed!\n");
 	}
+
 	/* enable PRNG clock */
 	ret = clk_prepare_enable(msm_rng_dev->prng_clk);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to enable clock in callback\n");
 		goto err;
 	}
+
 	/* read random data from h/w */
 	do {
 		/* check status bit if data is available */
@@ -158,7 +157,7 @@ int msm_rng_direct_read(struct msm_rng_device *msm_rng_dev, void *data)
 		*(retdata++) = val;
 		currsize += 4;
 
-	} while (currsize < Q_HW_DRBG_BLOCK_BYTES);
+	} while (currsize < max);
 
 	/* vote to turn off clock */
 	clk_disable_unprepare(msm_rng_dev->prng_clk);
@@ -175,94 +174,28 @@ err:
 	return currsize;
 }
 
+#ifdef CONFIG_FIPS_ENABLE
 static int msm_rng_drbg_read(struct hwrng *rng,
 			void *data, size_t max, bool wait)
 {
 	struct msm_rng_device *msm_rng_dev;
-	struct platform_device *pdev;
-	void __iomem *base;
-	size_t currsize = 0;
-	u32 val;
-	u32 *retdata = data;
-	int ret, ret1;
-	int failed = 0;
+	int ret = FIPS140_PRNG_ERR;
 
 	msm_rng_dev = (struct msm_rng_device *)rng->priv;
-	pdev = msm_rng_dev->pdev;
-	base = msm_rng_dev->base;
 
 	/* no room for word data */
 	if (max < 4)
 		return 0;
 
-	mutex_lock(&msm_rng_dev->rng_lock);
-
 	/* read random data from CTR-AES based DRBG */
-	if (FIPS140_DRBG_ENABLED == msm_rng_dev->fips140_drbg_enabled) {
-		ret1 = fips_drbg_gen(msm_rng_dev->drbg_ctx, data, max);
-		if (FIPS140_PRNG_ERR == ret1)
-			panic("random number generator generator error.\n");
-	} else
-		ret1 = 1;
+	ret = fips_drbg_gen(msm_rng_dev->drbg_ctx, data, max);
+	if (FIPS140_PRNG_OK != ret)
+		panic("random number generator error.\n");
 
-	if (msm_rng_dev->qrng_perf_client) {
-		ret = msm_bus_scale_client_update_request(
-				msm_rng_dev->qrng_perf_client, 1);
-		if (ret)
-			pr_err("bus_scale_client_update_req failed!\n");
-	}
-
-	/* read random data from h/w */
-	/* enable PRNG clock */
-	ret = clk_prepare_enable(msm_rng_dev->prng_clk);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to enable clock in callback\n");
-		goto err;
-	}
-	/* read random data from h/w */
-	do {
-		/* check status bit if data is available */
-		while (!(readl_relaxed(base + PRNG_STATUS_OFFSET)
-				& 0x00000001)) {
-			if (failed == 10) {
-				pr_err("Data not available after retry\n");
-				break;
-			}
-			pr_err("msm_rng:Data not available!\n");
-			msleep_interruptible(10);
-			failed++;
-		}
-
-		/* read FIFO */
-		val = readl_relaxed(base + PRNG_DATA_OUT_OFFSET);
-		if (!val)
-			break;	/* no data to read so just bail */
-
-		/* write data back to callers pointer */
-		if (0 != ret1)
-			*(retdata++) = val;
-		currsize += 4;
-
-		/* make sure we stay on 32bit boundary */
-		if ((max - currsize) < 4)
-			break;
-	} while (currsize < max);
-	/* vote to turn off clock */
-	clk_disable_unprepare(msm_rng_dev->prng_clk);
-err:
-	if (msm_rng_dev->qrng_perf_client) {
-		ret = msm_bus_scale_client_update_request(
-				msm_rng_dev->qrng_perf_client, 0);
-		if (ret)
-			pr_err("bus_scale_client_update_req failed!\n");
-	}
-
-	mutex_unlock(&msm_rng_dev->rng_lock);
-
-	return currsize;
+	/* FIPS DRBG read succeeds, return data */
+	return max;
 }
 
-#ifdef CONFIG_FIPS_ENABLE
 static void _fips_drbg_init_error(struct msm_rng_device  *msm_rng_dev)
 {
 	unregister_chrdev(QRNG_IOC_MAGIC, DRIVER_NAME);
@@ -277,7 +210,6 @@ static inline void _fips_drbg_init_error(struct msm_rng_device *msm_rng_dev)
 {
 	return;
 }
-
 #endif
 
 #ifdef CONFIG_FIPS_ENABLE
@@ -319,47 +251,32 @@ int _do_msm_fips_drbg_init(void *rng_dev)
 #ifdef CONFIG_FIPS_ENABLE
 static int msm_rng_read(struct hwrng *rng, void *data, size_t max, bool wait)
 {
-	struct msm_rng_device *msm_rng_dev = (struct msm_rng_device *)rng->priv;
-	unsigned char a[Q_HW_DRBG_BLOCK_BYTES];
-	int read_size;
-	unsigned char *p = data;
+	struct msm_rng_device *msm_rng_dev;
+	int sizeread = 0;
+
+	msm_rng_dev = (struct msm_rng_device *)rng->priv;
 
 	switch (fips_mode_enabled) {
 	case DRBG_FIPS_STARTED:
-		return msm_rng_drbg_read(rng, data, max, wait);
+		sizeread = msm_rng_drbg_read(rng, data, max, wait);
 		break;
 	case FIPS_NOT_STARTED:
-		if (g_fips140_status != FIPS140_STATUS_PASS) {
-			do {
-				read_size = msm_rng_direct_read(msm_rng_dev, a);
-				if (read_size <= 0)
-					break;
-				if ((max - read_size > 0)) {
-					memcpy(p, a, read_size);
-					p += read_size;
-					max -= read_size;
-				} else {
-					memcpy(p, a, max);
-				break;
-				}
-			} while (1);
-			return p - (unsigned char *)data;
-		} else {
-				fips_mode_enabled  = DRBG_FIPS_STARTED;
-				return msm_rng_drbg_read(rng, data, max, wait);
-			}
+		sizeread = msm_rng_direct_read(msm_rng_dev, data, max);
 		break;
 	default:
-		return 0;
+		sizeread = 0;
 		break;
 	}
 
-	return 0;
+	return sizeread;
 }
 #else
 static int msm_rng_read(struct hwrng *rng, void *data, size_t max, bool wait)
 {
-	return msm_rng_drbg_read(rng, data, max, wait);
+	struct msm_rng_device *msm_rng_dev;
+
+	msm_rng_dev = (struct msm_rng_device *)rng->priv;
+	return msm_rng_direct_read(msm_rng_dev, data, max);
 }
 #endif
 
@@ -380,6 +297,7 @@ static int msm_rng_enable_hw(struct msm_rng_device *msm_rng_dev)
 		if (ret)
 			pr_err("bus_scale_client_update_req failed!\n");
 	}
+
 	/* Enable the PRNG CLK */
 	ret = clk_prepare_enable(msm_rng_dev->prng_clk);
 	if (ret) {
@@ -387,6 +305,7 @@ static int msm_rng_enable_hw(struct msm_rng_device *msm_rng_dev)
 				"failed to enable clock in probe\n");
 		return -EPERM;
 	}
+
 	/* Enable PRNG h/w only if it is NOT ON */
 	val = readl_relaxed(msm_rng_dev->base + PRNG_CONFIG_OFFSET) &
 					PRNG_HW_ENABLE;
@@ -429,7 +348,6 @@ static struct class *msm_rng_class;
 static struct cdev msm_rng_cdev;
 
 #ifdef CONFIG_FIPS_ENABLE
-
 static void _first_msm_drbg_init(struct msm_rng_device *msm_rng_dev)
 {
 	fips_reg_drbg_callback((void *)msm_rng_dev);

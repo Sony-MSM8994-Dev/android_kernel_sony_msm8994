@@ -143,7 +143,8 @@ static int ceph_set_page_dirty(struct page *page)
  * dirty page counters appropriately.  Only called if there is private
  * data on the page.
  */
-static void ceph_invalidatepage(struct page *page, unsigned long offset)
+static void ceph_invalidatepage(struct page *page, unsigned int offset,
+				unsigned int length)
 {
 	struct inode *inode;
 	struct ceph_inode_info *ci;
@@ -168,7 +169,7 @@ static void ceph_invalidatepage(struct page *page, unsigned long offset)
 
 	ci = ceph_inode(inode);
 	if (offset == 0) {
-		dout("%p invalidatepage %p idx %lu full dirty page %lu\n",
+		dout("%p invalidatepage %p idx %lu full dirty page %u\n",
 		     inode, page, page->index, offset);
 		ceph_put_wrbuffer_cap_refs(ci, 1, snapc);
 		ceph_put_snap_context(snapc);
@@ -751,8 +752,7 @@ retry:
 		struct page **pages = NULL;
 		mempool_t *pool = NULL;	/* Becomes non-null if mempool used */
 		struct page *page;
-		int want;
-		u64 offset, len;
+		u64 offset = 0, len = 0;
 		long writeback_stat;
 
 		next = 0;
@@ -761,14 +761,9 @@ retry:
 
 get_more_pages:
 		first = -1;
-		want = min(end - index,
-			   min((pgoff_t)PAGEVEC_SIZE,
-			       max_pages - (pgoff_t)locked_pages) - 1)
-			+ 1;
-		pvec_pages = pagevec_lookup_tag(&pvec, mapping, &index,
-						PAGECACHE_TAG_DIRTY,
-						want);
-		dout("pagevec_lookup_tag got %d\n", pvec_pages);
+		pvec_pages = pagevec_lookup_range_nr_tag(&pvec, mapping, &index,
+						end, PAGECACHE_TAG_DIRTY);
+		dout("pagevec_lookup_range_tag got %d\n", pvec_pages);
 		if (!pvec_pages && !locked_pages)
 			break;
 		for (i = 0; i < pvec_pages && locked_pages < max_pages; i++) {

@@ -1032,13 +1032,17 @@ static int mdss_iommu_tlb_timeout_notify(struct notifier_block *self,
 {
 	char *client_name = dev;
 
+	if (!client_name)
+		return 0;
+
 	if (strcmp(client_name, "mdp_ns") && strcmp(client_name, "mdp_secure"))
 		return 0;
 
 	switch (action) {
 	case TLB_SYNC_TIMEOUT:
 		pr_err("cb for TLB SYNC timeout. Dumping XLOG's\n");
-		MDSS_XLOG_TOUT_HANDLER_FATAL_DUMP("vbif", "mdp", "mdp_dbg_bus");
+		MDSS_XLOG_TOUT_HANDLER_FATAL_DUMP("vbif", "mdp",
+					"mdp_dbg_bus", "atomic_context");
 		break;
 	}
 
@@ -1388,6 +1392,10 @@ void mdss_hw_init(struct mdss_data_type *mdata)
 		writel_relaxed(1, offset + 16);
 	}
 
+	/* initialize csc matrix default value */
+	for (i = 0; i < mdata->nvig_pipes; i++)
+		vig[i].csc_coeff_set = MDSS_MDP_CSC_YUV2RGB_709L;
+
 	mdata->nmax_concurrent_ad_hw =
 		(mdata->mdp_rev < MDSS_MDP_HW_REV_103) ? 1 : 2;
 
@@ -1588,11 +1596,11 @@ static int mdss_mdp_get_cmdline_config(struct platform_device *pdev)
 	rc = mdss_mdp_parse_dt_pan_intf(pdev);
 	/* if pref pan intf is not present */
 	if (rc)
-		pr_err("unable to parse device tree for pan intf\n");
-	else
-		pan_cfg->init_done = true;
+		pr_warn("unable to parse device tree for pan intf\n");
 
-	return rc;
+	pan_cfg->init_done = true;
+
+	return 0;
 }
 
 static ssize_t mdss_mdp_show_capabilities(struct device *dev,

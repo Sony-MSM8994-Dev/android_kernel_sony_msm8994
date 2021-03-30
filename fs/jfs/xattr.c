@@ -493,15 +493,17 @@ static int ea_get(struct inode *inode, struct ea_buffer *ea_buf, int min_size)
 	if (size > PSIZE) {
 		/*
 		 * To keep the rest of the code simple.  Allocate a
-		 * contiguous buffer to work with
+		 * contiguous buffer to work with. Make the buffer large
+		 * enough to make use of the whole extent.
 		 */
-		ea_buf->xattr = kmalloc(size, GFP_KERNEL);
+		ea_buf->max_size = (size + sb->s_blocksize - 1) &
+		    ~(sb->s_blocksize - 1);
+
+		ea_buf->xattr = kmalloc(ea_buf->max_size, GFP_KERNEL);
 		if (ea_buf->xattr == NULL)
 			return -ENOMEM;
 
 		ea_buf->flag = EA_MALLOC;
-		ea_buf->max_size = (size + sb->s_blocksize - 1) &
-		    ~(sb->s_blocksize - 1);
 
 		if (ea_size == 0)
 			return 0;
@@ -694,6 +696,7 @@ static int can_set_system_xattr(struct inode *inode, const char *name,
 		}
 		if (acl) {
 			struct posix_acl *old_acl = acl;
+
 			rc = posix_acl_update_mode(inode, &inode->i_mode, &acl);
 			posix_acl_release(old_acl);
 			if (rc < 0) {

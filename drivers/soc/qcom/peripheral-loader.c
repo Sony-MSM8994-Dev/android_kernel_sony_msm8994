@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2015, 2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -379,6 +379,7 @@ static int pil_alloc_region(struct pil_priv *priv, phys_addr_t min_addr,
 	else
 		aligned_size = ALIGN(size, SZ_1M);
 
+	init_dma_attrs(&priv->desc->attrs);
 	dma_set_attr(DMA_ATTR_SKIP_ZEROING, &priv->desc->attrs);
 	dma_set_attr(DMA_ATTR_NO_KERNEL_MAPPING, &priv->desc->attrs);
 
@@ -757,8 +758,6 @@ int pil_boot(struct pil_desc *desc)
 		ret = -EIO;
 		goto release_fw;
 	}
-
-	init_dma_attrs(&desc->attrs);
 
 	ret = pil_init_mmap(desc, mdt);
 	if (ret)

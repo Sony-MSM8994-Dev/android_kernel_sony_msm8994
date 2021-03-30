@@ -23,6 +23,7 @@
 #include <linux/sched_clock.h>
 
 #include <asm/arch_timer.h>
+#include <asm/traps.h>
 #include <asm/virt.h>
 
 #include <clocksource/arm_arch_timer.h>
@@ -268,7 +269,7 @@ static int arch_timer_set_next_event_phys_mem(unsigned long evt,
 	return 0;
 }
 
-static void __cpuinit __arch_timer_setup(unsigned type,
+static void __arch_timer_setup(unsigned type,
 				       struct clock_event_device *clk)
 {
 	clk->features = CLOCK_EVT_FEAT_ONESHOT;
@@ -320,7 +321,10 @@ static void arch_counter_set_user_access(void)
 			| ARCH_TIMER_USR_PCT_ACCESS_EN);
 
 	/* Enable user access to the virtual counter */
-	cntkctl |= ARCH_TIMER_USR_VCT_ACCESS_EN;
+	if (IS_ENABLED(CONFIG_ARM_ARCH_TIMER_VCT_ACCESS))
+		cntkctl |= ARCH_TIMER_USR_VCT_ACCESS_EN;
+	else
+		cntkctl &= ~ARCH_TIMER_USR_VCT_ACCESS_EN;
 
 	arch_timer_set_cntkctl(cntkctl);
 }
@@ -499,7 +503,7 @@ static void __init arch_counter_register(unsigned type)
 	sched_clock_register(arch_timer_read_counter, 56, arch_timer_rate);
 }
 
-static void __cpuinit arch_timer_stop(struct clock_event_device *clk)
+static void arch_timer_stop(struct clock_event_device *clk)
 {
 	pr_debug("arch_timer_teardown disable IRQ%d cpu #%d\n",
 		 clk->irq, smp_processor_id());
@@ -515,7 +519,7 @@ static void __cpuinit arch_timer_stop(struct clock_event_device *clk)
 	clk->set_mode(CLOCK_EVT_MODE_UNUSED, clk);
 }
 
-static int __cpuinit arch_timer_cpu_notify(struct notifier_block *self,
+static int arch_timer_cpu_notify(struct notifier_block *self,
 					   unsigned long action, void *hcpu)
 {
 	/*
@@ -534,7 +538,7 @@ static int __cpuinit arch_timer_cpu_notify(struct notifier_block *self,
 	return NOTIFY_OK;
 }
 
-static struct notifier_block arch_timer_cpu_nb __cpuinitdata = {
+static struct notifier_block arch_timer_cpu_nb = {
 	.notifier_call = arch_timer_cpu_notify,
 };
 
@@ -790,6 +794,7 @@ static void __init arch_timer_mem_init(struct device_node *np)
 	arch_timer_detect_rate(base, np);
 	arch_timer_mem_register(base, irq);
 	arch_timer_common_init();
+	get_timer_count_hook_init();
 }
 CLOCKSOURCE_OF_DECLARE(armv7_arch_timer_mem, "arm,armv7-timer-mem",
 		       arch_timer_mem_init);

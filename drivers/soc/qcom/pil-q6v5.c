@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014,2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2015,2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -30,6 +30,7 @@
 #define QDSP6SS_RESET			0x014
 #define QDSP6SS_GFMUX_CTL		0x020
 #define QDSP6SS_PWR_CTL			0x030
+#define QDSP6SS_MEM_CTL			0x0B0
 #define QDSP6SS_STRAP_ACC		0x110
 
 /* AXI Halt Register Offsets */
@@ -337,6 +338,10 @@ static int __pil_q6v55_reset(struct pil_desc *pil)
 	val |= QDSP6v55_LDO_BYP;
 	writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
 
+	/* Remove QMC_MEM clamp */
+	val &= ~QDSP6v55_CLAMP_QMC_MEM;
+	writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
+
 	if (drv->qdsp6v56_1_3) {
 		/* Deassert memory peripheral sleep and L2 memory standby */
 		val = readl_relaxed(drv->reg_base + QDSP6SS_PWR_CTL);
@@ -347,6 +352,22 @@ static int __pil_q6v55_reset(struct pil_desc *pil)
 		for (i = 17; i >= 0; i--) {
 			val |= BIT(i);
 			writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
+			udelay(1);
+		}
+	} else if (drv->qdsp6v56_1_8) {
+		/* Deassert memory peripheral sleep and L2 memory standby */
+		val = readl_relaxed(drv->reg_base + QDSP6SS_PWR_CTL);
+		val |= (Q6SS_L2DATA_STBY_N | Q6SS_SLP_RET_N);
+		writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
+
+		/*
+		 * Enable memories, turn on memory footswitch/head switch
+		 * one bank at a time to avoid in-rush current
+		 */
+		val = readl_relaxed(drv->reg_base + QDSP6SS_MEM_CTL);
+		for (i = 19; i >= 0; i--) {
+			val |= BIT(i);
+			writel_relaxed(val, drv->reg_base + QDSP6SS_MEM_CTL);
 			udelay(1);
 		}
 	} else {
@@ -363,15 +384,12 @@ static int __pil_q6v55_reset(struct pil_desc *pil)
 	}
 
 	/* Remove word line clamp */
+	val = readl_relaxed(drv->reg_base + QDSP6SS_PWR_CTL);
 	val &= ~QDSP6v55_CLAMP_WL;
 	writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
 
 	/* Remove IO clamp */
 	val &= ~Q6SS_CLAMP_IO;
-	writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
-
-	/* Remove QMC_MEM clamp */
-	val &= ~QDSP6v55_CLAMP_QMC_MEM;
 	writel_relaxed(val, drv->reg_base + QDSP6SS_PWR_CTL);
 
 	/* Bring core out of reset */
@@ -486,6 +504,9 @@ struct q6v5_data *pil_q6v5_init(struct platform_device *pdev)
 
 	drv->qdsp6v56_1_3 = of_property_read_bool(pdev->dev.of_node,
 						"qcom,qdsp6v56-1-3");
+
+	drv->qdsp6v56_1_8 = of_property_read_bool(pdev->dev.of_node,
+						"qcom,qdsp6v56-1-8");
 
 	drv->non_elf_image = of_property_read_bool(pdev->dev.of_node,
 						"qcom,mba-image-is-not-elf");

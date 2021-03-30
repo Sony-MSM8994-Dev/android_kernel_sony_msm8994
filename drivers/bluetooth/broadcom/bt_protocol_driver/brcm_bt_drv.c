@@ -44,6 +44,8 @@
 #define BTDRV_DEBUG TRUE
 #endif
 
+#define WRITE_RETRY_CNT 5
+
 /* set this module parameter to enable debug info */
 int bt_dbg_param = 0;
 
@@ -182,7 +184,7 @@ static int brcm_bt_drv_open(struct inode *inode, struct file *filp)
         else {
             jiffi2 = jiffies;
             diff = (long)jiffi2 - (long)jiffi1;
-            if ( ((diff *1000)/HZ) >= 1000)
+            if ( ((diff * HZ * 10) / HZ) >= 1000)
                 is_print_reg_error = 1;
         }
         err = -EAGAIN;
@@ -199,7 +201,7 @@ static int brcm_bt_drv_open(struct inode *inode, struct file *filp)
         BT_DRV_ERR("failed to get ST write func pointer");
 
         /* Undo registration with ST */
-        err = brcm_sh_ldisc_unregister(PROTO_SH_BT);
+        err = brcm_sh_ldisc_unregister(PROTO_SH_BT, err != -EBUSY);
         if (err < 0)
             BT_DRV_ERR("st_unregister failed %d", err);
 
@@ -284,7 +286,7 @@ static int brcm_bt_drv_close(struct inode *i, struct file *f)
 #endif
     /* Unregister from ST layer */
     if (test_and_clear_bit(BT_ST_REGISTERED, &bt_dev_p->flags)) {
-        err = brcm_sh_ldisc_unregister(PROTO_SH_BT);
+        err = brcm_sh_ldisc_unregister(PROTO_SH_BT, 1);
         if (err != 0) {
             BT_DRV_ERR("%s st_unregister failed %d", __func__, err);
             err = -EBUSY;
@@ -535,10 +537,11 @@ static void bt_send_data_ldisc(struct work_struct *w)
     struct sk_buff *skb;
     int len = 0;
     unsigned long flags;
+    unsigned int i;
 
     BT_DRV_DBG(V4L2_DBG_TX, "sending data to ldisc");
 
-    if (atomic_read(&bt_dev_p->tx_cnt))
+    for (i = 0; i < WRITE_RETRY_CNT && atomic_read(&bt_dev_p->tx_cnt); i++)
     {
         spin_lock_irqsave(&bt_dev_p->tx_q_lock, flags);
         skb = skb_dequeue(&bt_dev_p->tx_q);
@@ -769,3 +772,6 @@ MODULE_AUTHOR("Broadcom");
 MODULE_VERSION(VERSION); /* defined in makefile */
 MODULE_DESCRIPTION("Bluetooth driver for Bluedroid. \
  Integrates with Line discipline driver (Shared Transport)");
+
+
+

@@ -484,6 +484,10 @@ fd_do_unmap(struct se_cmd *cmd, void *priv, sector_t lba, sector_t nolb)
 	struct inode *inode = file->f_mapping->host;
 	int ret;
 
+	if (!nolb) {
+		return 0;
+	}
+
 	if (S_ISBLK(inode->i_mode)) {
 		/* The backend is block device, use discard */
 		struct block_device *bdev = inode->i_bdev;
@@ -592,8 +596,7 @@ fd_execute_rw(struct se_cmd *cmd)
 	if (ret < 0)
 		return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
 
-	if (ret)
-		target_complete_cmd(cmd, SAM_STAT_GOOD);
+	target_complete_cmd(cmd, SAM_STAT_GOOD);
 	return 0;
 }
 

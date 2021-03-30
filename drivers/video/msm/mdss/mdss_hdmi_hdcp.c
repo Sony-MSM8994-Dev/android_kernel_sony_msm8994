@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2014 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2015 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -54,6 +54,7 @@ struct hdmi_hdcp_ctrl {
 	u32 auth_retries;
 	u32 tp_msgid;
 	u32 tz_hdcp;
+	bool cancel_requested;
 	enum hdmi_hdcp_state hdcp_state;
 	struct HDCP_V2V1_MSG_TOPOLOGY cached_tp;
 	struct HDCP_V2V1_MSG_TOPOLOGY current_tp;
@@ -325,6 +326,12 @@ static int hdmi_hdcp_authentication_part1(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 		DEV_DBG("%s: %s: An ready even before enabling HDCP\n",
 		__func__, HDCP_STATE_NAME);
 		stale_an = true;
+	}
+
+	if (hdcp_ctrl->cancel_requested) {
+		DEV_DBG("%s: cancel auth requested\n", __func__);
+		rc = -EINVAL;
+		goto error;
 	}
 
 	/*
@@ -615,7 +622,7 @@ static int hdmi_hdcp_authentication_part1(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 	INIT_COMPLETION(hdcp_ctrl->r0_checked);
 	DSS_REG_W(io, HDMI_HDCP_RCVPORT_DATA2_0, (((u32)buf[1]) << 8) | buf[0]);
 	timeout_count = wait_for_completion_timeout(
-		&hdcp_ctrl->r0_checked, HZ*2);
+		&hdcp_ctrl->r0_checked, msecs_to_jiffies(2000));
 	link0_status = DSS_REG_R(io, HDMI_HDCP_LINK0_STATUS);
 	is_match = link0_status & BIT(12);
 	if (!is_match) {
@@ -798,7 +805,7 @@ static int hdmi_hdcp_authentication_part2(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 	 * Wait until READY bit is set in BCAPS, as per HDCP specifications
 	 * maximum permitted time to check for READY bit is five seconds.
 	 */
-	timeout_count = 50;
+	timeout_count = 45;
 	do {
 		timeout_count--;
 		/* Read BCAPS at offset 0x40 */
@@ -819,6 +826,15 @@ static int hdmi_hdcp_authentication_part2(struct hdmi_hdcp_ctrl *hdcp_ctrl)
 		}
 		msleep(100);
 	} while (!(bcaps & BIT(5)) && timeout_count);
+
+	if (!timeout_count) {
+		/* Disable encryption */
+		DSS_REG_W(io, HDMI_HDCP_CTRL,
+		DSS_REG_R(io, HDMI_HDCP_CTRL) & ~BIT(8));
+
+		rc = -EINVAL;
+		goto error;
+	}
 
 	/* Read BSTATUS at offset 0x41 */
 	memset(&ddc_data, 0, sizeof(ddc_data));
@@ -1154,6 +1170,11 @@ static void hdmi_hdcp_auth_work(struct work_struct *work)
 		return;
 	}
 
+	if (hdcp_ctrl->cancel_requested) {
+		DEV_DBG("%s: cancel auth requested\n", __func__);
+		return;
+	}
+
 	io = hdcp_ctrl->init_data.core_io;
 	/* Enabling Software DDC */
 	DSS_REG_W_ND(io, HDMI_DDC_ARBITRATION , DSS_REG_R(io,
@@ -1176,12 +1197,12 @@ static void hdmi_hdcp_auth_work(struct work_struct *work)
 	} else {
 		DEV_INFO("%s: Downstream device is not a repeater\n", __func__);
 	}
+
+error:
 	/* Disabling software DDC before going into part3 to make sure
 	 * there is no Arbitration between software and hardware for DDC */
 	DSS_REG_W_ND(io, HDMI_DDC_ARBITRATION , DSS_REG_R(io,
 				HDMI_DDC_ARBITRATION) | (BIT(4)));
-
-error:
 	/*
 	 * Ensure that the state did not change during authentication.
 	 * If it did, it means that deauthenticate/reauthenticate was
@@ -1246,6 +1267,7 @@ int hdmi_hdcp_reauthenticate(void *input)
 {
 	struct hdmi_hdcp_ctrl *hdcp_ctrl = (struct hdmi_hdcp_ctrl *)input;
 	struct dss_io_data *io;
+	u32 hdmi_hw_version;
 	u32 ret = 0;
 
 	if (!hdcp_ctrl || !hdcp_ctrl->init_data.core_io) {
@@ -1261,6 +1283,11 @@ int hdmi_hdcp_reauthenticate(void *input)
 		return 0;
 	}
 
+	if (hdcp_ctrl->cancel_requested) {
+		DEV_DBG("%s: cancel auth requested\n", __func__);
+		return 0;
+	}
+
 	/*
 	 * Disable HPD circuitry.
 	 * This is needed to reset the HDCP cipher engine so that when we
@@ -1269,6 +1296,12 @@ int hdmi_hdcp_reauthenticate(void *input)
 	 */
 	DSS_REG_W(io, HDMI_HPD_CTRL, DSS_REG_R(hdcp_ctrl->init_data.core_io,
 		HDMI_HPD_CTRL) & ~BIT(28));
+
+	hdmi_hw_version = DSS_REG_R(io, HDMI_VERSION);
+	if (hdmi_hw_version >= 0x30030000) {
+		DSS_REG_W(io, HDMI_CTRL_SW_RESET, BIT(1));
+		DSS_REG_W(io, HDMI_CTRL_SW_RESET, 0);
+	}
 
 	/* Disable HDCP interrupts */
 	DSS_REG_W(io, HDMI_HDCP_INT_CTRL, 0);
@@ -1293,10 +1326,16 @@ int hdmi_hdcp_reauthenticate(void *input)
 	hdcp_ctrl->hdcp_state = HDCP_STATE_AUTHENTICATING;
 	mutex_unlock(hdcp_ctrl->init_data.mutex);
 	queue_delayed_work(hdcp_ctrl->init_data.workq,
-		&hdcp_ctrl->hdcp_auth_work, HZ/2);
+		&hdcp_ctrl->hdcp_auth_work, msecs_to_jiffies(500));
 
 	return ret;
 } /* hdmi_hdcp_reauthenticate */
+
+void hdmi_hdcp_cancel_auth(void *input, bool req)
+{
+	struct hdmi_hdcp_ctrl *hdcp_ctrl = (struct hdmi_hdcp_ctrl *)input;
+	hdcp_ctrl->cancel_requested = req;
+}
 
 void hdmi_hdcp_off(void *input)
 {
@@ -1391,6 +1430,10 @@ int hdmi_hdcp_isr(void *input)
 		DEV_INFO("%s: %s: AUTH_FAIL_INT rcvd, LINK0_STATUS=0x%08x\n",
 			__func__, HDCP_STATE_NAME, link_status);
 		if (HDCP_STATE_AUTHENTICATED == hdcp_ctrl->hdcp_state) {
+			/* Disable encryption */
+			DSS_REG_W(io, HDMI_HDCP_CTRL,
+			DSS_REG_R(io, HDMI_HDCP_CTRL) & ~BIT(8));
+
 			/* Inform HDMI Tx of the failure */
 			queue_work(hdcp_ctrl->init_data.workq,
 				&hdcp_ctrl->hdcp_int_work);

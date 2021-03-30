@@ -580,6 +580,15 @@ config MSM_CACHE_DUMP_ON_PANIC
 	  want to dump the L1 and L2 caches on panic before any flush occurs.
 	  If unsure, say N
 
+config SONY_SSM
+	bool "Support Super Stamina Mode"
+	default n
+	help
+	  This enables support for power mode notifications, required by Super
+	  Stamina Mode. The driver will let a user space application register
+	  for notifications when the device is ready to switch into a new
+	  power mode.
+
 config MSM_CPUSS_DUMP
 	bool "CPU Subsystem Dumping support"
 	help
@@ -630,12 +639,12 @@ config MSM_CORE_CTL_HELPER
 	  max online CPUs from userspace.
 
 config MSM_CORE_CTL
-        select MSM_CORE_CTL_HELPER
-        tristate "Core control driver to dynamically hotplug CPUs"
-        help
-          Support for dynamicatlly hotplugging CPUs from kernel based on
-          current system load and state. It also supports limiting min and
-          max online CPUs from userspace.
+	select MSM_CORE_CTL_HELPER
+	tristate "Core control driver to dynamically hotplug CPUs"
+	help
+	  Support for dynamicatlly hotplugging CPUs from kernel based on
+	  current system load and state. It also supports limiting min and
+	  max online CPUs from userspace.
 
 config MSM_PERFORMANCE
 	tristate "Core control driver to support userspace hotplug requests"
@@ -643,6 +652,27 @@ config MSM_PERFORMANCE
 	  This driver is used to provide CPU hotplug support to userspace.
 	  It ensures that no more than a user specified number of CPUs stay
 	  online at any given point in time.
+
+config MSM_PERFORMANCE_HOTPLUG_ON
+	bool "Hotplug functionality through msm_performance turned on"
+	depends on MSM_PERFORMANCE
+	default y
+	help
+	  If some other core-control driver is present turn off the core-control
+	  capability of msm_performance driver. Setting this flag to false will
+	  compile out the nodes needed for core-control functionality through
+	  msm_performance.
+
+config MSM_VSENS
+	bool "Voltage Sensor Monitoring"
+	help
+	  Enable support for Voltage Sensing Block available on certain MSM
+	  chipsets. Voltage Sensing Block monitors the voltage at certain points
+	  in the chip and makes recent readings available via FIFO registers.
+	  It can also be configured to trigger an interrupt when a min or max threshold is
+	  crossed.
+
+	  Say yes to support these devices.
 
 config QCOM_NPA_DUMP
 	bool "Read NPA dump from the RPM memory"
@@ -665,6 +695,17 @@ config AMSS_ERR_LOG
 	  log in procfs. last_amss is export in both system dump and sub-system
 	  dump. Data in last_amss log is not available once it is read.
 	  If unsure, say N
+
+config STATE_NOTIFIER
+	bool "State Notifier"
+	default y
+
+config TRACER_PKT
+	bool "Tracer Packet"
+	help
+	  Tracer Packet helps in profiling the performance of inter-
+	  processor communication protocols. The profiling information
+	  can be logged into the tracer packet itself.
 
 source "drivers/soc/qcom/memshare/Kconfig"
 

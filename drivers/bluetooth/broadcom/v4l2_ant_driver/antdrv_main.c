@@ -180,7 +180,7 @@ int ant_prepare(struct antdrv_ops *antdev)
 
     /* Register with the shared line discipline */
     ret = brcm_sh_ldisc_register(&ant_st_proto);
-    if (ret == -1) {
+    if (ret < 0) {
         pr_err(": brcm_sh_ldisc_register failed %d", ret);
         ret = -EAGAIN;
         return ret;
@@ -193,7 +193,7 @@ int ant_prepare(struct antdrv_ops *antdev)
     }
     else {
         _ale("Failed to get shared ldisc write func pointer");
-        ret = brcm_sh_ldisc_unregister(PROTO_SH_ANT);
+        ret = brcm_sh_ldisc_unregister(PROTO_SH_ANT, 1);
         if (ret < 0)
             _ale(": brcm_sh_ldisc_unregister failed %d", ret);
             ret = -EAGAIN;
@@ -232,7 +232,7 @@ int ant_release(struct antdrv_ops *antdev)
         return 0;
     }
 
-    ret = brcm_sh_ldisc_unregister(PROTO_SH_ANT);
+    ret = brcm_sh_ldisc_unregister(PROTO_SH_ANT, 1);
     if (ret < 0)
         _ale(": Failed to de-register ant from HCI LDisc - %d", ret);
     else

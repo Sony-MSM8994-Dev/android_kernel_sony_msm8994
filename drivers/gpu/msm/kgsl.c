@@ -418,7 +418,7 @@ kgsl_mem_entry_attach_process(struct kgsl_mem_entry *entry,
 	int id;
 	int ret;
 	struct kgsl_process_private *process = dev_priv->process_priv;
-	struct kgsl_pagetable *pagetable;
+	struct kgsl_pagetable *pagetable = NULL;
 
 	ret = kgsl_process_private_get(process);
 	if (!ret)
@@ -2796,6 +2796,20 @@ static int kgsl_setup_phys_file(struct kgsl_mem_entry *entry,
 }
 #endif
 
+static int check_vma_flags(struct vm_area_struct *vma,
+		unsigned int flags)
+{
+	unsigned long flags_requested = (VM_READ | VM_WRITE);
+
+	if (flags & KGSL_MEMFLAGS_GPUREADONLY)
+		flags_requested &= ~VM_WRITE;
+
+	if ((vma->vm_flags & flags_requested) == flags_requested)
+		return 0;
+
+	return -EFAULT;
+}
+
 static int check_vma(struct vm_area_struct *vma, struct file *vmfile,
 		struct kgsl_memdesc *memdesc)
 {
@@ -2809,7 +2823,7 @@ static int check_vma(struct vm_area_struct *vma, struct file *vmfile,
 	if (vma->vm_start != memdesc->useraddr ||
 		(memdesc->useraddr + memdesc->size) != vma->vm_end)
 		return -EINVAL;
-	return 0;
+	return check_vma_flags(vma, memdesc->flags);
 }
 
 static int memdesc_sg_virt(struct kgsl_memdesc *memdesc, struct file *vmfile)
@@ -2818,7 +2832,7 @@ static int memdesc_sg_virt(struct kgsl_memdesc *memdesc, struct file *vmfile)
 	long npages = 0, i;
 	unsigned long sglen = memdesc->size / PAGE_SIZE;
 	struct page **pages = NULL;
-	int write = (memdesc->flags & KGSL_MEMFLAGS_GPUREADONLY) != 0;
+	int write = ((memdesc->flags & KGSL_MEMFLAGS_GPUREADONLY) ? 0 : 1);
 
 	if (sglen == 0 || sglen >= LONG_MAX)
 		return -EINVAL;
@@ -2904,6 +2918,7 @@ static int kgsl_setup_useraddr(struct kgsl_mem_entry *entry,
 	struct kgsl_map_user_mem *param = data;
 	struct dma_buf *dmabuf = NULL;
 	struct vm_area_struct *vma = NULL;
+	int ret;
 
 	if (param->len == 0 || param->offset != 0
 		|| param->hostptr == 0
@@ -2921,6 +2936,12 @@ static int kgsl_setup_useraddr(struct kgsl_mem_entry *entry,
 	if (vma && vma->vm_file) {
 		int fd;
 
+		ret = check_vma_flags(vma, entry->memdesc.flags);
+		if (ret) {
+			up_read(&current->mm->mmap_sem);
+			return ret;
+		}
+
 		/*
 		 * Check to see that this isn't our own memory that we have
 		 * already mapped
@@ -2936,15 +2957,16 @@ static int kgsl_setup_useraddr(struct kgsl_mem_entry *entry,
 		if (fd != 0)
 			dmabuf = dma_buf_get(fd - 1);
 	}
-	up_read(&current->mm->mmap_sem);
 
 	if (!IS_ERR_OR_NULL(dmabuf)) {
-		int ret = kgsl_setup_dma_buf(entry, pagetable, device, dmabuf);
-		if (ret)
+		ret = kgsl_setup_dma_buf(entry, pagetable, device, dmabuf);
+		if (ret) {
 			dma_buf_put(dmabuf);
-		else {
+			up_read(&current->mm->mmap_sem);
+		}else {
 			/* Match the cache settings of the vma region */
 			_setup_cache_mode(entry, vma);
+			up_read(&current->mm->mmap_sem);
 			/* Set the useraddr to the incoming hostptr */
 			entry->memdesc.useraddr = param->hostptr;
 		}
@@ -3975,7 +3997,8 @@ kgsl_mmap_memstore(struct kgsl_device *device, struct vm_area_struct *vma)
 static void kgsl_gpumem_vm_open(struct vm_area_struct *vma)
 {
 	struct kgsl_mem_entry *entry = vma->vm_private_data;
-	if (!kgsl_mem_entry_get(entry))
+
+	if (kgsl_mem_entry_get(entry) == 0)
 		vma->vm_private_data = NULL;
 }
 
@@ -4533,11 +4556,28 @@ static irqreturn_t kgsl_irq_handler(int irq, void *data)
 
 }
 
+#define KGSL_READ_MESSAGE "OH HAI GPU"
+
+static ssize_t kgsl_read(struct file *filep, char __user *buf, size_t count,
+			 loff_t *pos)
+{
+	int ret;
+
+	if (*pos >= strlen(KGSL_READ_MESSAGE) + 1)
+		return 0;
+
+	ret = snprintf(buf, count, "%s\n", KGSL_READ_MESSAGE);
+	*pos += ret;
+
+	return ret;
+}
+
 static const struct file_operations kgsl_fops = {
 	.owner = THIS_MODULE,
 	.release = kgsl_release,
 	.open = kgsl_open,
 	.mmap = kgsl_mmap,
+	.read = kgsl_read,
 	.get_unmapped_area = kgsl_get_unmapped_area,
 	.unlocked_ioctl = kgsl_ioctl,
 	.compat_ioctl = kgsl_compat_ioctl,
@@ -4782,7 +4822,6 @@ int kgsl_device_platform_probe(struct kgsl_device *device)
 				PM_QOS_CPU_DMA_LATENCY,
 				PM_QOS_DEFAULT_VALUE);
 	}
-
 
 	device->events_wq = alloc_workqueue("kgsl-events", WQ_HIGHPRI |
 		WQ_UNBOUND | WQ_MEM_RECLAIM, 0);

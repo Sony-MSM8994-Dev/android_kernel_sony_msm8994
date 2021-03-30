@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -614,6 +614,7 @@ static int gport_rmnet_disconnect(struct f_rmnet *dev)
 static void frmnet_unbind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct f_rmnet *dev = func_to_rmnet(f);
+	enum transport_type  dxport = rmnet_ports[dev->port_num].data_xport;
 
 	pr_debug("%s: portno:%d\n", __func__, dev->port_num);
 	if (gadget_is_superspeed(c->cdev->gadget))
@@ -623,6 +624,11 @@ static void frmnet_unbind(struct usb_configuration *c, struct usb_function *f)
 	usb_free_descriptors(f->fs_descriptors);
 
 	frmnet_free_req(dev->notify, dev->notify_req);
+
+	if (dxport == USB_GADGET_XPORT_BAM2BAM_IPA) {
+		gbam_data_flush_workqueue();
+		c->cdev->gadget->bam2bam_func_enabled = false;
+	}
 
 	kfree(f->name);
 }
@@ -686,6 +692,10 @@ static void frmnet_suspend(struct usb_function *f)
 			pr_debug("in_ep_desc_bkup = %pK, out_ep_desc_bkup = %pK",
 			       dev->in_ep_desc_backup, dev->out_ep_desc_backup);
 			pr_debug("%s(): Disconnecting\n", __func__);
+			if (gadget_is_dwc3(f->config->cdev->gadget)) {
+				msm_ep_unconfig(dev->port.out);
+				msm_ep_unconfig(dev->port.in);
+			}
 			gport_rmnet_disconnect(dev);
 		}
 		break;
@@ -804,6 +814,7 @@ frmnet_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 	if (ret) {
 		pr_err("%s: usb ep#%s enable failed, err#%d\n",
 				__func__, dev->notify->name, ret);
+		dev->notify->desc = NULL;
 		return ret;
 	}
 	dev->notify->driver_data = dev;
@@ -811,24 +822,32 @@ frmnet_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 	if (!dev->port.in->desc || !dev->port.out->desc) {
 		if (config_ep_by_speed(cdev->gadget, f, dev->port.in) ||
 			config_ep_by_speed(cdev->gadget, f, dev->port.out)) {
-				dev->port.in->desc = NULL;
-				dev->port.out->desc = NULL;
-				return -EINVAL;
+				pr_err("%s(): config_ep_by_speed failed.\n",
+								__func__);
+				ret = -EINVAL;
+				goto err_disable_ep;
 		}
 		dev->port.gadget = dev->cdev->gadget;
-		ret = gport_rmnet_connect(dev, intf);
 	}
 
 	if (dxport == USB_GADGET_XPORT_BAM2BAM_IPA &&
-	    gadget_is_dwc3(cdev->gadget)) {
+			gadget_is_dwc3(cdev->gadget)) {
 		if (msm_ep_config(dev->port.in) ||
 		    msm_ep_config(dev->port.out)) {
 			pr_err("%s: msm_ep_config failed\n", __func__);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto err_disable_ep;
 		}
-	} else
+	} else {
 		pr_debug("Rmnet is being used with non DWC3 core\n");
+	}
 
+	ret = gport_rmnet_connect(dev, intf);
+	if (ret) {
+		pr_err("%s(): gport_rmnet_connect fail with err:%d\n",
+							__func__, ret);
+		goto err_unconfig_ep;
+	}
 
 	atomic_set(&dev->online, 1);
 
@@ -836,6 +855,20 @@ frmnet_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 	   packets in the response queue, re-add the notifications */
 	list_for_each(cpkt, &dev->cpkt_resp_q)
 		frmnet_ctrl_response_available(dev);
+
+	return ret;
+
+err_unconfig_ep:
+	if (dxport == USB_GADGET_XPORT_BAM2BAM_IPA &&
+		gadget_is_dwc3(cdev->gadget)) {
+		msm_ep_unconfig(dev->port.in);
+		msm_ep_unconfig(dev->port.out);
+	}
+
+err_disable_ep:
+	dev->port.in->desc = NULL;
+	dev->port.out->desc = NULL;
+	usb_ep_disable(dev->notify);
 
 	return ret;
 }
@@ -1369,6 +1402,10 @@ static int frmnet_bind_config(struct usb_configuration *c, unsigned portno)
 		return status;
 	}
 
+	if (rmnet_ports[portno].data_xport ==
+		USB_GADGET_XPORT_BAM2BAM_IPA)
+		c->cdev->gadget->bam2bam_func_enabled = true;
+
 	pr_debug("%s: complete\n", __func__);
 
 	return status;
@@ -1510,4 +1547,22 @@ fail_probe:
 	no_data_hsuart_ports = 0;
 
 	return ret;
+}
+
+static void frmnet_deinit_port(void)
+{
+	int i;
+
+	for (i = 0; i < nr_rmnet_ports; i++)
+		kfree(rmnet_ports[i].port);
+
+	nr_rmnet_ports = 0;
+	no_ctrl_smd_ports = 0;
+	no_ctrl_qti_ports = 0;
+	no_rmnet_data_bam_ports = 0;
+	no_data_bam2bam_ports = 0;
+	no_ctrl_hsic_ports = 0;
+	no_data_hsic_ports = 0;
+	no_ctrl_hsuart_ports = 0;
+	no_data_hsuart_ports = 0;
 }

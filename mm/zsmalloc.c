@@ -314,7 +314,8 @@ static void record_obj(unsigned long handle, unsigned long obj)
 
 #ifdef CONFIG_ZPOOL
 
-static void *zs_zpool_create(char *name, gfp_t gfp, struct zpool_ops *zpool_ops)
+static void *zs_zpool_create(char *name, gfp_t gfp, struct zpool_ops *zpool_ops,
+			     struct zpool *zpool)
 {
 	return zs_create_pool(name, gfp);
 }
@@ -1200,6 +1201,10 @@ static int zs_register_cpu_notifier(void)
 static void zs_unregister_cpu_notifier(void)
 {
 	int cpu;
+
+#ifdef CONFIG_ZPOOL
+	zpool_unregister_driver(&zs_zpool_driver);
+#endif
 
 	cpu_notifier_register_begin();
 

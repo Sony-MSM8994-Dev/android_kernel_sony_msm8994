@@ -480,11 +480,11 @@ bool msm_dcvs_enc_check(struct msm_vidc_inst *inst)
 
 	is_codec_supported  =
 		(inst->fmts[CAPTURE_PORT]->fourcc == V4L2_PIX_FMT_H264) ||
-		(inst->fmts[CAPTURE_PORT]->fourcc == V4L2_PIX_FMT_H264_NO_SC);
+		(inst->fmts[CAPTURE_PORT]->fourcc == V4L2_PIX_FMT_H264_NO_SC) ||
+		(inst->fmts[CAPTURE_PORT]->fourcc == V4L2_PIX_FMT_HEVC);
 
 	num_mbs_per_frame = msm_dcvs_get_mbs_per_frame(inst);
 	if (msm_vidc_enc_dcvs_mode && is_codec_supported &&
-		inst->dcvs.is_power_save_mode &&
 		IS_VALID_DCVS_SESSION(num_mbs_per_frame,
 			DCVS_MIN_SUPPORTED_MBPERFRAME)) {
 		dcvs_check_passed = true;
@@ -526,6 +526,8 @@ static int msm_dcvs_check_supported(struct msm_vidc_inst *inst)
 				V4L2_PIX_FMT_HEVC) ||
 			(inst->fmts[OUTPUT_PORT]->fourcc ==
 				V4L2_PIX_FMT_VP8) ||
+			(inst->fmts[OUTPUT_PORT]->fourcc ==
+				V4L2_PIX_FMT_VP9) ||
 			(inst->fmts[OUTPUT_PORT]->fourcc ==
 				V4L2_PIX_FMT_H264_NO_SC);
 		/* 2K DCVS is supported for H264 only on 8992

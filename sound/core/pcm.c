@@ -297,7 +297,7 @@ static const char *snd_pcm_state_name(snd_pcm_state_t state)
 	return snd_pcm_state_names[(__force int)state];
 }
 
-#if defined(CONFIG_SND_PCM_OSS) || defined(CONFIG_SND_PCM_OSS_MODULE)
+#if IS_ENABLED(CONFIG_SND_PCM_OSS)
 #include <linux/soundcard.h>
 
 static const char *snd_pcm_oss_format_name(int format)
@@ -400,7 +400,7 @@ static void snd_pcm_substream_proc_hw_params_read(struct snd_info_entry *entry,
 	snd_iprintf(buffer, "rate: %u (%u/%u)\n", runtime->rate, runtime->rate_num, runtime->rate_den);	
 	snd_iprintf(buffer, "period_size: %lu\n", runtime->period_size);	
 	snd_iprintf(buffer, "buffer_size: %lu\n", runtime->buffer_size);	
-#if defined(CONFIG_SND_PCM_OSS) || defined(CONFIG_SND_PCM_OSS_MODULE)
+#if IS_ENABLED(CONFIG_SND_PCM_OSS)
 	if (substream->oss.oss) {
 		snd_iprintf(buffer, "OSS format: %s\n", snd_pcm_oss_format_name(runtime->oss.format));
 		snd_iprintf(buffer, "OSS channels: %u\n", runtime->oss.channels);	
@@ -653,7 +653,7 @@ int snd_pcm_new_stream(struct snd_pcm *pcm, int stream, int substream_count)
 	struct snd_pcm_str *pstr = &pcm->streams[stream];
 	struct snd_pcm_substream *substream, *prev;
 
-#if defined(CONFIG_SND_PCM_OSS) || defined(CONFIG_SND_PCM_OSS_MODULE)
+#if IS_ENABLED(CONFIG_SND_PCM_OSS)
 	mutex_init(&pstr->oss.setup_mutex);
 #endif
 	pstr->stream = stream;
@@ -698,6 +698,7 @@ int snd_pcm_new_stream(struct snd_pcm *pcm, int stream, int substream_count)
 		}
 		substream->group = &substream->self_group;
 		spin_lock_init(&substream->self_group.lock);
+		spin_lock_init(&substream->runtime_lock);
 		INIT_LIST_HEAD(&substream->self_group.substreams);
 		list_add_tail(&substream->link_list, &substream->self_group.substreams);
 		atomic_set(&substream->mmap_count, 0);
@@ -806,10 +807,26 @@ int snd_pcm_new_internal(struct snd_card *card, const char *id, int device,
 }
 EXPORT_SYMBOL(snd_pcm_new_internal);
 
+static void free_pcm_kctl(struct snd_pcm_str *pstr)
+{
+	if (pstr->chmap_kctl) {
+		snd_ctl_remove(pstr->pcm->card, pstr->chmap_kctl);
+		pstr->chmap_kctl = NULL;
+	}
+	if (pstr->vol_kctl) {
+		snd_ctl_remove(pstr->pcm->card, pstr->vol_kctl);
+		pstr->vol_kctl = NULL;
+	}
+	if (pstr->usr_kctl) {
+		snd_ctl_remove(pstr->pcm->card, pstr->usr_kctl);
+		pstr->usr_kctl = NULL;
+	}
+}
+
 static void snd_pcm_free_stream(struct snd_pcm_str * pstr)
 {
 	struct snd_pcm_substream *substream, *substream_next;
-#if defined(CONFIG_SND_PCM_OSS) || defined(CONFIG_SND_PCM_OSS_MODULE)
+#if IS_ENABLED(CONFIG_SND_PCM_OSS)
 	struct snd_pcm_oss_setup *setup, *setupn;
 #endif
 	substream = pstr->substream;
@@ -821,13 +838,14 @@ static void snd_pcm_free_stream(struct snd_pcm_str * pstr)
 		substream = substream_next;
 	}
 	snd_pcm_stream_proc_done(pstr);
-#if defined(CONFIG_SND_PCM_OSS) || defined(CONFIG_SND_PCM_OSS_MODULE)
+#if IS_ENABLED(CONFIG_SND_PCM_OSS)
 	for (setup = pstr->oss.setup_list; setup; setup = setupn) {
 		setupn = setup->next;
 		kfree(setup->task_name);
 		kfree(setup);
 	}
 #endif
+	free_pcm_kctl(pstr);
 }
 
 static int snd_pcm_free(struct snd_pcm *pcm)
@@ -977,9 +995,11 @@ int snd_pcm_attach_substream(struct snd_pcm *pcm, int stream,
 void snd_pcm_detach_substream(struct snd_pcm_substream *substream)
 {
 	struct snd_pcm_runtime *runtime;
+	unsigned long flags = 0;
 
 	if (PCM_RUNTIME_CHECK(substream))
 		return;
+	spin_lock_irqsave(&substream->runtime_lock, flags);
 	runtime = substream->runtime;
 	if (runtime->private_free != NULL)
 		runtime->private_free(runtime);
@@ -996,6 +1016,7 @@ void snd_pcm_detach_substream(struct snd_pcm_substream *substream)
 	put_pid(substream->pid);
 	substream->pid = NULL;
 	substream->pstr->substream_opened--;
+	spin_unlock_irqrestore(&substream->runtime_lock, flags);
 }
 
 static ssize_t show_pcm_class(struct device *dev,
@@ -1120,18 +1141,7 @@ static int snd_pcm_dev_disconnect(struct snd_device *device)
 			break;
 		}
 		snd_unregister_device(devtype, pcm->card, pcm->device);
-		if (pcm->streams[cidx].chmap_kctl) {
-			snd_ctl_remove(pcm->card, pcm->streams[cidx].chmap_kctl);
-			pcm->streams[cidx].chmap_kctl = NULL;
-		}
-		if (pcm->streams[cidx].vol_kctl) {
-			snd_ctl_remove(pcm->card, pcm->streams[cidx].vol_kctl);
-			pcm->streams[cidx].vol_kctl = NULL;
-		}
-		if (pcm->streams[cidx].usr_kctl) {
-			snd_ctl_remove(pcm->card, pcm->streams[cidx].usr_kctl);
-			pcm->streams[cidx].usr_kctl = NULL;
-		}
+		free_pcm_kctl(&pcm->streams[cidx]);
 	}
 	mutex_unlock(&pcm->open_mutex);
  unlock:

@@ -565,7 +565,8 @@ int fmc_send_cmd(struct fmdrv_ops *fmdev, unsigned char fmreg_index,
            return ret;
     }
 
-    timeleft = wait_for_completion_timeout(wait_completion, FM_DRV_TX_TIMEOUT);
+    timeleft = wait_for_completion_timeout(wait_completion,
+            msecs_to_jiffies(FM_DRV_TX_TIMEOUT));
     if (!timeleft)
     {
         pr_err("(fmdrv): Timeout(%d sec),didn't get reg"
@@ -1522,7 +1523,7 @@ int fmc_prepare(struct fmdrv_ops *fmdev)
 
     /* Register with the shared line discipline */
     ret = brcm_sh_ldisc_register(&fm_st_proto);
-    if (ret == -1) {
+    if (ret < 0) {
         pr_err("(fmdrv): brcm_sh_ldisc_register failed %d", ret);
         ret = -EAGAIN;
         return ret;
@@ -1536,7 +1537,7 @@ int fmc_prepare(struct fmdrv_ops *fmdev)
     }
     else {
         V4L2_FM_DRV_ERR("(fmdrv): Failed to get shared ldisc write func pointer");
-        ret = brcm_sh_ldisc_unregister(PROTO_SH_FM);
+        ret = brcm_sh_ldisc_unregister(PROTO_SH_FM, 1);
         if (ret < 0)
             V4L2_FM_DRV_ERR("(fmdrv): brcm_sh_ldisc_unregister failed %d", ret);
             ret = -EAGAIN;
@@ -1606,7 +1607,7 @@ int fmc_release(struct fmdrv_ops *fmdev)
     cancel_work_sync(&fmdev->tx_workqueue);
     cancel_work_sync(&fmdev->rx_workqueue);
 #endif
-    ret = brcm_sh_ldisc_unregister(PROTO_SH_FM);
+    ret = brcm_sh_ldisc_unregister(PROTO_SH_FM, 1);
     if (ret < 0)
         V4L2_FM_DRV_ERR("(fmdrv): Failed to de-register FM from HCI LDisc - %d", ret);
     else

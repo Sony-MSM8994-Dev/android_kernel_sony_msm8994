@@ -103,7 +103,7 @@ static void periodic_unlink (struct ehci_hcd *ehci, unsigned frame, void *ptr)
 		*hw_p = *shadow_next_periodic(ehci, &here,
 				Q_NEXT_TYPE(ehci, *hw_p));
 	else
-		*hw_p = ehci->dummy->qh_dma;
+		*hw_p = cpu_to_hc32(ehci, ehci->dummy->qh_dma);
 }
 
 /* how many of the uframe's 125 usecs are allocated? */
@@ -601,11 +601,28 @@ static void qh_unlink_periodic(struct ehci_hcd *ehci, struct ehci_qh *qh)
 	list_del(&qh->intr_node);
 }
 
+static void cancel_unlink_wait_intr(struct ehci_hcd *ehci, struct ehci_qh *qh)
+{
+	if (qh->qh_state != QH_STATE_LINKED ||
+			list_empty(&qh->unlink_node))
+		return;
+
+	list_del_init(&qh->unlink_node);
+
+	/*
+	 * TODO: disable the event of EHCI_HRTIMER_START_UNLINK_INTR for
+	 * avoiding unnecessary CPU wakeup
+	 */
+}
+
 static void start_unlink_intr(struct ehci_hcd *ehci, struct ehci_qh *qh)
 {
 	/* If the QH isn't linked then there's nothing we can do. */
 	if (qh->qh_state != QH_STATE_LINKED)
 		return;
+
+	/* if the qh is waiting for unlink, cancel it now */
+	cancel_unlink_wait_intr(ehci, qh);
 
 	qh_unlink_periodic (ehci, qh);
 
@@ -629,6 +646,27 @@ static void start_unlink_intr(struct ehci_hcd *ehci, struct ehci_qh *qh)
 	else if (ehci->intr_unlink.next == &qh->unlink_node) {
 		ehci_enable_event(ehci, EHCI_HRTIMER_UNLINK_INTR, true);
 		++ehci->intr_unlink_cycle;
+	}
+}
+
+/*
+ * It is common only one intr URB is scheduled on one qh, and
+ * given complete() is run in tasklet context, introduce a bit
+ * delay to avoid unlink qh too early.
+ */
+static void start_unlink_intr_wait(struct ehci_hcd *ehci,
+				   struct ehci_qh *qh)
+{
+	qh->unlink_cycle = ehci->intr_unlink_wait_cycle;
+
+	/* New entries go at the end of the intr_unlink_wait list */
+	list_add_tail(&qh->unlink_node, &ehci->intr_unlink_wait);
+
+	if (ehci->rh_state < EHCI_RH_RUNNING)
+		ehci_handle_start_intr_unlinks(ehci);
+	else if (ehci->intr_unlink_wait.next == &qh->unlink_node) {
+		ehci_enable_event(ehci, EHCI_HRTIMER_START_UNLINK_INTR, true);
+		++ehci->intr_unlink_wait_cycle;
 	}
 }
 
@@ -741,7 +779,7 @@ static int check_intr_schedule (
 		unsigned i;
 
 		/* TODO : this may need FSTN for SSPLIT in uframe 5. */
-		for (i=uframe+1; i<8 && i<uframe+4; i++)
+		for (i = uframe+2; i < 8 && i <= uframe+4; i++)
 			if (!check_period (ehci, frame, i,
 						qh->period, qh->c_usecs))
 				goto done;
@@ -889,6 +927,9 @@ static int intr_submit (
 	if (qh->qh_state == QH_STATE_IDLE) {
 		qh_refresh(ehci, qh);
 		qh_link_periodic(ehci, qh);
+	} else {
+		/* cancel unlink wait for the qh */
+		cancel_unlink_wait_intr(ehci, qh);
 	}
 
 	/* ... update usbfs periodic stats */
@@ -924,9 +965,11 @@ static void scan_intr(struct ehci_hcd *ehci)
 			 * in qh_unlink_periodic().
 			 */
 			temp = qh_completions(ehci, qh);
-			if (unlikely(temp || (list_empty(&qh->qtd_list) &&
-					qh->qh_state == QH_STATE_LINKED)))
+			if (unlikely(temp))
 				start_unlink_intr(ehci, qh);
+			else if (unlikely(list_empty(&qh->qtd_list) &&
+					qh->qh_state == QH_STATE_LINKED))
+				start_unlink_intr_wait(ehci, qh);
 		}
 	}
 }
@@ -1263,6 +1306,10 @@ sitd_slot_ok (
 	u32			frame, uf;
 
 	mask = stream->raw_mask << (uframe & 7);
+
+	/* for OUT, don't wrap SSPLIT into H-microframe 7 */
+	if (((stream->raw_mask & 0xff) << (uframe & 7)) >= (1 << 7))
+		return 0;
 
 	/* for IN, don't wrap CSPLIT into the next frame */
 	if (mask & ~0xffff)
@@ -2261,7 +2308,8 @@ restart:
 				    q.itd->hw_next != EHCI_LIST_END(ehci))
 					*hw_p = q.itd->hw_next;
 				else
-					*hw_p = ehci->dummy->qh_dma;
+					*hw_p = cpu_to_hc32(ehci,
+							ehci->dummy->qh_dma);
 				type = Q_NEXT_TYPE(ehci, q.itd->hw_next);
 				wmb();
 				modified = itd_complete (ehci, q.itd);
@@ -2296,7 +2344,8 @@ restart:
 				    q.sitd->hw_next != EHCI_LIST_END(ehci))
 					*hw_p = q.sitd->hw_next;
 				else
-					*hw_p = ehci->dummy->qh_dma;
+					*hw_p = cpu_to_hc32(ehci,
+							ehci->dummy->qh_dma);
 				type = Q_NEXT_TYPE(ehci, q.sitd->hw_next);
 				wmb();
 				modified = sitd_complete (ehci, q.sitd);

@@ -9,6 +9,13 @@
 #include <linux/compiler.h>
 #include <linux/types.h>
 
+/* Built-in __init functions needn't be compiled with retpoline */
+#if defined(__noretpoline) && !defined(MODULE)
+#define __noinitretpoline __noretpoline
+#else
+#define __noinitretpoline
+#endif
+
 /* These macros are used to mark some functions or 
  * initialized data (doesn't apply to uninitialized data)
  * as `initialization' functions. The kernel can take this
@@ -31,8 +38,8 @@
  * extern int initialize_foobar_device(int, int, int) __init;
  *
  * For initialized data:
- * You should insert __initdata between the variable name and equal
- * sign followed by value, e.g.:
+ * You should insert __initdata or __initconst between the variable name
+ * and equal sign followed by value, e.g.:
  *
  * static int init_variable __initdata = 0;
  * static const char linux_logo[] __initconst = { 0x32, 0x36, ... };
@@ -40,13 +47,11 @@
  * Don't forget to initialize data not at file scope, i.e. within a function,
  * as gcc otherwise puts the data into the bss section and not into the init
  * section.
- * 
- * Also note, that this data cannot be "const".
  */
 
 /* These are for everybody (although not all archs will actually
    discard it in modules) */
-#define __init		__section(.init.text) __cold notrace
+#define __init		__section(.init.text) __cold notrace __noinitretpoline
 #define __initdata	__section(.init.data)
 #define __initconst	__constsection(.init.rodata)
 #define __exitdata	__section(.exit.data)
@@ -131,10 +136,6 @@
 #define __INITRODATA	.section	".init.rodata","a",%progbits
 #define __FINITDATA	.previous
 
-#define __CPUINIT        .section	".cpuinit.text", "ax"
-#define __CPUINITDATA    .section	".cpuinit.data", "aw"
-#define __CPUINITRODATA  .section	".cpuinit.rodata", "a"
-
 #define __MEMINIT        .section	".meminit.text", "ax"
 #define __MEMINITDATA    .section	".meminit.data", "aw"
 #define __MEMINITRODATA  .section	".meminit.rodata", "a"
@@ -178,6 +179,23 @@ extern bool initcall_debug;
 
 #ifndef __ASSEMBLY__
 
+#ifdef CONFIG_LTO
+/* Work around a LTO gcc problem: when there is no reference to a variable
+ * in a module it will be moved to the end of the program. This causes
+ * reordering of initcalls which the kernel does not like.
+ * Add a dummy reference function to avoid this. The function is
+ * deleted by the linker.
+ */
+#define LTO_REFERENCE_INITCALL(x) \
+	; /* yes this is needed */			\
+	static __used __exit void *reference_##x(void)	\
+	{						\
+		return &x;				\
+	}
+#else
+#define LTO_REFERENCE_INITCALL(x)
+#endif
+
 /* initcalls are now grouped by functionality into separate 
  * subsections. Ordering inside the subsections is determined
  * by link order. 
@@ -190,7 +208,8 @@ extern bool initcall_debug;
 
 #define __define_initcall(fn, id) \
 	static initcall_t __initcall_##fn##id __used \
-	__attribute__((__section__(".initcall" #id ".init"))) = fn
+	__attribute__((__section__(".initcall" #id ".init"))) = fn; \
+	LTO_REFERENCE_INITCALL(__initcall_##fn##id)
 
 /*
  * Early initcalls run before initializing SMP.
@@ -250,19 +269,21 @@ struct obs_kernel_param {
  * obs_kernel_param "array" too far apart in .init.setup.
  */
 #define __setup_param(str, unique_id, fn, early)			\
-	static const char __setup_str_##unique_id[] __initconst	\
-		__aligned(1) = str; \
-	static struct obs_kernel_param __setup_##unique_id	\
-		__used __section(.init.setup)			\
-		__attribute__((aligned((sizeof(long)))))	\
+	static const char __setup_str_##unique_id[] __initconst		\
+		__aligned(1) = str;					\
+	static struct obs_kernel_param __setup_##unique_id		\
+		__used __section(.init.setup)				\
+		__attribute__((aligned((sizeof(long)))))		\
 		= { __setup_str_##unique_id, fn, early }
 
-#define __setup(str, fn)					\
+#define __setup(str, fn)						\
 	__setup_param(str, fn, fn, 0)
 
-/* NOTE: fn is as per module_param, not __setup!  Emits warning if fn
- * returns non-zero. */
-#define early_param(str, fn)					\
+/*
+ * NOTE: fn is as per module_param, not __setup!
+ * Emits warning if fn returns non-zero.
+ */
+#define early_param(str, fn)						\
 	__setup_param(str, fn, fn, 1)
 
 /* Relies on boot_command_line being set */
@@ -294,16 +315,30 @@ void __init parse_early_options(char *cmdline);
 
 #else /* MODULE */
 
-/* Don't use these in loadable modules, but some people do... */
+/*
+ * In most cases loadable modules do not need custom
+ * initcall levels. There are still some valid cases where
+ * a driver may be needed early if built in, and does not
+ * matter when built as a loadable module. Like bus
+ * snooping debug drivers.
+ */
 #define early_initcall(fn)		module_init(fn)
 #define core_initcall(fn)		module_init(fn)
+#define core_initcall_sync(fn)		module_init(fn)
 #define postcore_initcall(fn)		module_init(fn)
+#define postcore_initcall_sync(fn)	module_init(fn)
 #define arch_initcall(fn)		module_init(fn)
 #define subsys_initcall(fn)		module_init(fn)
+#define subsys_initcall_sync(fn)	module_init(fn)
 #define fs_initcall(fn)			module_init(fn)
+#define fs_initcall_sync(fn)		module_init(fn)
+#define rootfs_initcall(fn)		module_init(fn)
 #define device_initcall(fn)		module_init(fn)
+#define device_initcall_sync(fn)	module_init(fn)
 #define late_initcall(fn)		module_init(fn)
+#define late_initcall_sync(fn)		module_init(fn)
 
+#define console_initcall(fn)		module_init(fn)
 #define security_initcall(fn)		module_init(fn)
 
 /* Each module must use one module_init(). */

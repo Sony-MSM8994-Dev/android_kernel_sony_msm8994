@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -308,6 +308,8 @@ struct cpr_regulator {
 
 	bool		is_cpr_suspended;
 	bool		skip_voltage_change_during_suspend;
+
+	struct notifier_block	panic_notifier;
 };
 
 #define CPR_DEBUG_MASK_IRQ	BIT(0)
@@ -1088,12 +1090,35 @@ static int cpr_regulator_get_voltage(struct regulator_dev *rdev)
 	return cpr_vreg->corner;
 }
 
+/**
+ * cpr_regulator_list_corner_voltage() - return the ceiling voltage mapped to
+ *			the specified voltage corner
+ * @rdev:		Regulator device pointer for the cpr-regulator
+ * @corner:		Voltage corner
+ *
+ * This function is passed as a callback function into the regulator ops that
+ * are registered for each cpr-regulator device.
+ *
+ * Return: voltage value in microvolts or -EINVAL if the corner is out of range
+ */
+static int cpr_regulator_list_corner_voltage(struct regulator_dev *rdev,
+		int corner)
+{
+	struct cpr_regulator *cpr_vreg = rdev_get_drvdata(rdev);
+
+	if (corner >= CPR_CORNER_MIN && corner <= cpr_vreg->num_corners)
+		return cpr_vreg->ceiling_volt[corner];
+	else
+		return -EINVAL;
+}
+
 static struct regulator_ops cpr_corner_ops = {
 	.enable			= cpr_regulator_enable,
 	.disable		= cpr_regulator_disable,
 	.is_enabled		= cpr_regulator_is_enabled,
 	.set_voltage		= cpr_regulator_set_voltage_op,
 	.get_voltage		= cpr_regulator_get_voltage,
+	.list_corner_voltage	= cpr_regulator_list_corner_voltage,
 };
 
 #ifdef CONFIG_MSM8994_CPU_VOLTAGE_CONTROL
@@ -1196,17 +1221,19 @@ static int cpr_config(struct cpr_regulator *cpr_vreg, struct device *dev)
 	void __iomem *rbcpr_clk;
 	int size;
 
-	/* Use 19.2 MHz clock for CPR. */
-	rbcpr_clk = ioremap(cpr_vreg->rbcpr_clk_addr, 4);
-	if (!rbcpr_clk) {
-		cpr_err(cpr_vreg, "Unable to map rbcpr_clk\n");
-		return -EINVAL;
+	if (cpr_vreg->rbcpr_clk_addr) {
+		/* Use 19.2 MHz clock for CPR. */
+		rbcpr_clk = ioremap(cpr_vreg->rbcpr_clk_addr, 4);
+		if (!rbcpr_clk) {
+			cpr_err(cpr_vreg, "Unable to map rbcpr_clk\n");
+			return -EINVAL;
+		}
+		reg = readl_relaxed(rbcpr_clk);
+		reg &= ~RBCPR_CLK_SEL_MASK;
+		reg |= RBCPR_CLK_SEL_19P2_MHZ & RBCPR_CLK_SEL_MASK;
+		writel_relaxed(reg, rbcpr_clk);
+		iounmap(rbcpr_clk);
 	}
-	reg = readl_relaxed(rbcpr_clk);
-	reg &= ~RBCPR_CLK_SEL_MASK;
-	reg |= RBCPR_CLK_SEL_19P2_MHZ & RBCPR_CLK_SEL_MASK;
-	writel_relaxed(reg, rbcpr_clk);
-	iounmap(rbcpr_clk);
 
 	/* Disable interrupt and CPR */
 	cpr_write(cpr_vreg, REG_RBIF_IRQ_EN(cpr_vreg->irq_line), 0);
@@ -3978,11 +4005,8 @@ static int cpr_init_cpr(struct platform_device *pdev,
 	int rc = 0;
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "rbcpr_clk");
-	if (!res || !res->start) {
-		cpr_err(cpr_vreg, "missing rbcpr_clk address: res=%p\n", res);
-		return -EINVAL;
-	}
-	cpr_vreg->rbcpr_clk_addr = res->start;
+	if (res && res->start)
+		cpr_vreg->rbcpr_clk_addr = res->start;
 
 	rc = cpr_init_cpr_efuse(pdev, cpr_vreg);
 	if (rc)
@@ -4659,6 +4683,35 @@ static void cpr_debugfs_base_remove(void)
 
 #endif
 
+/**
+ * cpr_panic_callback() - panic notification callback function. This function
+ *		is invoked when a kernel panic occurs.
+ * @nfb:	Notifier block pointer of CPR regulator
+ * @event:	Value passed unmodified to notifier function
+ * @data:	Pointer passed unmodified to notifier function
+ *
+ * Return: NOTIFY_OK
+ */
+static int cpr_panic_callback(struct notifier_block *nfb,
+			unsigned long event, void *data)
+{
+	struct cpr_regulator *cpr_vreg = container_of(nfb,
+				struct cpr_regulator, panic_notifier);
+	int corner, fuse_corner, volt;
+
+	corner = cpr_vreg->corner;
+	fuse_corner = cpr_vreg->corner_map[corner];
+	if (cpr_is_allowed(cpr_vreg))
+		volt = cpr_vreg->last_volt[corner];
+	else
+		volt = cpr_vreg->open_loop_volt[corner];
+
+	cpr_err(cpr_vreg, "[corner:%d, fuse_corner:%d] = %d uV\n",
+		corner, fuse_corner, volt);
+
+	return NOTIFY_OK;
+}
+
 static int cpr_regulator_probe(struct platform_device *pdev)
 {
 	struct regulator_config reg_config = {};
@@ -4812,6 +4865,11 @@ static int cpr_regulator_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, cpr_vreg);
 	cpr_debugfs_init(cpr_vreg);
 
+	/* Register panic notification call back */
+	cpr_vreg->panic_notifier.notifier_call = cpr_panic_callback;
+	atomic_notifier_chain_register(&panic_notifier_list,
+			&cpr_vreg->panic_notifier);
+
 	mutex_lock(&cpr_regulator_list_mutex);
 	list_add(&cpr_vreg->list, &cpr_regulator_list);
 	mutex_unlock(&cpr_regulator_list_mutex);
@@ -4841,6 +4899,9 @@ static int cpr_regulator_remove(struct platform_device *pdev)
 
 		if (cpr_vreg->adj_cpus)
 			unregister_hotcpu_notifier(&cpr_vreg->cpu_notifier);
+
+		atomic_notifier_chain_unregister(&panic_notifier_list,
+			&cpr_vreg->panic_notifier);
 
 		cpr_apc_exit(cpr_vreg);
 		cpr_debugfs_remove(cpr_vreg);

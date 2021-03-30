@@ -49,10 +49,14 @@
 #define IPA_NUM_DESC_PER_SW_TX (2)
 #define IPA_GENERIC_RX_POOL_SZ 192
 
+#define IPA_TIMEOUT(value) (msecs_to_jiffies(value * 1000))
+
 #define IPADBG(fmt, args...) \
 	pr_debug(DRV_NAME " %s:%d " fmt, __func__, __LINE__, ## args)
 #define IPAERR(fmt, args...) \
 	pr_err(DRV_NAME " %s:%d " fmt, __func__, __LINE__, ## args)
+#define IPAERR_RL(fmt, args...) \
+	pr_err_ratelimited(DRV_NAME " %s:%d " fmt, __func__, __LINE__, ## args)
 
 #define WLAN_AMPDU_TX_EP 15
 #define WLAN_PROD_TX_EP  19

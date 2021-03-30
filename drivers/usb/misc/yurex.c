@@ -297,6 +297,7 @@ static int yurex_probe(struct usb_interface *interface, const struct usb_device_
 
 	/* save our data pointer in this interface device */
 	usb_set_intfdata(interface, dev);
+	dev->bbu = -1;
 
 	/* we can register the device now, as it is ready */
 	retval = usb_register_dev(interface, &yurex_class);
@@ -306,8 +307,6 @@ static int yurex_probe(struct usb_interface *interface, const struct usb_device_
 		usb_set_intfdata(interface, NULL);
 		goto error;
 	}
-
-	dev->bbu = -1;
 
 	dev_info(&interface->dev,
 		 "USB YUREX device now attached to Yurex #%d\n",
@@ -415,8 +414,7 @@ static int yurex_release(struct inode *inode, struct file *file)
 static ssize_t yurex_read(struct file *file, char *buffer, size_t count, loff_t *ppos)
 {
 	struct usb_yurex *dev;
-	int retval = 0;
-	int bytes_read = 0;
+	int len = 0;
 	char in_buffer[20];
 	unsigned long flags;
 
@@ -424,26 +422,16 @@ static ssize_t yurex_read(struct file *file, char *buffer, size_t count, loff_t 
 
 	mutex_lock(&dev->io_mutex);
 	if (!dev->interface) {		/* already disconnected */
-		retval = -ENODEV;
-		goto exit;
+		mutex_unlock(&dev->io_mutex);
+		return -ENODEV;
 	}
 
 	spin_lock_irqsave(&dev->lock, flags);
-	bytes_read = snprintf(in_buffer, 20, "%lld\n", dev->bbu);
+	len = snprintf(in_buffer, 20, "%lld\n", dev->bbu);
 	spin_unlock_irqrestore(&dev->lock, flags);
-
-	if (*ppos < bytes_read) {
-		if (copy_to_user(buffer, in_buffer + *ppos, bytes_read - *ppos))
-			retval = -EFAULT;
-		else {
-			retval = bytes_read - *ppos;
-			*ppos += bytes_read;
-		}
-	}
-
-exit:
 	mutex_unlock(&dev->io_mutex);
-	return retval;
+
+	return simple_read_from_buffer(buffer, count, ppos, in_buffer, len);
 }
 
 static ssize_t yurex_write(struct file *file, const char *user_buffer, size_t count, loff_t *ppos)
@@ -464,7 +452,7 @@ static ssize_t yurex_write(struct file *file, const char *user_buffer, size_t co
 		goto error;
 
 	mutex_lock(&dev->io_mutex);
-	if (!dev->interface) {		/* alreaday disconnected */
+	if (!dev->interface) {		/* already disconnected */
 		mutex_unlock(&dev->io_mutex);
 		retval = -ENODEV;
 		goto error;

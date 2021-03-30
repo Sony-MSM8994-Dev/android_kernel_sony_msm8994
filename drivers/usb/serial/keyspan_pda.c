@@ -62,6 +62,7 @@ struct keyspan_pda_private {
 /* For Xircom PGSDB9 and older Entregra version of the same device */
 #define XIRCOM_VENDOR_ID		0x085a
 #define XIRCOM_FAKE_ID			0x8027
+#define XIRCOM_FAKE_ID_2                0x8025 /* "PGMFHUB" serial */
 #define ENTREGRA_VENDOR_ID		0x1645
 #define ENTREGRA_FAKE_ID		0x8093
 
@@ -71,6 +72,7 @@ static const struct usb_device_id id_table_combined[] = {
 #endif
 #ifdef XIRCOM
 	{ USB_DEVICE(XIRCOM_VENDOR_ID, XIRCOM_FAKE_ID) },
+	{ USB_DEVICE(XIRCOM_VENDOR_ID, XIRCOM_FAKE_ID_2) },
 	{ USB_DEVICE(ENTREGRA_VENDOR_ID, ENTREGRA_FAKE_ID) },
 #endif
 	{ USB_DEVICE(KEYSPAN_VENDOR_ID, KEYSPAN_PDA_ID) },
@@ -94,6 +96,7 @@ static const struct usb_device_id id_table_fake[] = {
 #ifdef XIRCOM
 static const struct usb_device_id id_table_fake_xircom[] = {
 	{ USB_DEVICE(XIRCOM_VENDOR_ID, XIRCOM_FAKE_ID) },
+	{ USB_DEVICE(XIRCOM_VENDOR_ID, XIRCOM_FAKE_ID_2) },
 	{ USB_DEVICE(ENTREGRA_VENDOR_ID, ENTREGRA_FAKE_ID) },
 	{ }
 };
@@ -137,6 +140,7 @@ static void keyspan_pda_rx_interrupt(struct urb *urb)
 {
 	struct usb_serial_port *port = urb->context;
 	unsigned char *data = urb->transfer_buffer;
+	unsigned int len = urb->actual_length;
 	int retval;
 	int status = urb->status;
 	struct keyspan_pda_private *priv;
@@ -157,18 +161,26 @@ static void keyspan_pda_rx_interrupt(struct urb *urb)
 		goto exit;
 	}
 
+	if (len < 1) {
+		dev_warn(&port->dev, "short message received\n");
+		goto exit;
+	}
+
 	/* see if the message is data or a status interrupt */
 	switch (data[0]) {
 	case 0:
 		 /* rest of message is rx data */
-		if (urb->actual_length) {
-			tty_insert_flip_string(&port->port, data + 1,
-						urb->actual_length - 1);
-			tty_flip_buffer_push(&port->port);
-		}
+		if (len < 2)
+			break;
+		tty_insert_flip_string(&port->port, data + 1, len - 1);
+		tty_flip_buffer_push(&port->port);
 		break;
 	case 1:
 		/* status interrupt */
+		if (len < 3) {
+			dev_warn(&port->dev, "short interrupt message received\n");
+			break;
+		}
 		dev_dbg(&port->dev, "rx int, d1=%d, d2=%d\n", data[1], data[2]);
 		switch (data[1]) {
 		case 1: /* modemline change */
@@ -362,8 +374,10 @@ static int keyspan_pda_get_modem_info(struct usb_serial *serial,
 			     3, /* get pins */
 			     USB_TYPE_VENDOR|USB_RECIP_INTERFACE|USB_DIR_IN,
 			     0, 0, data, 1, 2000);
-	if (rc >= 0)
+	if (rc == 1)
 		*value = *data;
+	else if (rc >= 0)
+		rc = -EIO;
 
 	kfree(data);
 	return rc;

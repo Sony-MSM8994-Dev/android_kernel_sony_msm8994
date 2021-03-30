@@ -472,6 +472,9 @@ static void rndis_qc_response_available(void *_rndis)
 	if (atomic_inc_return(&rndis->notify_count) != 1)
 		return;
 
+	if (!rndis->notify->driver_data)
+		return;
+
 	/* Send RNDIS RESPONSE_AVAILABLE notification; a
 	 * USB_CDC_NOTIFY_RESPONSE_AVAILABLE "should" work too
 	 *
@@ -490,16 +493,25 @@ static void rndis_qc_response_available(void *_rndis)
 static void rndis_qc_response_complete(struct usb_ep *ep,
 					struct usb_request *req)
 {
-	struct f_rndis_qc		*rndis = req->context;
+	struct f_rndis_qc		*rndis;
 	int				status = req->status;
 	struct usb_composite_dev	*cdev;
+	struct usb_ep *notify_ep;
+
+	spin_lock(&rndis_lock);
+	rndis = _rndis_qc;
+	if (!rndis || !rndis->notify || !rndis->notify->driver_data) {
+		spin_unlock(&rndis_lock);
+		return;
+	}
 
 	if (!rndis->port.func.config || !rndis->port.func.config->cdev) {
 		pr_err("%s(): cdev or config is NULL.\n", __func__);
+		spin_unlock(&rndis_lock);
 		return;
-	} else {
-		cdev = rndis->port.func.config->cdev;
 	}
+
+	cdev = rndis->port.func.config->cdev;
 
 	/* after TX:
 	 *  - USB_CDC_GET_ENCAPSULATED_RESPONSE (ep0/control)
@@ -510,7 +522,7 @@ static void rndis_qc_response_complete(struct usb_ep *ep,
 	case -ESHUTDOWN:
 		/* connection gone */
 		atomic_set(&rndis->notify_count, 0);
-		break;
+		goto out;
 	default:
 		pr_info("RNDIS %s response error %d, %d/%d\n",
 			ep->name, status,
@@ -518,20 +530,30 @@ static void rndis_qc_response_complete(struct usb_ep *ep,
 		/* FALLTHROUGH */
 	case 0:
 		if (ep != rndis->notify)
-			break;
+			goto out;
 
 		/* handle multiple pending RNDIS_RESPONSE_AVAILABLE
 		 * notifications by resending until we're done
 		 */
 		if (atomic_dec_and_test(&rndis->notify_count))
-			break;
-		status = usb_ep_queue(rndis->notify, req, GFP_ATOMIC);
+			goto out;
+		notify_ep = rndis->notify;
+		spin_unlock(&rndis_lock);
+		status = usb_ep_queue(notify_ep, req, GFP_ATOMIC);
 		if (status) {
-			atomic_dec(&rndis->notify_count);
+			spin_lock(&rndis_lock);
+			if (!_rndis_qc)
+				goto out;
+			atomic_dec(&_rndis_qc->notify_count);
 			DBG(cdev, "notify/1 --> %d\n", status);
+			spin_unlock(&rndis_lock);
 		}
-		break;
 	}
+
+	return;
+
+out:
+	spin_unlock(&rndis_lock);
 }
 
 static void rndis_qc_command_complete(struct usb_ep *ep,
@@ -541,6 +563,13 @@ static void rndis_qc_command_complete(struct usb_ep *ep,
 	int				status;
 	rndis_init_msg_type		*buf;
 	u32		ul_max_xfer_size, dl_max_xfer_size;
+
+	spin_lock(&rndis_lock);
+	rndis = _rndis_qc;
+	if (!rndis || !rndis->notify || !rndis->notify->driver_data) {
+		spin_unlock(&rndis_lock);
+		return;
+	}
 
 	/* received RNDIS command from USB_CDC_SEND_ENCAPSULATED_COMMAND */
 	status = rndis_msg_parser(rndis->config, (u8 *) req->buf);
@@ -570,6 +599,7 @@ static void rndis_qc_command_complete(struct usb_ep *ep,
 				rndis_get_dl_max_xfer_size(rndis->config);
 		u_bam_data_set_dl_max_xfer_size(dl_max_xfer_size);
 	}
+	spin_unlock(&rndis_lock);
 }
 
 static int
@@ -758,13 +788,16 @@ static void rndis_qc_disable(struct usb_function *f)
 {
 	struct f_rndis_qc		*rndis = func_to_rndis_qc(f);
 	struct usb_composite_dev *cdev = f->config->cdev;
+	unsigned long flags;
 
 	if (!rndis->notify->driver_data)
 		return;
 
 	pr_info("rndis deactivated\n");
 
+	spin_lock_irqsave(&rndis_lock, flags);
 	rndis_uninit(rndis->config);
+	spin_unlock_irqrestore(&rndis_lock, flags);
 	bam_data_disconnect(&rndis->bam_port, USB_FUNC_RNDIS, rndis->port_num);
 	if (rndis->xport != USB_GADGET_XPORT_BAM2BAM_IPA)
 		gether_qc_disconnect_name(&rndis->port, "rndis0");
@@ -984,7 +1017,8 @@ rndis_qc_bind(struct usb_configuration *c, struct usb_function *f)
 	rndis->port.open = rndis_qc_open;
 	rndis->port.close = rndis_qc_close;
 
-	status = rndis_register(rndis_qc_response_available, rndis);
+	status = rndis_register(rndis_qc_response_available, rndis,
+			bam_data_flow_control_enable);
 	if (status < 0)
 		goto fail;
 	rndis->config = status;
@@ -1061,6 +1095,7 @@ rndis_qc_unbind(struct usb_configuration *c, struct usb_function *f)
 		usb_free_descriptors(f->hs_descriptors);
 	usb_free_descriptors(f->fs_descriptors);
 
+	c->cdev->gadget->bam2bam_func_enabled = false;
 	kfree(rndis->notify_req->buf);
 	usb_ep_free_request(rndis->notify, rndis->notify_req);
 
@@ -1083,26 +1118,17 @@ rndis_qc_unbind(struct usb_configuration *c, struct usb_function *f)
 	spin_unlock_irqrestore(&rndis_lock, flags);
 }
 
-bool is_rndis_ipa_supported(void)
-{
-	return rndis_ipa_supported;
-}
-
 void rndis_ipa_reset_trigger(void)
 {
 	struct f_rndis_qc *rndis;
-	unsigned long flags;
 
-	spin_lock_irqsave(&rndis_lock, flags);
 	rndis = _rndis_qc;
 	if (!rndis) {
 		pr_err("%s: No RNDIS instance", __func__);
-		spin_unlock_irqrestore(&rndis_lock, flags);
 		return;
 	}
 
 	rndis->net_ready_trigger = false;
-	spin_unlock_irqrestore(&rndis_lock, flags);
 }
 
 /*
@@ -1224,7 +1250,7 @@ rndis_qc_bind_config_vendor(struct usb_configuration *c, u8 ethaddr[ETH_ALEN],
 	if (rndis->xport == USB_GADGET_XPORT_BAM2BAM_IPA) {
 		gether_qc_get_macs(rndis_ipa_params.device_ethaddr,
 				rndis_ipa_params.host_ethaddr);
-		pr_debug("setting host_ethaddr=%pM, device_ethaddr=%pM\n",
+		pr_debug("setting host_ethaddr=%pKM, device_ethaddr=%pKM\n",
 			rndis_ipa_params.host_ethaddr,
 			rndis_ipa_params.device_ethaddr);
 		rndis_ipa_supported = true;
@@ -1293,6 +1319,7 @@ rndis_qc_bind_config_vendor(struct usb_configuration *c, u8 ethaddr[ETH_ALEN],
 			rndis_ipa_cleanup(rndis_ipa_params.private);
 		goto fail;
 	}
+	c->cdev->gadget->bam2bam_func_enabled = true;
 
 	_rndis_qc = rndis;
 

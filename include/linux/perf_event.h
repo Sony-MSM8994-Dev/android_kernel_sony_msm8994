@@ -48,6 +48,7 @@ struct perf_guest_info_callbacks {
 #include <linux/cpu.h>
 #include <linux/irq_work.h>
 #include <linux/static_key.h>
+#include <linux/jump_label_ratelimit.h>
 #include <linux/atomic.h>
 #include <linux/sysfs.h>
 #include <linux/perf_regs.h>
@@ -507,8 +508,9 @@ struct perf_cpu_context {
 	struct perf_event_context	*task_ctx;
 	int				active_oncpu;
 	int				exclusive;
+	struct hrtimer			hrtimer;
+	ktime_t				hrtimer_interval;
 	struct list_head		rotation_list;
-	int				jiffies_interval;
 	struct pmu			*unique_pmu;
 	struct perf_cgroup		*cgrp;
 };
@@ -822,11 +824,11 @@ static inline void perf_restore_debug_store(void)			{ }
 #define perf_output_put(handle, x) perf_output_copy((handle), &(x), sizeof(x))
 
 /*
- * This has to have a higher priority than migration_notifier in sched.c.
+ * This has to have a higher priority than migration_notifier in sched/core.c.
  */
 #define perf_cpu_notifier(fn)						\
 do {									\
-	static struct notifier_block fn##_nb __cpuinitdata =		\
+	static struct notifier_block fn##_nb =		\
 		{ .notifier_call = fn, .priority = CPU_PRI_PERF };	\
 	unsigned long cpu = smp_processor_id();				\
 	unsigned long flags;						\

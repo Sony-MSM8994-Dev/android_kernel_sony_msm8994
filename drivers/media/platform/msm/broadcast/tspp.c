@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -620,7 +620,8 @@ static void tspp_sps_complete_tlet(unsigned long data)
 			if (iovec.size == 0)
 				break;
 
-			if (iovec.addr != channel->waiting->sps.phys_base)
+			if (DESC_FULL_ADDR(iovec.flags, iovec.addr)
+			    != channel->waiting->sps.phys_base)
 				pr_err("tspp: buffer mismatch %pa",
 					&channel->waiting->sps.phys_base);
 
@@ -1082,7 +1083,7 @@ static int tspp_queue_buffer(struct tspp_channel *channel,
 	rc = sps_transfer_one(channel->pipe,
 		buffer->sps.phys_base,
 		buffer->sps.size,
-		channel->pdev,
+		flags ? channel->pdev : NULL,
 		flags);
 	if (rc < 0)
 		return rc;

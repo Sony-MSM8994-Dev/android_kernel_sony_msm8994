@@ -3529,11 +3529,12 @@ void kfree(const void *x)
 }
 EXPORT_SYMBOL(kfree);
 
+#define SHRINK_PROMOTE_MAX 32
+
 /*
- * kmem_cache_shrink removes empty slabs from the partial lists and sorts
- * the remaining slabs by the number of items in use. The slabs with the
- * most items in use come first. New allocations will then fill those up
- * and thus they can be removed from the partial lists.
+ * kmem_cache_shrink discards empty slabs and promotes the slabs filled
+ * up most to the head of the partial lists. New allocations will then
+ * fill those up and thus they can be removed from the partial lists.
  *
  * The slabs with the least items are placed last. This results in them
  * being allocated from last increasing the chance that the last objects
@@ -3546,13 +3547,10 @@ int kmem_cache_shrink(struct kmem_cache *s)
 	struct kmem_cache_node *n;
 	struct page *page;
 	struct page *t;
-	int objects = oo_objects(s->max);
-	struct list_head *slabs_by_inuse =
-		kmalloc(sizeof(struct list_head) * objects, GFP_KERNEL);
+	struct list_head discard;
+	struct list_head promote[SHRINK_PROMOTE_MAX];
 	unsigned long flags;
-
-	if (!slabs_by_inuse)
-		return -ENOMEM;
+	int ret = 0;
 
 	flush_all(s);
 	for_each_node_state(node, N_NORMAL_MEMORY) {
@@ -3561,39 +3559,52 @@ int kmem_cache_shrink(struct kmem_cache *s)
 		if (!n->nr_partial)
 			continue;
 
-		for (i = 0; i < objects; i++)
-			INIT_LIST_HEAD(slabs_by_inuse + i);
+		INIT_LIST_HEAD(&discard);
+		for (i = 0; i < SHRINK_PROMOTE_MAX; i++)
+			INIT_LIST_HEAD(promote + i);
 
 		spin_lock_irqsave(&n->list_lock, flags);
 
 		/*
-		 * Build lists indexed by the items in use in each slab.
+		 * Build lists of slabs to discard or promote.
 		 *
 		 * Note that concurrent frees may occur while we hold the
 		 * list_lock. page->inuse here is the upper limit.
 		 */
 		list_for_each_entry_safe(page, t, &n->partial, lru) {
-			list_move(&page->lru, slabs_by_inuse + page->inuse);
-			if (!page->inuse)
+			int free = page->objects - page->inuse;
+
+			/* Do not reread page->inuse */
+			barrier();
+
+			/* We do not keep full slabs on the list */
+			BUG_ON(free <= 0);
+
+			if (free == page->objects) {
+				list_move(&page->lru, &discard);
 				n->nr_partial--;
+			} else if (free <= SHRINK_PROMOTE_MAX)
+				list_move(&page->lru, promote + free - 1);
 		}
 
 		/*
-		 * Rebuild the partial list with the slabs filled up most
-		 * first and the least used slabs at the end.
+		 * Promote the slabs filled up most to the head of the
+		 * partial list.
 		 */
-		for (i = objects - 1; i > 0; i--)
-			list_splice(slabs_by_inuse + i, n->partial.prev);
+		for (i = SHRINK_PROMOTE_MAX - 1; i >= 0; i--)
+			list_splice(promote + i, &n->partial);
 
 		spin_unlock_irqrestore(&n->list_lock, flags);
 
 		/* Release empty slabs */
-		list_for_each_entry_safe(page, t, slabs_by_inuse, lru)
+		list_for_each_entry_safe(page, t, &discard, lru)
 			discard_slab(s, page);
+
+		if (slabs_node(s, node))
+			ret = 1;
 	}
 
-	kfree(slabs_by_inuse);
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL(kmem_cache_shrink);
 
@@ -3930,7 +3941,7 @@ int __kmem_cache_create(struct kmem_cache *s, unsigned long flags)
  * Use the cpu notifier to insure that the cpu slabs are flushed when
  * necessary.
  */
-static int __cpuinit slab_cpuup_callback(struct notifier_block *nfb,
+static int slab_cpuup_callback(struct notifier_block *nfb,
 		unsigned long action, void *hcpu)
 {
 	long cpu = (long)hcpu;
@@ -3956,7 +3967,7 @@ static int __cpuinit slab_cpuup_callback(struct notifier_block *nfb,
 	return NOTIFY_OK;
 }
 
-static struct notifier_block __cpuinitdata slab_notifier = {
+static struct notifier_block slab_notifier = {
 	.notifier_call = slab_cpuup_callback
 };
 
@@ -4320,18 +4331,16 @@ static int list_locations(struct kmem_cache *s, char *buf,
 
 		if (num_online_cpus() > 1 &&
 				!cpumask_empty(to_cpumask(l->cpus)) &&
-				len < PAGE_SIZE - 60) {
-			len += sprintf(buf + len, " cpus=");
-			len += cpulist_scnprintf(buf + len, PAGE_SIZE - len - 50,
-						 to_cpumask(l->cpus));
-		}
+				len < PAGE_SIZE - 60)
+			len += scnprintf(buf + len, PAGE_SIZE - len - 50,
+					 " cpus=%*pbl",
+					 cpumask_pr_args(to_cpumask(l->cpus)));
 
 		if (nr_online_nodes > 1 && !nodes_empty(l->nodes) &&
-				len < PAGE_SIZE - 60) {
-			len += sprintf(buf + len, " nodes=");
-			len += nodelist_scnprintf(buf + len, PAGE_SIZE - len - 50,
-					l->nodes);
-		}
+				len < PAGE_SIZE - 60)
+			len += scnprintf(buf + len, PAGE_SIZE - len - 50,
+					 " nodes=%*pbl",
+					 nodemask_pr_args(&l->nodes));
 
 		len += sprintf(buf + len, "\n");
 	}
@@ -4927,12 +4936,9 @@ static ssize_t shrink_show(struct kmem_cache *s, char *buf)
 static ssize_t shrink_store(struct kmem_cache *s,
 			const char *buf, size_t length)
 {
-	if (buf[0] == '1') {
-		int rc = kmem_cache_shrink(s);
-
-		if (rc)
-			return rc;
-	} else
+	if (buf[0] == '1')
+		kmem_cache_shrink(s);
+	else
 		return -EINVAL;
 	return length;
 }
@@ -5210,6 +5216,7 @@ static void memcg_propagate_slab_attrs(struct kmem_cache *s)
 		char mbuf[64];
 		char *buf;
 		struct slab_attribute *attr = to_slab_attr(slab_attrs[i]);
+		ssize_t len;
 
 		if (!attr || !attr->store || !attr->show)
 			continue;
@@ -5234,8 +5241,9 @@ static void memcg_propagate_slab_attrs(struct kmem_cache *s)
 			buf = buffer;
 		}
 
-		attr->show(s->memcg_params->root_cache, buf);
-		attr->store(s, buf, strlen(buf));
+		len = attr->show(s->memcg_params->root_cache, buf);
+		if (len > 0)
+			attr->store(s, buf, len);
 	}
 
 	if (buffer)

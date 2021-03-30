@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -1128,6 +1128,11 @@ int smd_pkt_open(struct inode *inode, struct file *file)
 				open_wait_rem = jiffies_to_msecs(r);
 			if (r == 0)
 				r = -ETIMEDOUT;
+			if (r == -ERESTARTSYS) {
+				pr_info_ratelimited("%s: wait on smd_pkt_dev id:%d allocation interrupted\n",
+					__func__, smd_pkt_devp->i);
+				goto release_pil;
+			}
 			if (r < 0) {
 				pr_err_ratelimited("%s: wait on smd_pkt_dev id:%d allocation failed rc:%d\n",
 					__func__, smd_pkt_devp->i, r);
@@ -1151,14 +1156,19 @@ int smd_pkt_open(struct inode *inode, struct file *file)
 				smd_pkt_devp->ch_opened_wait_queue,
 				smd_pkt_devp->is_open,
 				msecs_to_jiffies(open_wait_rem));
-		if (r == 0) {
+		if (r == 0)
 			r = -ETIMEDOUT;
+
+		if (r < 0) {
 			/* close the ch to sync smd's state with smd_pkt */
 			smd_close(smd_pkt_devp->ch);
 			smd_pkt_devp->ch = NULL;
 		}
 
-		if (r < 0) {
+		if (r == -ERESTARTSYS) {
+			pr_info_ratelimited("%s: wait on smd_pkt_dev id:%d OPEN interrupted\n",
+				__func__, smd_pkt_devp->i);
+		} else if (r < 0) {
 			pr_err_ratelimited("%s: wait on smd_pkt_dev id:%d OPEN event failed rc:%d\n",
 				__func__, smd_pkt_devp->i, r);
 		} else if (!smd_pkt_devp->is_open) {
@@ -1178,8 +1188,10 @@ int smd_pkt_open(struct inode *inode, struct file *file)
 		smd_pkt_devp->ref_cnt++;
 	}
 release_pil:
-	if (peripheral && (r < 0))
+	if (peripheral && (r < 0)) {
 		subsystem_put(smd_pkt_devp->pil);
+		smd_pkt_devp->pil = NULL;
+	}
 
 release_pd:
 	if (r < 0)
@@ -1195,6 +1207,7 @@ int smd_pkt_release(struct inode *inode, struct file *file)
 {
 	int r = 0;
 	struct smd_pkt_dev *smd_pkt_devp = file->private_data;
+	unsigned long flags;
 
 	if (!smd_pkt_devp) {
 		pr_err_ratelimited("%s on a NULL device\n", __func__);
@@ -1220,7 +1233,12 @@ int smd_pkt_release(struct inode *inode, struct file *file)
 			subsystem_put(smd_pkt_devp->pil);
 		smd_pkt_devp->has_reset = 0;
 		smd_pkt_devp->do_reset_notification = 0;
-		smd_pkt_devp->ws_locked = 0;
+		spin_lock_irqsave(&smd_pkt_devp->pa_spinlock, flags);
+		if (smd_pkt_devp->ws_locked) {
+			__pm_relax(&smd_pkt_devp->pa_ws);
+			smd_pkt_devp->ws_locked = 0;
+		}
+		spin_unlock_irqrestore(&smd_pkt_devp->pa_spinlock, flags);
 	}
 	mutex_unlock(&smd_pkt_devp->tx_lock);
 	mutex_unlock(&smd_pkt_devp->rx_lock);

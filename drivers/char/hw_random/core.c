@@ -323,8 +323,12 @@ static int hwrng_fillfn(void *unused)
 	long rc;
 
 	while (!kthread_should_stop()) {
-		if (!current_rng)
+		mutex_lock(&rng_mutex);
+		if (!current_rng) {
+			mutex_unlock(&rng_mutex);
 			break;
+		}
+		mutex_unlock(&rng_mutex);
 		rc = rng_get_data(current_rng, rng_fillbuf,
 				  rng_buffer_size(), 1);
 		if (rc <= 0) {
@@ -335,22 +339,21 @@ static int hwrng_fillfn(void *unused)
 		add_hwgenerator_randomness((void *)rng_fillbuf, rc,
 					   rc * current_quality * 8 >> 10);
 	}
-	hwrng_fill = 0;
+	hwrng_fill = NULL;
 	return 0;
 }
 
 static void start_khwrngd(void)
 {
 	hwrng_fill = kthread_run(hwrng_fillfn, NULL, "hwrng");
-	if (hwrng_fill == ERR_PTR(-ENOMEM)) {
-		pr_err("hwrng_fill thread creation failed");
+	if (IS_ERR(hwrng_fill)) {
+		pr_err("hwrng_fill thread creation failed\n");
 		hwrng_fill = NULL;
 	}
 }
 
 int hwrng_register(struct hwrng *rng)
 {
-	int must_register_misc;
 	int err = -EINVAL;
 	struct hwrng *old_rng, *tmp;
 
@@ -382,7 +385,6 @@ int hwrng_register(struct hwrng *rng)
 			goto out_unlock;
 	}
 
-	must_register_misc = (current_rng == NULL);
 	old_rng = current_rng;
 	if (!old_rng) {
 		err = hwrng_init(rng);
@@ -391,13 +393,11 @@ int hwrng_register(struct hwrng *rng)
 		current_rng = rng;
 	}
 	err = 0;
-	if (must_register_misc) {
+	if (!old_rng) {
 		err = register_miscdev();
 		if (err) {
-			if (!old_rng) {
-				hwrng_cleanup(rng);
-				current_rng = NULL;
-			}
+			hwrng_cleanup(rng);
+			current_rng = NULL;
 			goto out_unlock;
 		}
 	}

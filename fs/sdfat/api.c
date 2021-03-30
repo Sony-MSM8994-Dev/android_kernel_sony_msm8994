@@ -620,7 +620,6 @@ s32 fsapi_dfr_check_dfr_on(struct inode *inode, loff_t start, loff_t end, s32 ca
 EXPORT_SYMBOL(fsapi_dfr_check_dfr_on);
 
 
-
 #ifdef CONFIG_SDFAT_DFR_DEBUG
 void fsapi_dfr_spo_test(struct super_block *sb, int flag, const char *caller)
 {

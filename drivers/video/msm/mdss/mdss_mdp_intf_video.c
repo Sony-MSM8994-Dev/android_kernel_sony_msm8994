@@ -371,8 +371,10 @@ static int mdss_mdp_video_add_vsync_handler(struct mdss_mdp_ctl *ctl,
 		irq_en = true;
 	}
 	spin_unlock_irqrestore(&ctx->vsync_lock, flags);
-	if (irq_en)
+	if (irq_en) {
+		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
 		video_vsync_irq_enable(ctl, false);
+	}
 exit:
 	return ret;
 }
@@ -399,8 +401,10 @@ static int mdss_mdp_video_remove_vsync_handler(struct mdss_mdp_ctl *ctl,
 		irq_dis = true;
 	}
 	spin_unlock_irqrestore(&ctx->vsync_lock, flags);
-	if (irq_dis)
+	if (irq_dis) {
 		video_vsync_irq_disable(ctl);
+		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
+	}
 	return 0;
 }
 
@@ -527,6 +531,7 @@ static int mdss_mdp_video_stop(struct mdss_mdp_ctl *ctl, int panel_power_state)
 	intfs_num = ctl->intf_num - MDSS_MDP_INTF0;
 	ret = mdss_mdp_video_intfs_stop(ctl, ctl->panel_data, intfs_num);
 	if (IS_ERR_VALUE(ret)) {
+		mutex_unlock(&ctl->offlock);
 		pr_err("unable to stop video interface: %d\n", ret);
 		return ret;
 	}
@@ -631,7 +636,7 @@ static int mdss_mdp_video_wait4comp(struct mdss_mdp_ctl *ctl, void *arg)
 		if (rc == 0) {
 			pr_warn("vsync wait timeout %d, fallback to poll mode\n",
 					ctl->num);
-			ctx->polling_en++;
+			ctx->polling_en = true;
 			rc = mdss_mdp_video_pollwait(ctl);
 		} else {
 			rc = 0;
@@ -1115,7 +1120,9 @@ int mdss_mdp_video_reconfigure_splash_done(struct mdss_mdp_ctl *ctl,
 
 		mdp_video_write(ctx, MDSS_MDP_REG_INTF_TIMING_ENGINE_EN, 0);
 		/* wait for 1 VSYNC for the pipe to be unstaged */
-		msleep(20);
+		mdss_mdp_video_wait4comp(ctl, NULL);
+		if (sctl)
+			mdss_mdp_video_wait4comp(sctl, NULL);
 
 		ret = mdss_mdp_ctl_intf_event(ctl,
 			MDSS_EVENT_CONT_SPLASH_FINISH, NULL);

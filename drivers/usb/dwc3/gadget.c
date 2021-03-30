@@ -397,11 +397,11 @@ int dwc3_send_gadget_generic_command(struct dwc3 *dwc, int cmd, u32 param)
 					DWC3_DGCMD_STATUS(reg));
 			if (DWC3_DGCMD_STATUS(reg)) {
 				ret = -EINVAL;
-			        break;
+				break;
+			}
+			ret = 0;
+			break;
 		}
-                ret = 0;
-		break;
-	}
 
 		/*
 		 * We can't sleep here, because it's also called from
@@ -441,9 +441,9 @@ int dwc3_send_gadget_ep_cmd(struct dwc3 *dwc, unsigned ep,
 		if (!(reg & DWC3_DEPCMD_CMDACT)) {
 			dev_vdbg(dwc->dev, "Command Complete --> %d\n",
 					DWC3_DEPCMD_STATUS(reg));
-			if (DWC3_DEPCMD_STATUS(reg)){
-                                ret = -EINVAL;
-                        	break;
+			if (DWC3_DEPCMD_STATUS(reg)) {
+				ret = -EINVAL;
+				break;
 			}
 
 			/* SW issues START TRANSFER command to isochronous ep
@@ -471,8 +471,10 @@ int dwc3_send_gadget_ep_cmd(struct dwc3 *dwc, unsigned ep,
 			ret = -ETIMEDOUT;
 			break;
 		}
-
-		udelay(1);
+		if ((cmd & DWC3_DEPCMD_SETTRANSFRESOURCE))
+			udelay(20);
+		else
+			udelay(1);
 	} while (1);
 
 	return ret;
@@ -498,7 +500,7 @@ static int dwc3_alloc_trb_pool(struct dwc3_ep *dep)
 
 	dep->trb_pool = dma_zalloc_coherent(dwc->dev,
 			sizeof(struct dwc3_trb) * DWC3_TRB_NUM,
-			&dep->trb_pool_dma, GFP_KERNEL);
+			&dep->trb_pool_dma, GFP_ATOMIC);
 	if (!dep->trb_pool) {
 		dev_err(dep->dwc->dev, "failed to allocate trb pool for %s\n",
 				dep->name);
@@ -741,13 +743,6 @@ static int __dwc3_gadget_ep_disable(struct dwc3_ep *dep)
 	dep->type = 0;
 	dep->flags = 0;
 
-	/*
-	 * Clean up ep ring to avoid getting xferInProgress due to stale trbs
-	 * with HWO bit set from previous composition when update transfer cmd
-	 * is issued.
-	 */
-	memset(&dep->trb_pool[0], 0, sizeof(struct dwc3_trb) * DWC3_TRB_NUM);
-	dbg_event(dep->number, "Clr_TRB", 0);
 	return 0;
 }
 
@@ -813,6 +808,10 @@ static int dwc3_gadget_ep_enable(struct usb_ep *ep,
 
 	dev_vdbg(dwc->dev, "Enabling %s\n", dep->name);
 
+	ret = dwc3_alloc_trb_pool(dep);
+	if (ret)
+		return ret;
+
 	spin_lock_irqsave(&dwc->lock, flags);
 	ret = __dwc3_gadget_ep_enable(dep, desc, ep->comp_desc, false);
 	dbg_event(dep->number, "ENABLE", ret);
@@ -850,6 +849,8 @@ static int dwc3_gadget_ep_disable(struct usb_ep *ep)
 	ret = __dwc3_gadget_ep_disable(dep);
 	dbg_event(dep->number, "DISABLE", ret);
 	spin_unlock_irqrestore(&dwc->lock, flags);
+
+	dwc3_free_trb_pool(dep);
 
 	return ret;
 }
@@ -2423,17 +2424,11 @@ static int dwc3_gadget_init_hw_endpoints(struct dwc3 *dwc,
 			if (!epnum)
 				dwc->gadget.ep0 = &dep->endpoint;
 		} else {
-			int		ret;
-
 			dep->endpoint.maxpacket = 1024;
 			dep->endpoint.max_streams = 15;
 			dep->endpoint.ops = &dwc3_gadget_ep_ops;
 			list_add_tail(&dep->endpoint.ep_list,
 					&dwc->gadget.ep_list);
-
-			ret = dwc3_alloc_trb_pool(dep);
-			if (ret)
-				return ret;
 		}
 
 		INIT_LIST_HEAD(&dep->request_list);
@@ -2487,7 +2482,8 @@ static void dwc3_gadget_free_endpoints(struct dwc3 *dwc)
 		 * with all sorts of bugs when removing dwc3.ko.
 		 */
 		if (epnum != 0 && epnum != 1) {
-			dwc3_free_trb_pool(dep);
+			if (dep->trb_pool)
+				dwc3_free_trb_pool(dep);
 			list_del(&dep->endpoint.ep_list);
 		}
 
@@ -3140,6 +3136,8 @@ static void dwc3_gadget_conndone_interrupt(struct dwc3 *dwc)
 		break;
 	}
 
+	dwc->eps[1]->endpoint.maxpacket = dwc->gadget.ep0->maxpacket;
+
 	/* Enable USB2 LPM Capability */
 
 	if ((dwc->revision > DWC3_REVISION_194A)
@@ -3601,7 +3599,6 @@ static irqreturn_t dwc3_thread_interrupt(int irq, void *_dwc)
 	dwc->bh_completion_time[dwc->bh_dbg_index] = temp_time;
 	dwc->bh_dbg_index = (dwc->bh_dbg_index + 1) % 10;
 
-	pm_runtime_put(dwc->dev);
 	return ret;
 }
 
@@ -3627,7 +3624,6 @@ static void dwc3_interrupt_bh(unsigned long param)
 {
 	struct dwc3 *dwc = (struct dwc3 *) param;
 
-	pm_runtime_get(dwc->dev);
 	dwc3_thread_interrupt(dwc->irq, dwc);
 	enable_irq(dwc->irq);
 }

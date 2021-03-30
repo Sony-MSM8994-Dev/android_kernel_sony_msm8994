@@ -878,7 +878,7 @@ static struct mdss_mdp_pipe *mdss_mdp_pipe_init(struct mdss_mdp_mixer *mixer,
 
 	for (i = off; i < npipes; i++) {
 		pipe = pipe_pool + i;
-		if (atomic_read(&pipe->kref.refcount) == 0) {
+		if (pipe && atomic_read(&pipe->kref.refcount) == 0) {
 			pipe->mixer_left = mixer;
 			break;
 		}
@@ -905,8 +905,6 @@ static struct mdss_mdp_pipe *mdss_mdp_pipe_init(struct mdss_mdp_mixer *mixer,
 
 	if (pipe) {
 		pr_debug("type=%x   pnum=%d\n", pipe->type, pipe->num);
-		mutex_init(&pipe->pp_res.hist.hist_mutex);
-		spin_lock_init(&pipe->pp_res.hist.hist_lock);
 		mdss_mdp_init_pipe_params(pipe);
 		is_realtime = !((mixer->ctl->intf_num == MDSS_MDP_NO_INTF)
 				|| mixer->rotator_mode);
@@ -928,7 +926,7 @@ static struct mdss_mdp_pipe *mdss_mdp_pipe_init(struct mdss_mdp_mixer *mixer,
 
 cursor_done:
 	if (!pipe)
-		pr_err("no %d type pipes available\n", type);
+		pr_debug("no %d type pipes available\n", type);
 
 	return pipe;
 }
@@ -1049,7 +1047,7 @@ static void mdss_mdp_pipe_free(struct kref *kref)
 	mdss_mdp_pipe_panic_signal_ctrl(pipe, false);
 	if (pipe->play_cnt) {
 		mdss_mdp_pipe_fetch_halt(pipe);
-		mdss_mdp_pipe_sspp_term(pipe);
+		mdss_mdp_pipe_pp_clear(pipe);
 		mdss_mdp_smp_free(pipe);
 	} else {
 		mdss_mdp_smp_unreserve(pipe);
@@ -1706,7 +1704,7 @@ static int mdss_mdp_pipe_solidfill_setup(struct mdss_mdp_pipe *pipe)
 
 	/* support ARGB color format only */
 	unpack = (C3_ALPHA << 24) | (C2_R_Cr << 16) |
-		(C1_B_Cb << 8) | (C0_G_Y << 0);
+		(C0_G_Y << 8) | (C1_B_Cb << 0);
 	mdss_mdp_pipe_write(pipe, MDSS_MDP_REG_SSPP_SRC_FORMAT, format);
 	mdss_mdp_pipe_write(pipe, MDSS_MDP_REG_SSPP_SRC_CONSTANT_COLOR,
 		pipe->bg_color);

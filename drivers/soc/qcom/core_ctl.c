@@ -63,6 +63,7 @@ struct cpu_data {
 	unsigned int min_cpus;
 	unsigned int max_cpus;
 	unsigned int offline_delay_ms;
+	unsigned int online_delay_ms;
 	unsigned int busy_up_thres[MAX_CPUS_PER_GROUP];
 	unsigned int busy_down_thres[MAX_CPUS_PER_GROUP];
 	unsigned int online_cpus;
@@ -81,6 +82,8 @@ struct cpu_data {
 	struct task_struct *hotplug_thread;
 	struct kobject kobj;
 	struct list_head pending_lru;
+	bool disabled;
+	bool always_online_cpu;
 };
 
 static DEFINE_PER_CPU(struct cpu_data, cpu_state);
@@ -100,7 +103,7 @@ static ssize_t store_min_cpus(struct cpu_data *state,
 {
 	unsigned int val;
 
-	if (sscanf(buf, "%u\n", &val) != 1)
+	if (kstrtouint(buf, 0, &val))
 		return -EINVAL;
 
 	state->min_cpus = min(val, state->max_cpus);
@@ -119,7 +122,7 @@ static ssize_t store_max_cpus(struct cpu_data *state,
 {
 	unsigned int val;
 
-	if (sscanf(buf, "%u\n", &val) != 1)
+	if (kstrtouint(buf, 0, &val))
 		return -EINVAL;
 
 	val = min(val, state->num_cpus);
@@ -140,10 +143,24 @@ static ssize_t store_offline_delay_ms(struct cpu_data *state,
 {
 	unsigned int val;
 
-	if (sscanf(buf, "%u\n", &val) != 1)
+	if (kstrtouint(buf, 0, &val))
 		return -EINVAL;
 
 	state->offline_delay_ms = val;
+	apply_need(state);
+
+	return count;
+}
+
+static ssize_t store_online_delay_ms(struct cpu_data *state,
+					const char *buf, size_t count)
+{
+	unsigned int val;
+
+	if (kstrtouint(buf, 0, &val))
+		return -EINVAL;
+
+	state->online_delay_ms = val;
 	apply_need(state);
 
 	return count;
@@ -159,7 +176,7 @@ static ssize_t store_task_thres(struct cpu_data *state,
 {
 	unsigned int val;
 
-	if (sscanf(buf, "%u\n", &val) != 1)
+	if (kstrtouint(buf, 0, &val))
 		return -EINVAL;
 
 	if (val < state->num_cpus)
@@ -176,13 +193,18 @@ static ssize_t show_offline_delay_ms(struct cpu_data *state, char *buf)
 	return snprintf(buf, PAGE_SIZE, "%u\n", state->offline_delay_ms);
 }
 
+static ssize_t show_online_delay_ms(struct cpu_data *state, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%u\n", state->online_delay_ms);
+}
+
 static ssize_t store_busy_up_thres(struct cpu_data *state,
 					const char *buf, size_t count)
 {
 	unsigned int val[MAX_CPUS_PER_GROUP];
 	int ret, i;
 
-	ret = sscanf(buf, "%u %u %u %u\n", &val[0], &val[1], &val[2], &val[3]);
+	ret = sscanf(buf, "%u %u %u %u", &val[0], &val[1], &val[2], &val[3]);
 	if (ret != 1 && ret != state->num_cpus)
 		return -EINVAL;
 
@@ -213,7 +235,7 @@ static ssize_t store_busy_down_thres(struct cpu_data *state,
 	unsigned int val[MAX_CPUS_PER_GROUP];
 	int ret, i;
 
-	ret = sscanf(buf, "%u %u %u %u\n", &val[0], &val[1], &val[2], &val[3]);
+	ret = sscanf(buf, "%u %u %u %u", &val[0], &val[1], &val[2], &val[3]);
 	if (ret != 1 && ret != state->num_cpus)
 		return -EINVAL;
 
@@ -243,7 +265,7 @@ static ssize_t store_is_big_cluster(struct cpu_data *state,
 {
 	unsigned int val;
 
-	if (sscanf(buf, "%u\n", &val) != 1)
+	if (kstrtouint(buf, 0, &val))
 		return -EINVAL;
 
 	state->is_big_cluster = val ? 1 : 0;
@@ -313,6 +335,9 @@ static ssize_t show_global_state(struct cpu_data *state, char *buf)
 					"\tAvail CPUs: %u\n", c->avail_cpus);
 		count += snprintf(buf + count, PAGE_SIZE - count,
 					"\tNeed CPUs: %u\n", c->need_cpus);
+		count += snprintf(buf + count, PAGE_SIZE - count,
+					"\tStatus: %s\n",
+					c->disabled ? "disabled" : "enabled");
 	}
 
 	return count;
@@ -326,7 +351,7 @@ static ssize_t store_not_preferred(struct cpu_data *state,
 	unsigned int val[MAX_CPUS_PER_GROUP];
 	int ret;
 
-	ret = sscanf(buf, "%u %u %u %u\n", &val[0], &val[1], &val[2], &val[3]);
+	ret = sscanf(buf, "%u %u %u %u", &val[0], &val[1], &val[2], &val[3]);
 	if (ret != 1 && ret != state->num_cpus)
 		return -EINVAL;
 
@@ -359,6 +384,74 @@ static ssize_t show_not_preferred(struct cpu_data *state, char *buf)
 	return count;
 }
 
+static ssize_t store_disable(struct cpu_data *state,
+				const char *buf, size_t count)
+{
+	unsigned int val;
+
+	if (kstrtouint(buf, 0, &val))
+		return -EINVAL;
+
+	val = !!val;
+
+	if (state->disabled == val)
+		return count;
+
+	state->disabled = val;
+
+	if (!state->disabled)
+		wake_up_hotplug_thread(state);
+
+
+	return count;
+}
+
+static ssize_t show_disable(struct cpu_data *state, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%u\n", state->disabled);
+}
+
+static ssize_t store_always_online_cpu(struct cpu_data *state,
+				const char *buf, size_t count)
+{
+	struct cpu_data *c;
+	unsigned int i, first_cpu;
+	unsigned int val[MAX_CPUS_PER_GROUP];
+	int ret;
+
+	ret = sscanf(buf, "%u %u %u %u", &val[0], &val[1], &val[2], &val[3]);
+	if (ret != 1 && ret != state->num_cpus)
+		return -EINVAL;
+
+	first_cpu = state->first_cpu;
+
+	for (i = 0; i < state->num_cpus; i++) {
+		c = &per_cpu(cpu_state, first_cpu);
+		c->always_online_cpu = val[i];
+		first_cpu++;
+	}
+
+	return count;
+}
+
+static ssize_t show_always_online_cpu(struct cpu_data *state, char *buf)
+{
+	struct cpu_data *c;
+	ssize_t count = 0;
+	unsigned int i, first_cpu;
+
+	first_cpu = state->first_cpu;
+
+	for (i = 0; i < state->num_cpus; i++) {
+		c = &per_cpu(cpu_state, first_cpu);
+		count += snprintf(buf + count, PAGE_SIZE - count,
+				"\tCPU:%d %u\n", first_cpu, c->always_online_cpu);
+		first_cpu++;
+	}
+
+	return count;
+}
+
 struct core_ctl_attr {
 	struct attribute attr;
 	ssize_t (*show)(struct cpu_data *, char *);
@@ -376,6 +469,7 @@ __ATTR(_name, 0644, show_##_name, store_##_name)
 core_ctl_attr_rw(min_cpus);
 core_ctl_attr_rw(max_cpus);
 core_ctl_attr_rw(offline_delay_ms);
+core_ctl_attr_rw(online_delay_ms);
 core_ctl_attr_rw(busy_up_thres);
 core_ctl_attr_rw(busy_down_thres);
 core_ctl_attr_rw(task_thres);
@@ -385,11 +479,14 @@ core_ctl_attr_ro(need_cpus);
 core_ctl_attr_ro(online_cpus);
 core_ctl_attr_ro(global_state);
 core_ctl_attr_rw(not_preferred);
+core_ctl_attr_rw(disable);
+core_ctl_attr_rw(always_online_cpu);
 
 static struct attribute *default_attrs[] = {
 	&min_cpus.attr,
 	&max_cpus.attr,
 	&offline_delay_ms.attr,
+	&online_delay_ms.attr,
 	&busy_up_thres.attr,
 	&busy_down_thres.attr,
 	&task_thres.attr,
@@ -399,6 +496,8 @@ static struct attribute *default_attrs[] = {
 	&online_cpus.attr,
 	&global_state.attr,
 	&not_preferred.attr,
+	&disable.attr,
+	&always_online_cpu.attr,
 	NULL
 };
 
@@ -552,6 +651,7 @@ static bool eval_need(struct cpu_data *f)
 	unsigned int need_cpus = 0, last_need, thres_idx;
 	int ret = 0;
 	bool need_flag = false;
+	s64 elapsed;
 	s64 now;
 
 	if (unlikely(!f->inited))
@@ -578,10 +678,15 @@ static bool eval_need(struct cpu_data *f)
 		return 0;
 	}
 
+	elapsed = now - f->need_ts;
 	if (need_cpus > last_need) {
-		ret = 1;
+		if (elapsed >= f->online_delay_ms) {
+			ret = 1;
+		} else {
+			mod_timer(&f->timer, jiffies +
+				  msecs_to_jiffies(f->online_delay_ms));
+		}
 	} else if (need_cpus < last_need) {
-		s64 elapsed = now - f->need_ts;
 		if (elapsed >= f->offline_delay_ms) {
 			ret = 1;
 		} else {
@@ -642,6 +747,9 @@ static void wake_up_hotplug_thread(struct cpu_data *state)
 	struct cpu_data *pcpu;
 	bool no_wakeup = false;
 
+	if (unlikely(state->disabled))
+		return;
+
 	for_each_possible_cpu(cpu) {
 		pcpu = &per_cpu(cpu_state, cpu);
 		if (cpu != pcpu->first_cpu)
@@ -670,7 +778,7 @@ static void core_ctl_timer_func(unsigned long cpu)
 	struct cpu_data *state = &per_cpu(cpu_state, cpu);
 	unsigned long flags;
 
-	if (eval_need(state)) {
+	if (eval_need(state) && !state->disabled) {
 		spin_lock_irqsave(&state->pending_lock, flags);
 		state->pending = true;
 		spin_unlock_irqrestore(&state->pending_lock, flags);
@@ -708,7 +816,7 @@ static void __ref do_hotplug(struct cpu_data *f)
 	mutex_lock(&lru_lock);
 	if (f->online_cpus > need) {
 		list_for_each_entry_safe(c, tmp, &f->lru, sib) {
-			if (!c->online)
+			if (!c->online || c->always_online_cpu)
 				continue;
 
 			if (f->online_cpus == need)
@@ -731,7 +839,7 @@ static void __ref do_hotplug(struct cpu_data *f)
 			goto done;
 
 		list_for_each_entry_safe(c, tmp, &f->lru, sib) {
-			if (!c->online)
+			if (!c->online || c->always_online_cpu)
 				continue;
 
 			if (f->online_cpus <= f->max_cpus)
@@ -850,7 +958,8 @@ static int __ref cpu_callback(struct notifier_block *nfb,
 		 * so that there's no race with hotplug thread bringing up more
 		 * CPUs than necessary.
 		 */
-		if (apply_limits(f, f->need_cpus) <= f->online_cpus) {
+		if (!f->disabled &&
+			apply_limits(f, f->need_cpus) <= f->online_cpus) {
 			pr_debug("Prevent CPU%d onlining\n", cpu);
 			ret = NOTIFY_BAD;
 		} else {
@@ -959,6 +1068,7 @@ static int group_init(struct cpumask *mask)
 	f->need_cpus  = f->num_cpus;
 	f->avail_cpus  = f->num_cpus;
 	f->offline_delay_ms = 100;
+	f->online_delay_ms = 500;
 	f->task_thres = UINT_MAX;
 	f->nrrun = f->num_cpus;
 	INIT_LIST_HEAD(&f->lru);

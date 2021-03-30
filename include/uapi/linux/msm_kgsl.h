@@ -264,6 +264,7 @@ enum kgsl_property_type {
 	KGSL_PROP_GPU_RESET_STAT  = 0x00000009,
 	KGSL_PROP_PWRCTRL         = 0x0000000E,
 	KGSL_PROP_PWR_CONSTRAINT  = 0x00000012,
+	KGSL_PROP_DEVICE_BITNESS  = 0x00000013,
 };
 
 struct kgsl_shadowprop {

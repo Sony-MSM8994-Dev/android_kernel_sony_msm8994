@@ -43,9 +43,6 @@ static struct timekeeper shadow_timekeeper;
 /* flag for if timekeeping is suspended */
 int __read_mostly timekeeping_suspended;
 
-/* Flag for if there is a persistent clock on this platform */
-bool __read_mostly persistent_clock_exist = false;
-
 static inline void tk_normalize_xtime(struct timekeeper *tk)
 {
 	while (tk->xtime_nsec >= ((u64)NSEC_PER_SEC << tk->shift)) {
@@ -180,8 +177,7 @@ static inline s64 timekeeping_get_ns(struct timekeeper *tk)
 	/* calculate the delta since the last update_wall_time: */
 	cycle_delta = (cycle_now - clock->cycle_last) & clock->mask;
 
-	nsec = cycle_delta * tk->mult + tk->xtime_nsec;
-	nsec >>= tk->shift;
+	nsec = (cycle_delta * tk->mult + tk->xtime_nsec) >> tk->shift;
 
 	/* If arch requires, add in get_arch_timeoffset() */
 	return nsec + get_arch_timeoffset();
@@ -512,6 +508,7 @@ int do_settimeofday(const struct timespec *tv)
 	struct timekeeper *tk = &timekeeper;
 	struct timespec ts_delta, xt;
 	unsigned long flags;
+	int ret = 0;
 
 	if (!timespec_valid_strict(tv))
 		return -EINVAL;
@@ -525,10 +522,15 @@ int do_settimeofday(const struct timespec *tv)
 	ts_delta.tv_sec = tv->tv_sec - xt.tv_sec;
 	ts_delta.tv_nsec = tv->tv_nsec - xt.tv_nsec;
 
+	if (timespec_compare(&tk->wall_to_monotonic, &ts_delta) > 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
 	tk_set_wall_to_mono(tk, timespec_sub(tk->wall_to_monotonic, ts_delta));
 
 	tk_set_xtime(tk, tv);
-
+out:
 	timekeeping_update(tk, true, true);
 
 	write_seqcount_end(&timekeeper_seq);
@@ -537,7 +539,7 @@ int do_settimeofday(const struct timespec *tv)
 	/* signal hrtimers about time change */
 	clock_was_set();
 
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL(do_settimeofday);
 
@@ -564,7 +566,8 @@ int timekeeping_inject_offset(struct timespec *ts)
 
 	/* Make sure the proposed value is valid */
 	tmp = timespec_add(tk_xtime(tk),  *ts);
-	if (!timespec_valid_strict(&tmp)) {
+	if (timespec_compare(&tk->wall_to_monotonic, ts) > 0 ||
+	    !timespec_valid_strict(&tmp)) {
 		ret = -EINVAL;
 		goto error;
 	}
@@ -786,6 +789,12 @@ void __attribute__((weak)) read_boot_clock(struct timespec *ts)
 	ts->tv_nsec = 0;
 }
 
+/* Flag for if timekeeping_resume() has injected sleeptime */
+static bool sleeptime_injected;
+
+/* Flag for if there is a persistent clock on this platform */
+static bool persistent_clock_exists;
+
 /*
  * timekeeping_init - Initializes the clocksource and common timekeeping values
  */
@@ -804,7 +813,7 @@ void __init timekeeping_init(void)
 		now.tv_sec = 0;
 		now.tv_nsec = 0;
 	} else if (now.tv_sec || now.tv_nsec)
-		persistent_clock_exist = true;
+		persistent_clock_exists = true;
 
 	read_boot_clock(&boot);
 	if (!timespec_valid_strict(&boot)) {
@@ -842,7 +851,7 @@ void __init timekeeping_init(void)
 	raw_spin_unlock_irqrestore(&timekeeper_lock, flags);
 }
 
-/* time in seconds when suspend began */
+/* time in seconds when suspend began for persistent clock */
 static struct timespec timekeeping_suspend_time;
 
 /**
@@ -866,11 +875,47 @@ static void __timekeeping_inject_sleeptime(struct timekeeper *tk,
 }
 
 /**
+ * We have three kinds of time sources to use for sleep time
+ * injection, the preference order is:
+ * 1) non-stop clocksource
+ * 2) persistent clock (ie: RTC accessible when irqs are off)
+ * 3) RTC
+ *
+ * 1) and 2) are used by timekeeping, 3) by RTC subsystem.
+ * If system has neither 1) nor 2), 3) will be used finally.
+ *
+ *
+ * If timekeeping has injected sleeptime via either 1) or 2),
+ * 3) becomes needless, so in this case we don't need to call
+ * rtc_resume(), and this is what timekeeping_rtc_skipresume()
+ * means.
+ */
+bool timekeeping_rtc_skipresume(void)
+{
+	return sleeptime_injected;
+}
+
+/**
+ * 1) can be determined whether to use or not only when doing
+ * timekeeping_resume() which is invoked after rtc_suspend(),
+ * so we can't skip rtc_suspend() surely if system has 1).
+ *
+ * But if system has 2), 2) will definitely be used, so in this
+ * case we don't need to call rtc_suspend(), and this is what
+ * timekeeping_rtc_skipsuspend() means.
+ */
+bool timekeeping_rtc_skipsuspend(void)
+{
+	return persistent_clock_exists;
+}
+
+/**
  * timekeeping_inject_sleeptime - Adds suspend interval to timeekeeping values
  * @delta: pointer to a timespec delta value
  *
  * This hook is for architectures that cannot support read_persistent_clock
- * because their RTC/persistent clock is only accessible when irqs are enabled.
+ * because their RTC/persistent clock is only accessible when irqs are enabled
+ * and also don't have an effective nonstop clocksource.
  *
  * This function should only be called by rtc_resume(), and allows
  * a suspend offset to be injected into the timekeeping values.
@@ -879,13 +924,6 @@ void timekeeping_inject_sleeptime(struct timespec *delta)
 {
 	struct timekeeper *tk = &timekeeper;
 	unsigned long flags;
-
-	/*
-	 * Make sure we don't set the clock twice, as timekeeping_resume()
-	 * already did it
-	 */
-	if (has_persistent_clock())
-		return;
 
 	raw_spin_lock_irqsave(&timekeeper_lock, flags);
 	write_seqcount_begin(&timekeeper_seq);
@@ -917,8 +955,8 @@ static void timekeeping_resume(void)
 	unsigned long flags;
 	struct timespec ts_new, ts_delta;
 	cycle_t cycle_now, cycle_delta;
-	bool suspendtime_found = false;
 
+	sleeptime_injected = false;
 	read_persistent_clock(&ts_new);
 
 	clockevents_resume();
@@ -963,13 +1001,13 @@ static void timekeeping_resume(void)
 		nsec += ((u64) cycle_delta * mult) >> shift;
 
 		ts_delta = ns_to_timespec(nsec);
-		suspendtime_found = true;
+		sleeptime_injected = true;
 	} else if (timespec_compare(&ts_new, &timekeeping_suspend_time) > 0) {
 		ts_delta = timespec_sub(ts_new, timekeeping_suspend_time);
-		suspendtime_found = true;
+		sleeptime_injected = true;
 	}
 
-	if (suspendtime_found)
+	if (sleeptime_injected)
 		__timekeeping_inject_sleeptime(tk, &ts_delta);
 
 	/* Re-base the last cycle value */
@@ -1003,31 +1041,33 @@ static int timekeeping_suspend(void)
 	 * value returned, update the persistent_clock_exists flag.
 	 */
 	if (timekeeping_suspend_time.tv_sec || timekeeping_suspend_time.tv_nsec)
-		persistent_clock_exist = true;
+		persistent_clock_exists = true;
 
 	raw_spin_lock_irqsave(&timekeeper_lock, flags);
 	write_seqcount_begin(&timekeeper_seq);
 	timekeeping_forward_now(tk);
 	timekeeping_suspended = 1;
 
-	/*
-	 * To avoid drift caused by repeated suspend/resumes,
-	 * which each can add ~1 second drift error,
-	 * try to compensate so the difference in system time
-	 * and persistent_clock time stays close to constant.
-	 */
-	delta = timespec_sub(tk_xtime(tk), timekeeping_suspend_time);
-	delta_delta = timespec_sub(delta, old_delta);
-	if (abs(delta_delta.tv_sec)  >= 2) {
+	if (persistent_clock_exists) {
 		/*
-		 * if delta_delta is too large, assume time correction
-		 * has occured and set old_delta to the current delta.
+		 * To avoid drift caused by repeated suspend/resumes,
+		 * which each can add ~1 second drift error,
+		 * try to compensate so the difference in system time
+		 * and persistent_clock time stays close to constant.
 		 */
-		old_delta = delta;
-	} else {
-		/* Otherwise try to adjust old_system to compensate */
-		timekeeping_suspend_time =
-			timespec_add(timekeeping_suspend_time, delta_delta);
+		delta = timespec_sub(tk_xtime(tk), timekeeping_suspend_time);
+		delta_delta = timespec_sub(delta, old_delta);
+		if (abs(delta_delta.tv_sec) >= 2) {
+			/*
+			 * if delta_delta is too large, assume time correction
+			 * has occurred and set old_delta to the current delta.
+			 */
+			old_delta = delta;
+		} else {
+			/* Otherwise try to adjust old_system to compensate */
+			timekeeping_suspend_time =
+				timespec_add(timekeeping_suspend_time, delta_delta);
+		}
 	}
 
 	timekeeping_update(tk, false, true);
@@ -1367,7 +1407,7 @@ static inline void old_vsyscall_fixup(struct timekeeper *tk)
  * update_wall_time - Uses the current clocksource to increment the wall time
  *
  */
-static void update_wall_time(void)
+void update_wall_time(void)
 {
 	struct clocksource *clock;
 	struct timekeeper *real_tk = &timekeeper;
@@ -1449,9 +1489,8 @@ static void update_wall_time(void)
 out:
 	raw_spin_unlock_irqrestore(&timekeeper_lock, flags);
 	if (clock_set)
-		/* have to call outside the timekeeper_seq */
+		/* Have to call _delayed version, since in irq context*/
 		clock_was_set_delayed();
-
 }
 
 /**
@@ -1596,7 +1635,6 @@ struct timespec get_monotonic_coarse(void)
 void do_timer(unsigned long ticks)
 {
 	jiffies_64 += ticks;
-	update_wall_time();
 	calc_global_load(ticks);
 }
 
@@ -1753,4 +1791,5 @@ void xtime_update(unsigned long ticks)
 	write_seqlock(&jiffies_lock);
 	do_timer(ticks);
 	write_sequnlock(&jiffies_lock);
+	update_wall_time();
 }

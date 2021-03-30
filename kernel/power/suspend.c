@@ -19,6 +19,7 @@
 #include <linux/init.h>
 #include <linux/console.h>
 #include <linux/cpu.h>
+#include <linux/cpuidle.h>
 #include <linux/syscalls.h>
 #include <linux/gfp.h>
 #include <linux/io.h>
@@ -36,6 +37,9 @@
 
 #include "power.h"
 
+// TheCrazyLex@PA Add to debug our change which disables fs sync on suspend
+//#define DEBUG_FS_SYNC_ON_SUSPEND
+
 struct pm_sleep_state pm_states[PM_SUSPEND_MAX] = {
 	[PM_SUSPEND_FREEZE] = { .label = "freeze", .state = PM_SUSPEND_FREEZE },
 	[PM_SUSPEND_STANDBY] = { .label = "standby", },
@@ -43,14 +47,22 @@ struct pm_sleep_state pm_states[PM_SUSPEND_MAX] = {
 };
 
 static const struct platform_suspend_ops *suspend_ops;
+static const struct platform_freeze_ops *freeze_ops;
 
 static bool need_suspend_ops(suspend_state_t state)
 {
-	return !!(state > PM_SUSPEND_FREEZE);
+	return state > PM_SUSPEND_FREEZE;
 }
 
 static DECLARE_WAIT_QUEUE_HEAD(suspend_freeze_wait_head);
 static bool suspend_freeze_wake;
+
+void freeze_set_ops(const struct platform_freeze_ops *ops)
+{
+	lock_system_sleep();
+	freeze_ops = ops;
+	unlock_system_sleep();
+}
 
 static void freeze_begin(void)
 {
@@ -59,7 +71,11 @@ static void freeze_begin(void)
 
 static void freeze_enter(void)
 {
+	cpuidle_use_deepest_state(true);
+	cpuidle_resume();
 	wait_event(suspend_freeze_wait_head, suspend_freeze_wake);
+	cpuidle_pause();
+	cpuidle_use_deepest_state(false);
 }
 
 void freeze_wake(void)
@@ -109,6 +125,28 @@ int suspend_valid_only_mem(suspend_state_t state)
 	return state == PM_SUSPEND_MEM;
 }
 EXPORT_SYMBOL_GPL(suspend_valid_only_mem);
+
+static bool platform_suspend_again(void)
+{
+	int count;
+	bool suspend = suspend_ops->suspend_again ?
+		suspend_ops->suspend_again() : false;
+
+	if (suspend) {
+		/*
+		 * pm_get_wakeup_count() gets an updated count of wakeup events
+		 * that have occured and will return false (i.e. abort suspend)
+		 * if a wakeup event has been started during suspend_again() and
+		 * is still active. pm_save_wakeup_count() stores the count
+		 * and enables pm_wakeup_pending() to properly analyze wakeup
+		 * events before entering suspend in suspend_enter().
+		 */
+		suspend = pm_get_wakeup_count(&count, false) &&
+			  pm_save_wakeup_count(count);
+	}
+
+	return suspend;
+}
 
 static int suspend_test(int level)
 {
@@ -274,13 +312,16 @@ int suspend_devices_and_enter(suspend_state_t state)
 		error = suspend_ops->begin(state);
 		if (error)
 			goto Close;
+	} else if (state == PM_SUSPEND_FREEZE && freeze_ops && freeze_ops->begin) {
+		error = freeze_ops->begin();
+		if (error)
+			goto Close;
 	}
 	suspend_console();
-	ftrace_stop();
 	suspend_test_start();
 	error = dpm_suspend_start(PMSG_SUSPEND);
 	if (error) {
-		printk(KERN_ERR "PM: Some devices failed to suspend\n");
+		pr_err("PM: Some devices failed to suspend, or early wake event detected\n");
 		log_suspend_abort_reason("Some devices failed to suspend");
 		goto Recover_platform;
 	}
@@ -291,17 +332,19 @@ int suspend_devices_and_enter(suspend_state_t state)
 	do {
 		error = suspend_enter(state, &wakeup);
 	} while (!error && !wakeup && need_suspend_ops(state)
-		&& suspend_ops->suspend_again && suspend_ops->suspend_again());
+		&& platform_suspend_again());
 
  Resume_devices:
 	suspend_test_start();
 	dpm_resume_end(PMSG_RESUME);
 	suspend_test_finish("resume devices");
-	ftrace_start();
 	resume_console();
  Close:
 	if (need_suspend_ops(state) && suspend_ops->end)
 		suspend_ops->end();
+	else if (state == PM_SUSPEND_FREEZE && freeze_ops && freeze_ops->end)
+		freeze_ops->end();
+
 	trace_machine_suspend(PWR_EVENT_EXIT);
 	return error;
 

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -62,6 +62,7 @@
 #define MSM_TSENS_PRINT  "log_tsens_temperature"
 #define CPU_BUF_SIZE 64
 #define CPU_DEVICE "cpu%d"
+#define HOTPLUG_RETRY_INTERVAL_MS 100
 
 #define THERM_CREATE_DEBUGFS_DIR(_node, _name, _parent, _ret) \
 	do { \
@@ -81,7 +82,7 @@
 } while (0)
 
 static struct msm_thermal_data msm_thermal_info;
-static struct delayed_work check_temp_work;
+static struct delayed_work check_temp_work, retry_hotplug_work;
 static bool core_control_enabled;
 static uint32_t cpus_offlined;
 static cpumask_var_t cpus_previously_online;
@@ -132,7 +133,9 @@ static bool therm_reset_enabled;
 static bool online_core;
 static bool cluster_info_probed;
 static bool cluster_info_nodes_called;
+static bool in_suspend, retry_in_progress;
 static int *tsens_id_map;
+static int *zone_id_tsens_map;
 static DEFINE_MUTEX(vdd_rstr_mutex);
 static DEFINE_MUTEX(psm_mutex);
 static DEFINE_MUTEX(cx_mutex);
@@ -415,7 +418,8 @@ static void cpus_previously_online_update(void)
 	cpumask_or(cpus_previously_online, cpus_previously_online,
 		   cpu_online_mask);
 	put_online_cpus();
-	cpulist_scnprintf(buf, sizeof(buf), cpus_previously_online);
+	scnprintf(buf, sizeof(buf), "%*pbl",
+			cpumask_pr_args(cpus_previously_online));
 	pr_debug("%s\n", buf);
 }
 
@@ -503,11 +507,15 @@ static int msm_thermal_suspend_callback(
 	case PM_HIBERNATION_PREPARE:
 	case PM_SUSPEND_PREPARE:
 		msm_thermal_update_freq(false, true);
+		in_suspend = true;
+		retry_in_progress = false;
+		cancel_delayed_work_sync(&retry_hotplug_work);
 		break;
 
 	case PM_POST_HIBERNATION:
 	case PM_POST_SUSPEND:
 		msm_thermal_update_freq(false, false);
+		in_suspend = false;
 		if (hotplug_task)
 			complete(&hotplug_notify_complete);
 		else
@@ -1197,8 +1205,9 @@ static int __ref init_cluster_freq_table(void)
 				if (!cpu_set) {
 					cpumask_clear_cpu(_cpu,
 						cpus_previously_online);
-					cpumask_scnprintf(buf, sizeof(buf),
-						cpus_previously_online);
+					scnprintf(buf, sizeof(buf), "%*pb",
+						cpumask_pr_args(
+						cpus_previously_online));
 					pr_debug("Reset prev online to %s\n",
 						 buf);
 				}
@@ -1969,13 +1978,67 @@ static int check_sensor_id(int sensor_id)
 	return ret;
 }
 
-static int create_sensor_id_map(void)
+static int zone_id_to_tsen_id(int zone_id, int *tsens_id)
 {
 	int i = 0;
 	int ret = 0;
 
-	tsens_id_map = kzalloc(sizeof(int) * max_tsens_num,
-			GFP_KERNEL);
+	for (i = 0; i < max_tsens_num; i++) {
+		if (zone_id == zone_id_tsens_map[i]) {
+			*tsens_id = tsens_id_map[i];
+			break;
+		}
+	}
+	if (i == max_tsens_num) {
+		pr_err("Invalid sensor zone id:%d\n", zone_id);
+		return -EINVAL;
+	}
+
+	return ret;
+}
+
+static int create_sensor_zone_id_map(void)
+{
+	int i = 0;
+	int zone_id = -1;
+
+	zone_id_tsens_map = devm_kzalloc(&msm_thermal_info.pdev->dev,
+		sizeof(int) * max_tsens_num, GFP_KERNEL);
+
+	if (!zone_id_tsens_map) {
+		pr_err("Cannot allocate memory for zone_id_tsens_map\n");
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < max_tsens_num; i++) {
+		char tsens_name[TSENS_NAME_MAX] = "";
+
+		snprintf(tsens_name, TSENS_NAME_MAX, TSENS_NAME_FORMAT,
+			tsens_id_map[i]);
+		zone_id = sensor_get_id(tsens_name);
+		if (zone_id < 0) {
+			pr_err("Error getting zone id for %s. err:%d\n",
+				tsens_name, zone_id);
+			goto fail;
+		} else {
+			zone_id_tsens_map[i] = zone_id;
+		}
+	}
+	return 0;
+
+fail:
+	devm_kfree(&msm_thermal_info.pdev->dev, zone_id_tsens_map);
+	return zone_id;
+}
+
+static int create_sensor_id_map(struct device *dev)
+{
+	int i = 0;
+	int ret = 0;
+
+	tsens_id_map = devm_kzalloc(dev,
+		sizeof(int) * max_tsens_num, GFP_KERNEL);
+
 	if (!tsens_id_map) {
 		pr_err("Cannot allocate memory for tsens_id_map\n");
 		return -ENOMEM;
@@ -1998,7 +2061,7 @@ static int create_sensor_id_map(void)
 
 	return ret;
 fail:
-	kfree(tsens_id_map);
+	devm_kfree(dev, tsens_id_map);
 	return ret;
 }
 
@@ -2314,23 +2377,36 @@ static void vdd_mx_notify(struct therm_threshold *trig_thresh)
 			pr_err("Failed to remove vdd mx restriction\n");
 	}
 	mutex_unlock(&vdd_mx_mutex);
-	sensor_mgr_set_threshold(trig_thresh->sensor_id,
+
+	if (trig_thresh->cur_state != trig_thresh->trip_triggered) {
+		sensor_mgr_set_threshold(trig_thresh->sensor_id,
 					trig_thresh->threshold);
+		trig_thresh->cur_state = trig_thresh->trip_triggered;
+	}
 }
 
-static void msm_thermal_bite(int tsens_id, long temp)
+static void msm_thermal_bite(int zone_id, long temp)
 {
 	struct scm_desc desc;
+	int tsens_id = 0;
+	int ret = 0;
 
-	pr_err("TSENS:%d reached temperature:%ld. System reset\n",
-		tsens_id, temp);
+	ret = zone_id_to_tsen_id(zone_id, &tsens_id);
+	if (ret < 0) {
+		pr_err("Zone:%d reached temperature:%ld. Err = %d System reset\n",
+			zone_id, temp, ret);
+	} else {
+		pr_err("Tsens:%d reached temperature:%ld. System reset\n",
+			tsens_id, temp);
+	}
 	if (!is_scm_armv8()) {
-		scm_call_atomic1(SCM_SVC_BOOT, THERM_SECURE_BITE_CMD, 0);
+		scm_call(SCM_SVC_BOOT, THERM_SECURE_BITE_CMD,
+			 NULL, 0, NULL, 0);
 	} else {
 		desc.args[0] = 0;
 		desc.arginfo = SCM_ARGS(1);
-		scm_call2_atomic(SCM_SIP_FNID(SCM_SVC_BOOT,
-				 THERM_SECURE_BITE_CMD), &desc);
+		scm_call2(SCM_SIP_FNID(SCM_SVC_BOOT,
+			  THERM_SECURE_BITE_CMD), &desc);
 	}
 }
 
@@ -2382,8 +2458,7 @@ static void therm_reset_notify(struct therm_threshold *thresh_data)
 		if (ret)
 			pr_err("Unable to read TSENS sensor:%d. err:%d\n",
 				thresh_data->sensor_id, ret);
-		msm_thermal_bite(tsens_id_map[thresh_data->sensor_id],
-					temp);
+		msm_thermal_bite(thresh_data->sensor_id, temp);
 		break;
 	case THERMAL_TRIP_CONFIGURABLE_LOW:
 		break;
@@ -2393,6 +2468,17 @@ static void therm_reset_notify(struct therm_threshold *thresh_data)
 	}
 	sensor_mgr_set_threshold(thresh_data->sensor_id,
 					thresh_data->threshold);
+}
+
+static void retry_hotplug(struct work_struct *work)
+{
+	mutex_lock(&core_control_mutex);
+	if (retry_in_progress) {
+		pr_debug("Retrying hotplug\n");
+		retry_in_progress = false;
+		complete(&hotplug_notify_complete);
+	}
+	mutex_unlock(&core_control_mutex);
 }
 
 #ifdef CONFIG_SMP
@@ -2463,6 +2549,7 @@ static int __ref update_offline_cores(int val)
 	uint32_t cpu = 0;
 	int ret = 0;
 	uint32_t previous_cpus_offlined = 0;
+	bool pend_hotplug_req = false;
 
 	if (!core_control_enabled)
 		return 0;
@@ -2476,11 +2563,16 @@ static int __ref update_offline_cores(int val)
 				continue;
 			trace_thermal_pre_core_offline(cpu);
 			ret = cpu_down(cpu);
-			if (ret)
-				pr_err("Unable to offline CPU%d. err:%d\n",
+			if (ret) {
+				pr_err_ratelimited(
+					"Unable to offline CPU%d. err:%d\n",
 					cpu, ret);
-			else
+				pend_hotplug_req = true;
+			} else {
+				struct device *cpu_device = get_cpu_device(cpu);
+				kobject_uevent(&cpu_device->kobj, KOBJ_OFFLINE);
 				pr_debug("Offlined CPU%d\n", cpu);
+			}
 			trace_thermal_post_core_offline(cpu,
 				cpumask_test_cpu(cpu, cpu_online_mask));
 		} else if (online_core && (previous_cpus_offlined & BIT(cpu))) {
@@ -2496,15 +2588,26 @@ static int __ref update_offline_cores(int val)
 				pr_debug("Onlining CPU%d is vetoed\n", cpu);
 			} else if (ret) {
 				cpus_offlined |= BIT(cpu);
-				pr_err("Unable to online CPU%d. err:%d\n",
+				pend_hotplug_req = true;
+				pr_err_ratelimited(
+					"Unable to online CPU%d. err:%d\n",
 					cpu, ret);
 			} else {
+				struct device *cpu_device = get_cpu_device(cpu);
+				kobject_uevent(&cpu_device->kobj, KOBJ_ONLINE);
 				pr_debug("Onlined CPU%d\n", cpu);
 			}
 			trace_thermal_post_core_online(cpu,
 				cpumask_test_cpu(cpu, cpu_online_mask));
 		}
 	}
+
+	if (pend_hotplug_req && !in_suspend && !retry_in_progress) {
+		retry_in_progress = true;
+		schedule_delayed_work(&retry_hotplug_work,
+			msecs_to_jiffies(HOTPLUG_RETRY_INTERVAL_MS));
+	}
+
 	return ret;
 }
 
@@ -2858,6 +2961,9 @@ static int do_psm(void)
 	int i = 0;
 	int auto_cnt = 0;
 
+	if (!psm_enabled)
+		return ret;
+
 	mutex_lock(&psm_mutex);
 	for (i = 0; i < max_tsens_num; i++) {
 		ret = therm_get_temp(tsens_id_map[i], THERM_TSENS_ID, &temp);
@@ -2955,6 +3061,9 @@ static void check_temp(struct work_struct *work)
 	long temp = 0;
 	int ret = 0;
 
+	if (!msm_thermal_probed)
+		return;
+
 	do_therm_reset();
 
 	ret = therm_get_temp(msm_thermal_info.sensor_id, THERM_TSENS_ID, &temp);
@@ -2983,8 +3092,9 @@ static void check_temp(struct work_struct *work)
 
 reschedule:
 	if (polling_enabled)
-		schedule_delayed_work(&check_temp_work,
-				msecs_to_jiffies(msm_thermal_info.poll_ms));
+		queue_delayed_work(system_power_efficient_wq,
+			&check_temp_work,
+			msecs_to_jiffies(msm_thermal_info.poll_ms));
 }
 
 static int __ref msm_thermal_cpu_callback(struct notifier_block *nfb,
@@ -3050,12 +3160,18 @@ static int hotplug_notify(enum thermal_trip_type type, int temp, void *data)
 		return 0;
 	switch (type) {
 	case THERMAL_TRIP_CONFIGURABLE_HI:
-		if (!(cpu_node->offline))
+		if (!(cpu_node->offline)) {
+			pr_info("%s reached HI temp threshold: %d\n",
+					cpu_node->sensor_type, temp);
 			cpu_node->offline = 1;
+		}
 		break;
 	case THERMAL_TRIP_CONFIGURABLE_LOW:
-		if (cpu_node->offline)
+		if (cpu_node->offline) {
+			pr_info("%s reached LOW temp threshold: %d\n",
+					cpu_node->sensor_type, temp);
 			cpu_node->offline = 0;
+		}
 		break;
 	default:
 		break;
@@ -3067,13 +3183,14 @@ static int hotplug_notify(enum thermal_trip_type type, int temp, void *data)
 		pr_err("Hotplug task is not initialized\n");
 	return 0;
 }
+
 /* Adjust cpus offlined bit based on temperature reading. */
 static int hotplug_init_cpu_offlined(void)
 {
 	long temp = 0;
 	uint32_t cpu = 0;
 
-	if (!hotplug_enabled)
+	if (!hotplug_enabled || !hotplug_task)
 		return 0;
 
 	mutex_lock(&core_control_mutex);
@@ -3090,8 +3207,7 @@ static int hotplug_init_cpu_offlined(void)
 
 		if (temp >= msm_thermal_info.hotplug_temp_degC)
 			cpus[cpu].offline = 1;
-		else if (temp <= (msm_thermal_info.hotplug_temp_degC -
-			msm_thermal_info.hotplug_temp_hysteresis_degC))
+		else
 			cpus[cpu].offline = 0;
 	}
 	mutex_unlock(&core_control_mutex);
@@ -3295,6 +3411,13 @@ static void freq_mitigation_init(void)
 		goto init_freq_thread;
 
 	for_each_possible_cpu(cpu) {
+		/*
+		 * Hotplug may not be enabled,
+		 * make sure core sensor id is initialized.
+		 */
+		cpus[cpu].sensor_id =
+			sensor_get_id((char *)cpus[cpu].sensor_type);
+		cpus[cpu].id_type = THERM_ZONE_ID;
 		if (!(msm_thermal_info.freq_mitig_control_mask & BIT(cpu)))
 			continue;
 		hi_thresh = &cpus[cpu].threshold[FREQ_THRESHOLD_HIGH];
@@ -3320,6 +3443,8 @@ init_freq_thread:
 		pr_err("Failed to create frequency mitigation thread. err:%ld\n",
 				PTR_ERR(freq_mitigation_task));
 		return;
+	} else {
+		complete(&freq_mitigation_complete);
 	}
 }
 
@@ -3608,8 +3733,11 @@ static void cx_phase_ctrl_notify(struct therm_threshold *trig_thresh)
 cx_phase_unlock_exit:
 	mutex_unlock(&cx_mutex);
 cx_phase_ctrl_exit:
-	sensor_mgr_set_threshold(trig_thresh->sensor_id,
+	if (trig_thresh->cur_state != trig_thresh->trip_triggered) {
+		sensor_mgr_set_threshold(trig_thresh->sensor_id,
 					trig_thresh->threshold);
+		trig_thresh->cur_state = trig_thresh->trip_triggered;
+	}
 	return;
 }
 
@@ -3737,8 +3865,11 @@ static void vdd_restriction_notify(struct therm_threshold *trig_thresh)
 unlock_and_exit:
 	mutex_unlock(&vdd_rstr_mutex);
 set_and_exit:
-	sensor_mgr_set_threshold(trig_thresh->sensor_id,
+	if (trig_thresh->cur_state != trig_thresh->trip_triggered) {
+		sensor_mgr_set_threshold(trig_thresh->sensor_id,
 					trig_thresh->threshold);
+		trig_thresh->cur_state = trig_thresh->trip_triggered;
+	}
 	return;
 }
 
@@ -3786,8 +3917,11 @@ static void ocr_notify(struct therm_threshold *trig_thresh)
 unlock_and_exit:
 	mutex_unlock(&ocr_mutex);
 set_and_exit:
-	sensor_mgr_set_threshold(trig_thresh->sensor_id,
-					trig_thresh->threshold);
+	if (trig_thresh->cur_state != trig_thresh->trip_triggered) {
+		sensor_mgr_set_threshold(trig_thresh->sensor_id,
+				trig_thresh->threshold);
+		trig_thresh->cur_state = trig_thresh->trip_triggered;
+	}
 	return;
 }
 
@@ -3975,6 +4109,7 @@ int sensor_mgr_init_threshold(struct device *dev,
 			thresh_ptr[i].trip_triggered = -1;
 			thresh_ptr[i].parent = thresh_inp;
 			thresh_ptr[i].threshold[0].temp = high_temp;
+			thresh_ptr[i].cur_state = -1;
 			thresh_ptr[i].threshold[0].trip =
 				THERMAL_TRIP_CONFIGURABLE_HI;
 			thresh_ptr[i].threshold[1].temp = low_temp;
@@ -3993,6 +4128,7 @@ int sensor_mgr_init_threshold(struct device *dev,
 		thresh_ptr->trip_triggered = -1;
 		thresh_ptr->parent = thresh_inp;
 		thresh_ptr->threshold[0].temp = high_temp;
+		thresh_ptr->cur_state = -1;
 		thresh_ptr->threshold[0].trip =
 			THERMAL_TRIP_CONFIGURABLE_HI;
 		thresh_ptr->threshold[1].temp = low_temp;
@@ -4169,6 +4305,7 @@ static void interrupt_mode_init(void)
 	if (polling_enabled) {
 		pr_info("Interrupt mode init\n");
 		polling_enabled = 0;
+		create_sensor_zone_id_map();
 		disable_msm_thermal();
 		hotplug_init();
 		freq_mitigation_init();
@@ -4236,7 +4373,7 @@ static ssize_t __ref store_cc_enabled(struct kobject *kobj,
 		hotplug_init_cpu_offlined();
 		mutex_lock(&core_control_mutex);
 		update_offline_cores(cpus_offlined);
-		if (hotplug_enabled) {
+		if (hotplug_enabled && hotplug_task) {
 			for_each_possible_cpu(cpu) {
 				if (!(msm_thermal_info.core_control_mask &
 					BIT(cpus[cpu].cpu)))
@@ -4462,7 +4599,7 @@ int msm_thermal_pre_init(struct device *dev)
 		return ret;
 	}
 
-	if (create_sensor_id_map()) {
+	if (create_sensor_id_map(dev)) {
 		pr_err("Creating sensor id map failed\n");
 		ret = -EINVAL;
 		goto pre_init_exit;
@@ -4600,6 +4737,7 @@ int msm_thermal_init(struct msm_thermal_data *pdata)
 
 	register_reboot_notifier(&msm_thermal_reboot_notifier);
 	pm_notifier(msm_thermal_suspend_callback, 0);
+	INIT_DELAYED_WORK(&retry_hotplug_work, retry_hotplug);
 	INIT_DELAYED_WORK(&check_temp_work, check_temp);
 	schedule_delayed_work(&check_temp_work, 0);
 

@@ -92,7 +92,7 @@ static ssize_t __ref store_online(struct device *dev,
 }
 static DEVICE_ATTR(online, 0644, show_online, store_online);
 
-static void __cpuinit register_cpu_control(struct cpu *cpu)
+static void register_cpu_control(struct cpu *cpu)
 {
 	device_create_file(&cpu->dev, &dev_attr_online);
 }
@@ -382,11 +382,8 @@ static ssize_t show_cpus_attr(struct device *dev,
 			      char *buf)
 {
 	struct cpu_attr *ca = container_of(attr, struct cpu_attr, attr);
-	int n = cpulist_scnprintf(buf, PAGE_SIZE-2, *(ca->map));
 
-	buf[n++] = '\n';
-	buf[n] = '\0';
-	return n;
+	return cpumap_print_to_pagebuf(true, buf, *ca->map);
 }
 
 #define _CPU_ATTR(name, map) \
@@ -423,7 +420,7 @@ static ssize_t print_cpus_offline(struct device *dev,
 	if (!alloc_cpumask_var(&offline, GFP_KERNEL))
 		return -ENOMEM;
 	cpumask_andnot(offline, cpu_possible_mask, cpu_online_mask);
-	n = cpulist_scnprintf(buf, len, offline);
+	n = scnprintf(buf, len, "%*pbl", cpumask_pr_args(offline));
 	free_cpumask_var(offline);
 
 	/* display offline cpus >= nr_cpu_ids */
@@ -509,7 +506,7 @@ static int cpu_uevent(struct device *dev, struct kobj_uevent_env *env)
  *
  * Initialize and register the CPU device.
  */
-int __cpuinit register_cpu(struct cpu *cpu, int num)
+int register_cpu(struct cpu *cpu, int num)
 {
 	int error;
 

@@ -22,12 +22,13 @@
 #include <linux/rwsem.h>
 #include <linux/pm_qos.h>
 #include <soc/qcom/glink.h>
+#include <soc/qcom/tracer_pkt.h>
 #include "glink_core_if.h"
 #include "glink_private.h"
 #include "glink_xprt_if.h"
 
 /* Number of internal IPC Logging log pages */
-#define NUM_LOG_PAGES	3
+#define NUM_LOG_PAGES	15
 #define GLINK_PM_QOS_HOLDOFF_MS		10
 
 /**
@@ -45,6 +46,7 @@
  *				transport is currently running
  * @remote_version_idx:		remote version index into @versions this
  *				transport is currently running
+ * @l_features:			Features negotiated by the local side
  * @capabilities:		Capabilities of underlying transport
  * @ops:			transport defined implementation of common
  *				operations
@@ -78,6 +80,7 @@ struct glink_core_xprt_ctx {
 	size_t versions_entries;
 	uint32_t local_version_idx;
 	uint32_t remote_version_idx;
+	uint32_t l_features;
 	uint32_t capabilities;
 	struct glink_transport_if *ops;
 	enum transport_state_e local_state;
@@ -119,6 +122,8 @@ struct glink_core_xprt_ctx {
  * @notify_rx_sigs:	RX signal change notification
  * @notify_rx_abort:	Channel close RX Intent aborted
  * @notify_tx_abort:	Channel close TX aborted
+ * @notify_rx_tracer_pkt:	Receive notification for tracer packet
+ * @notify_remote_rx_intent:	Receive notification for remote-queued RX intent
  *
  * @transport_ptr:	Transport this channel uses
  * @lcid:		Local channel ID
@@ -182,6 +187,10 @@ struct channel_ctx {
 				const void *pkt_priv);
 	void (*notify_tx_abort)(void *handle, const void *priv,
 				const void *pkt_priv);
+	void (*notify_rx_tracer_pkt)(void *handle, const void *priv,
+			const void *pkt_priv, const void *ptr, size_t size);
+	void (*notify_remote_rx_intent)(void *handle, const void *priv,
+					size_t size);
 
 	/* internal port state */
 	struct glink_core_xprt_ctx *transport_ptr;
@@ -190,7 +199,6 @@ struct channel_ctx {
 	enum local_channel_state_e local_open_state;
 	bool remote_opened;
 	bool int_req_ack;
-	struct completion ch_close_complete;
 	struct completion int_req_ack_complete;
 	struct completion int_req_complete;
 
@@ -327,7 +335,7 @@ static void ch_remove_tx_pending_remote_done(struct channel_ctx *ctx,
 static void glink_core_rx_cmd_rx_intent_req_ack(struct glink_transport_if
 					*if_ptr, uint32_t rcid, bool granted);
 
-static void glink_core_remote_close_common(struct channel_ctx *ctx);
+static bool glink_core_remote_close_common(struct channel_ctx *ctx);
 
 static void check_link_notifier_and_notify(struct glink_core_xprt_ctx *xprt_ptr,
 					   enum glink_link_state link_state);
@@ -336,6 +344,9 @@ static void glink_core_channel_cleanup(struct glink_core_xprt_ctx *xprt_ptr);
 static void glink_pm_qos_vote(struct glink_core_xprt_ctx *xprt_ptr);
 static void glink_pm_qos_unvote(struct glink_core_xprt_ctx *xprt_ptr);
 static void glink_pm_qos_cancel_worker(struct work_struct *work);
+static bool ch_update_local_state(struct channel_ctx *ctx,
+			enum local_channel_state_e lstate);
+static bool ch_update_rmt_state(struct channel_ctx *ctx, bool rstate);
 
 /**
  * glink_ssr() - Clean up locally for SSR by simulating remote close
@@ -373,18 +384,55 @@ int glink_ssr(const char *subsystem)
 EXPORT_SYMBOL(glink_ssr);
 
 /**
+ * glink_core_ch_close_ack_common() - handles the common operations during
+ *                                    close ack.
+ * @ctx:	Pointer to channel instance.
+ *
+ * Return: True if the channel is fully closed after the state change,
+ *	false otherwise.
+ */
+static bool glink_core_ch_close_ack_common(struct channel_ctx *ctx)
+{
+	bool is_fully_closed;
+
+	if (ctx == NULL)
+		return false;
+	is_fully_closed = ch_update_local_state(ctx, GLINK_CHANNEL_CLOSED);
+	GLINK_INFO_PERF_CH(ctx,
+		"%s: local:GLINK_CHANNEL_CLOSING->GLINK_CHANNEL_CLOSED\n",
+		__func__);
+
+	if (ctx->notify_state) {
+		ctx->notify_state(ctx, ctx->user_priv,
+			GLINK_LOCAL_DISCONNECTED);
+		ch_purge_intent_lists(ctx);
+		GLINK_INFO_PERF_CH(ctx,
+		"%s: notify state: GLINK_LOCAL_DISCONNECTED\n",
+		__func__);
+	}
+
+	return is_fully_closed;
+}
+
+/**
  * glink_core_remote_close_common() - Handles the common operations during
  *                                    a remote close.
  * @ctx:	Pointer to channel instance.
+ *
+ * Return: True if the channel is fully closed after the state change,
+ *	false otherwise.
  */
-static void glink_core_remote_close_common(struct channel_ctx *ctx)
+static bool glink_core_remote_close_common(struct channel_ctx *ctx)
 {
+	bool is_fully_closed;
+
 	if (ctx == NULL)
-		return;
-	ctx->remote_opened = false;
+		return false;
+	is_fully_closed = ch_update_rmt_state(ctx, false);
 	ctx->rcid = 0;
 
-	if (ctx->local_open_state != GLINK_CHANNEL_CLOSED) {
+	if (ctx->local_open_state != GLINK_CHANNEL_CLOSED &&
+		ctx->local_open_state != GLINK_CHANNEL_CLOSING) {
 		if (ctx->notify_state)
 			ctx->notify_state(ctx, ctx->user_priv,
 				GLINK_REMOTE_DISCONNECTED);
@@ -400,6 +448,8 @@ static void glink_core_remote_close_common(struct channel_ctx *ctx)
 			"local state is already CLOSED");
 
 	ch_purge_intent_lists(ctx);
+
+	return is_fully_closed;
 }
 
 /**
@@ -678,7 +728,7 @@ void ch_push_remote_rx_intent(struct channel_ctx *ctx, size_t size,
 /**
  * ch_push_local_rx_intent() - Create an rx_intent
  * @ctx:	Local channel context
- * @pkt_priv:	Data packet
+ * @pkt_priv:	Opaque private pointer provided by client to be returned later
  * @size:	Size of intent
  *
  * This functions creates a local intent and adds it to the local
@@ -694,11 +744,6 @@ struct glink_core_rx_intent *ch_push_local_rx_intent(struct channel_ctx *ctx,
 	if (GLINK_MAX_PKT_SIZE < size) {
 		GLINK_ERR_CH(ctx,
 			"%s: L[]:%zu Invalid size\n", __func__, size);
-		return NULL;
-	}
-
-	if (!pkt_priv) {
-		GLINK_ERR_CH(ctx, "%s: Invalid packet", __func__);
 		return NULL;
 	}
 
@@ -1181,6 +1226,32 @@ void ch_remove_tx_pending_remote_done(struct channel_ctx *ctx,
 }
 
 /**
+ * glink_add_free_lcid_list() - adds the lcid of a to be deleted channel to
+ *				available lcid list
+ * @ctx:	Pointer to channel context.
+ */
+static void glink_add_free_lcid_list(struct channel_ctx *ctx)
+{
+	struct channel_lcid *free_lcid;
+	unsigned long flags;
+
+	free_lcid = kzalloc(sizeof(*free_lcid), GFP_KERNEL);
+	if (!free_lcid) {
+		GLINK_ERR(
+			"%s: allocation failed on xprt:edge [%s:%s] for lcid [%d]\n",
+			__func__, ctx->transport_ptr->name,
+			ctx->transport_ptr->edge, ctx->lcid);
+		return;
+	}
+	free_lcid->lcid = ctx->lcid;
+	spin_lock_irqsave(&ctx->transport_ptr->xprt_ctx_lock_lhb1, flags);
+	list_add_tail(&free_lcid->list_node,
+			&ctx->transport_ptr->free_lcid_list);
+	spin_unlock_irqrestore(&ctx->transport_ptr->xprt_ctx_lock_lhb1,
+					flags);
+}
+
+/**
  * glink_ch_ctx_release - Free the channel context
  * @ch_st_lock:	handle to the rwref_lock associated with the chanel
  *
@@ -1189,13 +1260,8 @@ void ch_remove_tx_pending_remote_done(struct channel_ctx *ctx,
  */
 static void glink_ch_ctx_release(struct rwref_lock *ch_st_lock)
 {
-	struct channel_lcid *free_lcid;
 	struct channel_ctx *ctx = container_of(ch_st_lock, struct channel_ctx,
 						ch_state_lhc0);
-	free_lcid = kzalloc(sizeof(struct channel_lcid), GFP_KERNEL);
-	free_lcid->lcid = ctx->lcid;
-	list_add_tail(&free_lcid->list_node,
-			&ctx->transport_ptr->free_lcid_list);
 	ctx->transport_ptr = NULL;
 	kfree(ctx);
 	GLINK_INFO("%s: freed the channel ctx in pid [%d]\n", __func__,
@@ -1234,7 +1300,6 @@ static struct channel_ctx *ch_name_to_ch_ctx_create(
 	strlcpy(ctx->name, name, GLINK_NAME_SIZE);
 	rwref_lock_init(&ctx->ch_state_lhc0, glink_ch_ctx_release);
 	INIT_LIST_HEAD(&ctx->tx_ready_list_node);
-	init_completion(&ctx->ch_close_complete);
 	init_completion(&ctx->int_req_ack_complete);
 	init_completion(&ctx->int_req_complete);
 	INIT_LIST_HEAD(&ctx->local_rx_intent_list);
@@ -1316,6 +1381,47 @@ static void ch_add_rcid(struct glink_core_xprt_ctx *xprt_ctx,
 			uint32_t rcid)
 {
 	ctx->rcid = rcid;
+}
+
+/**
+ * ch_update_local_state() - Update the local channel state
+ * @ctx:	Pointer to channel context.
+ * @lstate:	Local channel state.
+ *
+ * Return: True if the channel is fully closed as a result of this update,
+ *	false otherwise.
+ */
+static bool ch_update_local_state(struct channel_ctx *ctx,
+					enum local_channel_state_e lstate)
+{
+	bool is_fully_closed;
+
+	rwref_write_get(&ctx->ch_state_lhc0);
+	ctx->local_open_state = lstate;
+	is_fully_closed = ch_is_fully_closed(ctx);
+	rwref_write_put(&ctx->ch_state_lhc0);
+
+	return is_fully_closed;
+}
+
+/**
+ * ch_update_local_state() - Update the local channel state
+ * @ctx:	Pointer to channel context.
+ * @rstate:	Remote Channel state.
+ *
+ * Return: True if the channel is fully closed as result of this update,
+ *	false otherwise.
+ */
+static bool ch_update_rmt_state(struct channel_ctx *ctx, bool rstate)
+{
+	bool is_fully_closed;
+
+	rwref_write_get(&ctx->ch_state_lhc0);
+	ctx->remote_opened = rstate;
+	is_fully_closed = ch_is_fully_closed(ctx);
+	rwref_write_put(&ctx->ch_state_lhc0);
+
+	return is_fully_closed;
 }
 
 /*
@@ -1551,6 +1657,189 @@ static int dummy_wait_link_down(struct glink_transport_if *if_ptr)
 }
 
 /**
+ * dummy_allocate_rx_intent() - a dummy RX intent allocation function that does
+ *				not allocate anything
+ * @if_ptr:	The transport the intent is associated with.
+ * @size:	Size of intent.
+ * @intent:	Pointer to the intent structure.
+ *
+ * Return:	Success.
+ */
+static int dummy_allocate_rx_intent(struct glink_transport_if *if_ptr,
+			size_t size, struct glink_core_rx_intent *intent)
+{
+	return 0;
+}
+
+/**
+ * dummy_tx_cmd_tracer_pkt() - a dummy tracer packet tx cmd for transports
+ *                             that don't define one
+ * @if_ptr:	The transport interface handle for this transport.
+ * @lcid:	The channel in which the tracer packet is transmitted.
+ * @pctx:	Context of the packet to be transmitted.
+ *
+ * Return: 0.
+ */
+static int dummy_tx_cmd_tracer_pkt(struct glink_transport_if *if_ptr,
+		uint32_t lcid, struct glink_core_tx_pkt *pctx)
+{
+	pctx->size_remaining = 0;
+	return 0;
+}
+
+/**
+ * dummy_deallocate_rx_intent() - a dummy rx intent deallocation function that
+ *				does not deallocate anything
+ * @if_ptr:	The transport the intent is associated with.
+ * @intent:	Pointer to the intent structure.
+ *
+ * Return:	Success.
+ */
+static int dummy_deallocate_rx_intent(struct glink_transport_if *if_ptr,
+				struct glink_core_rx_intent *intent)
+{
+	return 0;
+}
+
+/**
+ * dummy_tx_cmd_local_rx_intent() - dummy local rx intent request
+ * @if_ptr:	The transport to transmit on.
+ * @lcid:	The local channel id to encode.
+ * @size:	The intent size to encode.
+ * @liid:	The local intent id to encode.
+ *
+ * Return:	Success.
+ */
+static int dummy_tx_cmd_local_rx_intent(struct glink_transport_if *if_ptr,
+				uint32_t lcid, size_t size, uint32_t liid)
+{
+	return 0;
+}
+
+/**
+ * dummy_tx_cmd_local_rx_done() - dummy rx done command
+ * @if_ptr:	The transport to transmit on.
+ * @lcid:	The local channel id to encode.
+ * @liid:	The local intent id to encode.
+ * @reuse:	Reuse the consumed intent.
+ */
+static void dummy_tx_cmd_local_rx_done(struct glink_transport_if *if_ptr,
+				uint32_t lcid, uint32_t liid, bool reuse)
+{
+	/* intentionally left blank */
+}
+
+/**
+ * dummy_tx() - dummy tx() that does not send anything
+ * @if_ptr:	The transport to transmit on.
+ * @lcid:	The local channel id to encode.
+ * @pctx:	The data to encode.
+ *
+ * Return: Number of bytes written i.e. zero.
+ */
+static int dummy_tx(struct glink_transport_if *if_ptr, uint32_t lcid,
+				struct glink_core_tx_pkt *pctx)
+{
+	return 0;
+}
+
+/**
+ * dummy_tx_cmd_rx_intent_req() - dummy rx intent request functon
+ * @if_ptr:	The transport to transmit on.
+ * @lcid:	The local channel id to encode.
+ * @size:	The requested intent size to encode.
+ *
+ * Return:	Success.
+ */
+static int dummy_tx_cmd_rx_intent_req(struct glink_transport_if *if_ptr,
+				uint32_t lcid, size_t size)
+{
+	return 0;
+}
+
+/**
+ * dummy_tx_cmd_rx_intent_req_ack() - dummy rx intent request ack
+ * @if_ptr:	The transport to transmit on.
+ * @lcid:	The local channel id to encode.
+ * @granted:	The request response to encode.
+ *
+ * Return:	Success.
+ */
+static int dummy_tx_cmd_remote_rx_intent_req_ack(
+					struct glink_transport_if *if_ptr,
+					uint32_t lcid, bool granted)
+{
+	return 0;
+}
+
+/**
+ * dummy_tx_cmd_set_sigs() - dummy signals ack transmit function
+ * @if_ptr:	The transport to transmit on.
+ * @lcid:	The local channel id to encode.
+ * @sigs:	The signals to encode.
+ *
+ * Return:	Success.
+ */
+static int dummy_tx_cmd_set_sigs(struct glink_transport_if *if_ptr,
+				uint32_t lcid, uint32_t sigs)
+{
+	return 0;
+}
+
+/**
+ * dummy_tx_cmd_ch_close() - dummy channel close transmit function
+ * @if_ptr:	The transport to transmit on.
+ * @lcid:	The local channel id to encode.
+ *
+ * Return:	Success.
+ */
+static int dummy_tx_cmd_ch_close(struct glink_transport_if *if_ptr,
+				uint32_t lcid)
+{
+	return 0;
+}
+
+/**
+ * dummy_tx_cmd_ch_remote_close_ack() - dummy channel close ack sending function
+ * @if_ptr:	The transport to transmit on.
+ * @rcid:	The remote channel id to encode.
+ */
+static void dummy_tx_cmd_ch_remote_close_ack(struct glink_transport_if *if_ptr,
+				       uint32_t rcid)
+{
+	/* intentionally left blank */
+}
+
+/**
+ * dummy_tx_cmd_ch_open() - dummy channel open cmd sending function
+ * @if_ptr:	The transport to transmit on.
+ * @lcid:	The local channel id to encode.
+ * @name:	The channel name to encode.
+ * @req_xprt:	The transport the core would like to migrate this channel to.
+ *
+ * Return: 0 on success or standard Linux error code.
+ */
+static int dummy_tx_cmd_ch_open(struct glink_transport_if *if_ptr,
+			uint32_t lcid, const char *name,
+			uint16_t req_xprt)
+{
+	return -EOPNOTSUPP;
+}
+
+/**
+ * dummy_tx_cmd_ch_remote_open_ack() - convert a channel open ack cmd to wire
+ *				format and transmit
+ * @if_ptr:	The transport to transmit on.
+ * @rcid:	The remote channel id to encode.
+ * @xprt_resp:	The response to a transport migration request.
+ */
+static void dummy_tx_cmd_ch_remote_open_ack(struct glink_transport_if *if_ptr,
+					uint32_t rcid, uint16_t xprt_resp)
+{
+	/* intentionally left blank */
+}
+
+/**
  * notif_if_up_all_xprts() - Check and notify existing transport state if up
  * @notif_info:	Data structure containing transport information to be notified.
  *
@@ -1678,8 +1967,10 @@ void *glink_open(const struct glink_open_config *cfg)
 	}
 
 	/* confirm required notification parameters */
-	if (!(cfg->notify_rx || cfg->notify_rxv) || !cfg->notify_tx_done ||
-			!cfg->notify_state) {
+	if (!(cfg->notify_rx || cfg->notify_rxv) || !cfg->notify_tx_done
+		|| !cfg->notify_state
+		|| ((cfg->options & GLINK_OPT_RX_INTENT_NOTIF)
+			&& !cfg->notify_remote_rx_intent)) {
 		GLINK_ERR("%s: Incorrect notification parameters\n", __func__);
 		return ERR_PTR(-EINVAL);
 	}
@@ -1725,6 +2016,8 @@ void *glink_open(const struct glink_open_config *cfg)
 	ctx->notify_rx_sigs = cfg->notify_rx_sigs;
 	ctx->notify_rx_abort = cfg->notify_rx_abort;
 	ctx->notify_tx_abort = cfg->notify_tx_abort;
+	ctx->notify_rx_tracer_pkt = cfg->notify_rx_tracer_pkt;
+	ctx->notify_remote_rx_intent = cfg->notify_remote_rx_intent;
 
 	if (!ctx->notify_rx_intent_req)
 		ctx->notify_rx_intent_req = glink_dummy_notify_rx_intent_req;
@@ -1801,6 +2094,34 @@ char *glink_get_channel_name_for_handle(void *handle)
 EXPORT_SYMBOL(glink_get_channel_name_for_handle);
 
 /**
+ * glink_delete_ch_from_list() -  delete the channel from the list
+ * @ctx:	Pointer to channel context.
+ * @add_flcid:	Boolean value to decide whether the lcid should be added or not.
+ *
+ * This function deletes the channel from the list along with the debugfs
+ * information associated with it. It also adds the channel lcid to the free
+ * lcid list except if the channel is deleted in case of ssr/unregister case.
+ * It can only called when channel is fully closed.
+ */
+static void glink_delete_ch_from_list(struct channel_ctx *ctx, bool add_flcid)
+{
+	unsigned long flags;
+	spin_lock_irqsave(&ctx->transport_ptr->xprt_ctx_lock_lhb1,
+				flags);
+	if (!list_empty(&ctx->port_list_node))
+		list_del_init(&ctx->port_list_node);
+	spin_unlock_irqrestore(
+			&ctx->transport_ptr->xprt_ctx_lock_lhb1,
+			flags);
+	if (add_flcid)
+		glink_add_free_lcid_list(ctx);
+	mutex_lock(&ctx->transport_ptr->xprt_dbgfs_lock_lhb3);
+	glink_debugfs_remove_channel(ctx, ctx->transport_ptr);
+	mutex_unlock(&ctx->transport_ptr->xprt_dbgfs_lock_lhb3);
+	rwref_put(&ctx->ch_state_lhc0);
+}
+
+/**
  * glink_close() - Close a previously opened channel.
  *
  * @handle:	handle to close
@@ -1813,6 +2134,7 @@ EXPORT_SYMBOL(glink_get_channel_name_for_handle);
  */
 int glink_close(void *handle)
 {
+	struct glink_core_xprt_ctx *xprt_ctx = NULL;
 	struct channel_ctx *ctx = (struct channel_ctx *)handle;
 	int ret;
 
@@ -1843,9 +2165,28 @@ int glink_close(void *handle)
 		ret = ctx->transport_ptr->ops->tx_cmd_ch_close(
 				ctx->transport_ptr->ops,
 				ctx->lcid);
-	} else {
+	} else if (!strcmp(ctx->transport_ptr->name, "dummy")) {
+		/*
+		 * This check will avoid any race condition when clients call
+		 * glink_close before the dummy xprt swapping happens in link
+		 * down scenario.
+		 */
 		ret = 0;
-		complete(&ctx->ch_close_complete);
+		xprt_ctx = ctx->transport_ptr;
+		rwref_write_get(&xprt_ctx->xprt_state_lhb0);
+		glink_core_ch_close_ack_common(ctx);
+		if (ch_is_fully_closed(ctx)) {
+			glink_delete_ch_from_list(ctx, false);
+			rwref_put(&xprt_ctx->xprt_state_lhb0);
+			if (list_empty(&xprt_ctx->channels))
+				/* For the xprt reference */
+				rwref_put(&xprt_ctx->xprt_state_lhb0);
+		} else {
+			GLINK_ERR_CH(ctx,
+			"channel Not closed yet local state [%d] remote_state [%d]\n",
+			ctx->local_open_state, ctx->remote_opened);
+		}
+		rwref_write_put(&xprt_ctx->xprt_state_lhb0);
 	}
 
 	return ret;
@@ -1896,6 +2237,12 @@ static int glink_tx_common(void *handle, void *pkt_priv,
 	if (is_atomic && (tx_flags & GLINK_TX_REQ_INTENT))
 		return -EINVAL;
 
+	if (unlikely(tx_flags & GLINK_TX_TRACER_PKT)) {
+		if (!(ctx->transport_ptr->capabilities & GCAP_TRACER_PKT))
+			return -EOPNOTSUPP;
+		tracer_pkt_log_event(data, GLINK_CORE_TX);
+	}
+
 	/* find matching rx intent (first-fit algorithm for now) */
 	if (ch_pop_remote_rx_intent(ctx, size, &riid, &intent_size)) {
 		if (!(tx_flags & GLINK_TX_REQ_INTENT)) {
@@ -1907,11 +2254,14 @@ static int glink_tx_common(void *handle, void *pkt_priv,
 		} else {
 			/* request intent of correct size */
 			reinit_completion(&ctx->int_req_ack_complete);
-			reinit_completion(&ctx->int_req_complete);
 			ret = ctx->transport_ptr->ops->tx_cmd_rx_intent_req(
 				ctx->transport_ptr->ops, ctx->lcid, size);
-			if (ret)
+			if (ret) {
+				GLINK_ERR_CH(ctx,
+					"%s: Request intent failed %d\n",
+					__func__, ret);
 				return ret;
+			}
 
 			/* wait for the remote intent req ack */
 			wait_for_completion(&ctx->int_req_ack_complete);
@@ -1954,6 +2304,7 @@ static int glink_tx_common(void *handle, void *pkt_priv,
 	tx_info->riid = riid;
 	tx_info->size = size;
 	tx_info->size_remaining = size;
+	tx_info->tracer_pkt = tx_flags & GLINK_TX_TRACER_PKT ? true : false;
 	tx_info->iovec = iovec ? iovec : (void *)tx_info;
 	tx_info->vprovider = vbuf_provider;
 	tx_info->pprovider = pbuf_provider;
@@ -2004,7 +2355,7 @@ int glink_queue_rx_intent(void *handle, const void *pkt_priv, size_t size)
 {
 	struct channel_ctx *ctx = (struct channel_ctx *)handle;
 	struct glink_core_rx_intent *intent_ptr;
-	int ret;
+	int ret = 0;
 
 	if (!ctx)
 		return -EINVAL;
@@ -2026,6 +2377,9 @@ int glink_queue_rx_intent(void *handle, const void *pkt_priv, size_t size)
 	GLINK_DBG_CH(ctx, "%s: L[%u]:%zu\n", __func__, intent_ptr->id,
 			intent_ptr->intent_size);
 
+	if (ctx->transport_ptr->capabilities & GCAP_INTENTLESS)
+		return ret;
+
 	/* notify remote side of rx intent */
 	ret = ctx->transport_ptr->ops->tx_cmd_local_rx_intent(
 		ctx->transport_ptr->ops, ctx->lcid, size, intent_ptr->id);
@@ -2036,6 +2390,38 @@ int glink_queue_rx_intent(void *handle, const void *pkt_priv, size_t size)
 	return ret;
 }
 EXPORT_SYMBOL(glink_queue_rx_intent);
+
+/**
+ * glink_rx_intent_exists() - Check if an intent exists.
+ *
+ * @handle:	handle returned by glink_open()
+ * @size:	size of an intent to check or 0 for any intent
+ *
+ * Return:	TRUE if an intent exists with greater than or equal to the size
+ *		else FALSE
+ */
+bool glink_rx_intent_exists(void *handle, size_t size)
+{
+	struct channel_ctx *ctx = (struct channel_ctx *)handle;
+	struct glink_core_rx_intent *intent;
+	unsigned long flags;
+
+	if (!ctx || !ch_is_fully_opened(ctx))
+		return false;
+
+	spin_lock_irqsave(&ctx->local_rx_intent_lst_lock_lhc1, flags);
+	list_for_each_entry(intent, &ctx->local_rx_intent_list, list) {
+		if (size <= intent->intent_size) {
+			spin_unlock_irqrestore(
+				&ctx->local_rx_intent_lst_lock_lhc1, flags);
+			return true;
+		}
+	}
+	spin_unlock_irqrestore(&ctx->local_rx_intent_lst_lock_lhc1, flags);
+
+	return false;
+}
+EXPORT_SYMBOL(glink_rx_intent_exists);
 
 /**
  * glink_rx_done() - Return receive buffer to remote side.
@@ -2154,14 +2540,15 @@ EXPORT_SYMBOL(glink_sigs_set);
  * glink_sigs_local_get() - Get the local signals for the GLINK channel
  *
  * handle:	handle returned by glink_open()
+ * sigs:	Pointer to hold the signals
  *
- * Return: Local signal value or standard Linux error code for failure case
+ * Return: 0 for success; standard Linux error code for failure case
  */
-int glink_sigs_local_get(void *handle)
+int glink_sigs_local_get(void *handle, uint32_t *sigs)
 {
 	struct channel_ctx *ctx = (struct channel_ctx *)handle;
 
-	if (!ctx)
+	if (!ctx || !sigs)
 		return -EINVAL;
 
 	if (!ch_is_fully_opened(ctx)) {
@@ -2170,7 +2557,8 @@ int glink_sigs_local_get(void *handle)
 		return -EBUSY;
 	}
 
-	return ctx->lsigs;
+	*sigs = ctx->lsigs;
+	return 0;
 }
 EXPORT_SYMBOL(glink_sigs_local_get);
 
@@ -2178,14 +2566,15 @@ EXPORT_SYMBOL(glink_sigs_local_get);
  * glink_sigs_remote_get() - Get the Remote signals for the GLINK channel
  *
  * handle:	handle returned by glink_open()
+ * sigs:	Pointer to hold the signals
  *
- * Return: Remote signal value or standard Linux error code for failure case
+ * Return: 0 for success; standard Linux error code for failure case
  */
-int glink_sigs_remote_get(void *handle)
+int glink_sigs_remote_get(void *handle, uint32_t *sigs)
 {
 	struct channel_ctx *ctx = (struct channel_ctx *)handle;
 
-	if (!ctx)
+	if (!ctx || !sigs)
 		return -EINVAL;
 
 	if (!ch_is_fully_opened(ctx)) {
@@ -2194,7 +2583,8 @@ int glink_sigs_remote_get(void *handle)
 		return -EBUSY;
 	}
 
-	return ctx->rsigs;
+	*sigs = ctx->rsigs;
+	return 0;
 }
 EXPORT_SYMBOL(glink_sigs_remote_get);
 
@@ -2382,6 +2772,23 @@ void glink_xprt_ctx_release(struct rwref_lock *xprt_st_lock)
 }
 
 /**
+ * glink_dummy_xprt_ctx_release - free the dummy transport context
+ * @xprt_st_lock:	Handle to the rwref_lock associated with the transport.
+ *
+ * The release function is called when all the channels on this dummy
+ * transport are closed and the reference count goes to zero.
+ */
+static void glink_dummy_xprt_ctx_release(struct rwref_lock *xprt_st_lock)
+{
+	struct glink_core_xprt_ctx *xprt_ctx = container_of(xprt_st_lock,
+				struct glink_core_xprt_ctx, xprt_state_lhb0);
+	GLINK_INFO("%s: freeing transport [%s->%s]context\n", __func__,
+				xprt_ctx->name,
+				xprt_ctx->edge);
+	kfree(xprt_ctx);
+}
+
+/**
  * glink_xprt_name_to_id() - convert transport name to id
  * @name:	Name of the transport.
  * @id:		Assigned id.
@@ -2404,6 +2811,14 @@ int glink_xprt_name_to_id(const char *name, uint16_t *id)
 	}
 	if (!strcmp(name, "mock")) {
 		*id = MOCK_XPRT_ID;
+		return 0;
+	}
+	if (!strcmp(name, "mock_low")) {
+		*id = MOCK_XPRT_LOW_ID;
+		return 0;
+	}
+	if (!strcmp(name, "mock_high")) {
+		*id = MOCK_XPRT_HIGH_ID;
 		return 0;
 	}
 	return -ENODEV;
@@ -2456,6 +2871,8 @@ int glink_core_register_transport(struct glink_transport_if *if_ptr,
 	xprt_ptr->versions_entries = cfg->versions_entries;
 	xprt_ptr->local_version_idx = cfg->versions_entries - 1;
 	xprt_ptr->remote_version_idx = cfg->versions_entries - 1;
+	xprt_ptr->l_features =
+			cfg->versions[cfg->versions_entries - 1].features;
 	if (!if_ptr->poll)
 		if_ptr->poll = dummy_poll;
 	if (!if_ptr->mask_rx_irq)
@@ -2464,6 +2881,8 @@ int glink_core_register_transport(struct glink_transport_if *if_ptr,
 		if_ptr->reuse_rx_intent = dummy_reuse_rx_intent;
 	if (!if_ptr->wait_link_down)
 		if_ptr->wait_link_down = dummy_wait_link_down;
+	if (!if_ptr->tx_cmd_tracer_pkt)
+		if_ptr->tx_cmd_tracer_pkt = dummy_tx_cmd_tracer_pkt;
 	xprt_ptr->capabilities = 0;
 	xprt_ptr->ops = if_ptr;
 	spin_lock_init(&xprt_ptr->xprt_ctx_lock_lhb1);
@@ -2516,20 +2935,13 @@ void glink_core_unregister_transport(struct glink_transport_if *if_ptr)
 		__func__);
 		return;
 	}
-	xprt_ptr->ops->ssr(xprt_ptr->ops);
 
-	if (list_empty(&xprt_ptr->channels)) {
-		mutex_lock(&transport_list_lock_lha0);
-		list_del(&xprt_ptr->list_node);
-		mutex_unlock(&transport_list_lock_lha0);
-
-		flush_delayed_work(&xprt_ptr->pm_qos_work);
-		pm_qos_remove_request(&xprt_ptr->pm_qos_req);
-		rwref_put(&xprt_ptr->xprt_state_lhb0);
-	} else {
-		GLINK_ERR("%s:Channel list is not empty.This should not happen!"
-				, __func__);
-	}
+	mutex_lock(&transport_list_lock_lha0);
+	list_del(&xprt_ptr->list_node);
+	mutex_unlock(&transport_list_lock_lha0);
+	flush_delayed_work(&xprt_ptr->pm_qos_work);
+	pm_qos_remove_request(&xprt_ptr->pm_qos_req);
+	rwref_put(&xprt_ptr->xprt_state_lhb0);
 }
 EXPORT_SYMBOL(glink_core_unregister_transport);
 
@@ -2545,6 +2957,8 @@ static void glink_core_link_up(struct glink_transport_if *if_ptr)
 	/* start local negotiation */
 	xprt_ptr->local_state = GLINK_XPRT_NEGOTIATING;
 	xprt_ptr->local_version_idx = xprt_ptr->versions_entries - 1;
+	xprt_ptr->l_features =
+		xprt_ptr->versions[xprt_ptr->local_version_idx].features;
 	if_ptr->tx_cmd_version(if_ptr,
 		    xprt_ptr->versions[xprt_ptr->local_version_idx].version,
 		    xprt_ptr->versions[xprt_ptr->local_version_idx].features);
@@ -2565,6 +2979,8 @@ static void glink_core_link_down(struct glink_transport_if *if_ptr)
 	xprt_ptr->local_state = GLINK_XPRT_DOWN;
 	xprt_ptr->local_version_idx = xprt_ptr->versions_entries - 1;
 	xprt_ptr->remote_version_idx = xprt_ptr->versions_entries - 1;
+	xprt_ptr->l_features =
+		xprt_ptr->versions[xprt_ptr->local_version_idx].features;
 	xprt_ptr->remote_neg_completed = false;
 	rwref_write_put(&xprt_ptr->xprt_state_lhb0);
 	GLINK_DBG_XPRT(xprt_ptr,
@@ -2576,6 +2992,67 @@ static void glink_core_link_down(struct glink_transport_if *if_ptr)
 }
 
 /**
+ * glink_create_dummy_xprt_ctx() - create a dummy transport that replaces all
+ *				the transport interface functions with a dummy
+ * @orig_xprt_ctx:	Pointer to the original transport context.
+ *
+ * The dummy transport is used only when it is swapped with the actual transport
+ * pointer in ssr/unregister case.
+ *
+ * Return:	Pointer to dummy transport context.
+ */
+static struct glink_core_xprt_ctx *glink_create_dummy_xprt_ctx(
+				struct glink_core_xprt_ctx *orig_xprt_ctx)
+{
+
+	struct glink_core_xprt_ctx *xprt_ptr;
+	struct glink_transport_if *if_ptr;
+
+	xprt_ptr = kzalloc(sizeof(*xprt_ptr), GFP_KERNEL);
+	if (!xprt_ptr)
+		return ERR_PTR(-ENOMEM);
+	if_ptr = kmalloc(sizeof(*if_ptr), GFP_KERNEL);
+	if (!if_ptr) {
+		kfree(xprt_ptr);
+		return ERR_PTR(-ENOMEM);
+	}
+	rwref_lock_init(&xprt_ptr->xprt_state_lhb0,
+			glink_dummy_xprt_ctx_release);
+
+	strlcpy(xprt_ptr->name, "dummy", GLINK_NAME_SIZE);
+	strlcpy(xprt_ptr->edge, orig_xprt_ctx->edge, GLINK_NAME_SIZE);
+	if_ptr->poll = dummy_poll;
+	if_ptr->mask_rx_irq = dummy_mask_rx_irq;
+	if_ptr->reuse_rx_intent = dummy_reuse_rx_intent;
+	if_ptr->wait_link_down = dummy_wait_link_down;
+	if_ptr->allocate_rx_intent = dummy_allocate_rx_intent;
+	if_ptr->deallocate_rx_intent = dummy_deallocate_rx_intent;
+	if_ptr->tx_cmd_local_rx_intent = dummy_tx_cmd_local_rx_intent;
+	if_ptr->tx_cmd_local_rx_done = dummy_tx_cmd_local_rx_done;
+	if_ptr->tx = dummy_tx;
+	if_ptr->tx_cmd_rx_intent_req = dummy_tx_cmd_rx_intent_req;
+	if_ptr->tx_cmd_remote_rx_intent_req_ack =
+				dummy_tx_cmd_remote_rx_intent_req_ack;
+	if_ptr->tx_cmd_set_sigs = dummy_tx_cmd_set_sigs;
+	if_ptr->tx_cmd_ch_open = dummy_tx_cmd_ch_open;
+	if_ptr->tx_cmd_ch_remote_open_ack = dummy_tx_cmd_ch_remote_open_ack;
+	if_ptr->tx_cmd_ch_close = dummy_tx_cmd_ch_close;
+	if_ptr->tx_cmd_ch_remote_close_ack = dummy_tx_cmd_ch_remote_close_ack;
+	if_ptr->tx_cmd_tracer_pkt = dummy_tx_cmd_tracer_pkt;
+
+	xprt_ptr->ops = if_ptr;
+	spin_lock_init(&xprt_ptr->xprt_ctx_lock_lhb1);
+	INIT_LIST_HEAD(&xprt_ptr->free_lcid_list);
+	xprt_ptr->local_state = GLINK_XPRT_DOWN;
+	xprt_ptr->remote_neg_completed = false;
+	INIT_LIST_HEAD(&xprt_ptr->channels);
+	INIT_LIST_HEAD(&xprt_ptr->tx_ready);
+	mutex_init(&xprt_ptr->tx_ready_mutex_lhb2);
+	mutex_init(&xprt_ptr->xprt_dbgfs_lock_lhb3);
+	return xprt_ptr;
+}
+
+/**
  * glink_core_channel_cleanup() - cleanup all channels for the transport
  *
  * @xprt_ptr:	pointer to transport context
@@ -2584,66 +3061,66 @@ static void glink_core_link_down(struct glink_transport_if *if_ptr)
  */
 static void glink_core_channel_cleanup(struct glink_core_xprt_ctx *xprt_ptr)
 {
-	unsigned long flags;
+	unsigned long flags, d_flags;
 	struct channel_ctx *ctx, *tmp_ctx;
 	struct channel_lcid *temp_lcid, *temp_lcid1;
+	struct glink_core_xprt_ctx *dummy_xprt_ctx;
 
+	dummy_xprt_ctx = glink_create_dummy_xprt_ctx(xprt_ptr);
+	if (IS_ERR_OR_NULL(dummy_xprt_ctx)) {
+		GLINK_ERR("%s: Dummy Transport creation failed\n", __func__);
+		return;
+	}
+
+	rwref_get(&dummy_xprt_ctx->xprt_state_lhb0);
 	spin_lock_irqsave(&xprt_ptr->xprt_ctx_lock_lhb1, flags);
 	list_for_each_entry_safe(ctx, tmp_ctx, &xprt_ptr->channels,
 						port_list_node) {
 		rwref_get(&ctx->ch_state_lhc0);
-		spin_unlock_irqrestore(&xprt_ptr->xprt_ctx_lock_lhb1, flags);
-		if (!ch_is_fully_closed(ctx)) {
-			if (ctx->remote_opened &&
-			(ctx->local_open_state == GLINK_CHANNEL_CLOSED)) {
-				glink_core_remote_close_common(ctx);
-			} else {
-				glink_core_remote_close_common(ctx);
-				if (ctx->local_open_state !=
-						GLINK_CHANNEL_CLOSING)
-					wait_for_completion(
-						&ctx->ch_close_complete);
-				ctx->local_open_state = GLINK_CHANNEL_CLOSED;
-				GLINK_INFO_PERF_CH(ctx,
-				"%s: local:GLINK_CHANNEL_CLOSING->GLINK_CHANNEL_CLOSED\n",
-				__func__);
-
-				if (ctx->notify_state) {
-					ctx->notify_state(ctx, ctx->user_priv,
-						GLINK_LOCAL_DISCONNECTED);
-					GLINK_INFO_PERF_CH(ctx,
-						"%s: notify state: GLINK_LOCAL_DISCONNECTED\n",
-						__func__);
-				}
-			} /* only remote state was opened*/
-		}
-		spin_lock_irqsave(&xprt_ptr->xprt_ctx_lock_lhb1, flags);
-		if (ch_is_fully_closed(ctx)) {
-			if (!list_empty(&ctx->port_list_node))
-				list_del_init(&ctx->port_list_node);
-			spin_unlock_irqrestore(&xprt_ptr->xprt_ctx_lock_lhb1,
-						flags);
-			mutex_lock(&ctx->transport_ptr->xprt_dbgfs_lock_lhb3);
-			glink_debugfs_remove_channel(ctx, xprt_ptr);
-			mutex_unlock(&ctx->transport_ptr->xprt_dbgfs_lock_lhb3);
-			rwref_put(&ctx->ch_state_lhc0);
-			spin_lock_irqsave(&xprt_ptr->xprt_ctx_lock_lhb1, flags);
+		if (ctx->local_open_state == GLINK_CHANNEL_OPENED ||
+			ctx->local_open_state == GLINK_CHANNEL_OPENING) {
+			rwref_get(&dummy_xprt_ctx->xprt_state_lhb0);
+			spin_lock_irqsave(&dummy_xprt_ctx->xprt_ctx_lock_lhb1,
+						d_flags);
+			list_move_tail(&ctx->port_list_node,
+					&dummy_xprt_ctx->channels);
+			spin_unlock_irqrestore(
+				&dummy_xprt_ctx->xprt_ctx_lock_lhb1, d_flags);
+			ctx->transport_ptr = dummy_xprt_ctx;
 		} else {
-			GLINK_ERR_CH(ctx,
-				"%s:channel should have been closed by now\n",
-				__func__);
-			GLINK_ERR_CH(ctx,
-				"channel local state [%d] remote_state [%d]\n",
-				ctx->local_open_state, ctx->remote_opened);
+			/* local state is in either CLOSED or CLOSING */
+			spin_unlock_irqrestore(&xprt_ptr->xprt_ctx_lock_lhb1,
+							flags);
+			glink_core_remote_close_common(ctx);
+			if (ctx->local_open_state == GLINK_CHANNEL_CLOSING)
+				glink_core_ch_close_ack_common(ctx);
+			/* Channel should be fully closed now. Delete here */
+			if (ch_is_fully_closed(ctx))
+				glink_delete_ch_from_list(ctx, false);
+			spin_lock_irqsave(&xprt_ptr->xprt_ctx_lock_lhb1, flags);
 		}
-		list_for_each_entry_safe(temp_lcid, temp_lcid1,
-				&xprt_ptr->free_lcid_list, list_node) {
-			list_del(&temp_lcid->list_node);
-			kfree(&temp_lcid->list_node);
-		}
+		rwref_put(&ctx->ch_state_lhc0);
+	}
+	list_for_each_entry_safe(temp_lcid, temp_lcid1,
+			&xprt_ptr->free_lcid_list, list_node) {
+		list_del(&temp_lcid->list_node);
+		kfree(&temp_lcid->list_node);
 	}
 	spin_unlock_irqrestore(&xprt_ptr->xprt_ctx_lock_lhb1, flags);
 
+	spin_lock_irqsave(&dummy_xprt_ctx->xprt_ctx_lock_lhb1, d_flags);
+	list_for_each_entry_safe(ctx, tmp_ctx, &dummy_xprt_ctx->channels,
+						port_list_node) {
+		rwref_get(&ctx->ch_state_lhc0);
+		spin_unlock_irqrestore(&dummy_xprt_ctx->xprt_ctx_lock_lhb1,
+				d_flags);
+		glink_core_remote_close_common(ctx);
+		spin_lock_irqsave(&dummy_xprt_ctx->xprt_ctx_lock_lhb1,
+				d_flags);
+		rwref_put(&ctx->ch_state_lhc0);
+	}
+	spin_unlock_irqrestore(&dummy_xprt_ctx->xprt_ctx_lock_lhb1, d_flags);
+	rwref_put(&dummy_xprt_ctx->xprt_state_lhb0);
 }
 /**
  * glink_core_rx_cmd_version() - receive version/features from remote system
@@ -2661,14 +3138,19 @@ static void glink_core_rx_cmd_version(struct glink_transport_if *if_ptr,
 	struct glink_core_xprt_ctx *xprt_ptr = if_ptr->glink_core_priv;
 	const struct glink_core_version *versions = xprt_ptr->versions;
 	bool neg_complete = false;
-	uint32_t l_version, l_features;
+	uint32_t l_version;
+
+	if (xprt_is_fully_opened(xprt_ptr)) {
+		GLINK_ERR_XPRT(xprt_ptr,
+			"%s: Negotiation already complete\n", __func__);
+		return;
+	}
 
 	l_version = versions[xprt_ptr->remote_version_idx].version;
-	l_features = versions[xprt_ptr->remote_version_idx].features;
 
 	GLINK_INFO_XPRT(xprt_ptr,
 		"%s: [local]%x:%08x [remote]%x:%08x\n", __func__,
-		l_version, l_features, r_version, r_features);
+		l_version, xprt_ptr->l_features, r_version, r_features);
 
 	if (l_version > r_version) {
 		/* Find matching version */
@@ -2681,7 +3163,7 @@ static void glink_core_rx_cmd_version(struct glink_transport_if *if_ptr,
 					"%s: Transport negotiation failed\n",
 					__func__);
 				l_version = 0;
-				l_features = 0;
+				xprt_ptr->l_features = 0;
 				break;
 			}
 			--xprt_ptr->remote_version_idx;
@@ -2690,7 +3172,8 @@ static void glink_core_rx_cmd_version(struct glink_transport_if *if_ptr,
 			if (versions[rver_idx].version <= r_version) {
 				/* found a potential match */
 				l_version = versions[rver_idx].version;
-				l_features = versions[rver_idx].features;
+				xprt_ptr->l_features =
+					versions[rver_idx].features;
 				break;
 			}
 		}
@@ -2700,29 +3183,30 @@ static void glink_core_rx_cmd_version(struct glink_transport_if *if_ptr,
 		GLINK_INFO_XPRT(xprt_ptr,
 			"%s: Remote and local version are matched %x:%08x\n",
 			__func__, r_version, r_features);
-		if (l_features != r_features) {
+		if (xprt_ptr->l_features != r_features) {
 			uint32_t rver_idx = xprt_ptr->remote_version_idx;
 
-			l_features = versions[rver_idx]
-					.negotiate_features(if_ptr,
+			xprt_ptr->l_features = versions[rver_idx]
+						.negotiate_features(if_ptr,
 					&xprt_ptr->versions[rver_idx],
 					r_features);
 			GLINK_INFO_XPRT(xprt_ptr,
 				"%s: negotiate features %x:%08x\n",
-				__func__, l_version, l_features);
+				__func__, l_version, xprt_ptr->l_features);
 		}
 		neg_complete = true;
 	}
-	if_ptr->tx_cmd_version_ack(if_ptr, l_version, l_features);
+	if_ptr->tx_cmd_version_ack(if_ptr, l_version, xprt_ptr->l_features);
 
 	if (neg_complete) {
 		GLINK_INFO_XPRT(xprt_ptr,
 			"%s: Remote negotiation complete %x:%08x\n", __func__,
-			l_version, l_features);
+			l_version, xprt_ptr->l_features);
 
 		if (xprt_ptr->local_state == GLINK_XPRT_OPENED) {
 			xprt_ptr->capabilities = if_ptr->set_version(if_ptr,
-							l_version, l_features);
+							l_version,
+							xprt_ptr->l_features);
 		}
 		if_ptr->glink_core_priv->remote_neg_completed = true;
 		if (xprt_is_fully_opened(xprt_ptr))
@@ -2747,15 +3231,20 @@ static void glink_core_rx_cmd_version_ack(struct glink_transport_if *if_ptr,
 {
 	struct glink_core_xprt_ctx *xprt_ptr = if_ptr->glink_core_priv;
 	const struct glink_core_version *versions = xprt_ptr->versions;
-	uint32_t l_version, l_features;
+	uint32_t l_version;
 	bool neg_complete = false;
 
+	if (xprt_is_fully_opened(xprt_ptr)) {
+		GLINK_ERR_XPRT(xprt_ptr,
+			"%s: Negotiation already complete\n", __func__);
+		return;
+	}
+
 	l_version = versions[xprt_ptr->local_version_idx].version;
-	l_features = versions[xprt_ptr->local_version_idx].features;
 
 	GLINK_INFO_XPRT(xprt_ptr,
 		"%s: [local]%x:%08x [remote]%x:%08x\n", __func__,
-		 l_version, l_features, r_version, r_features);
+		 l_version, xprt_ptr->l_features, r_version, r_features);
 
 	if (l_version > r_version) {
 		/* find matching version */
@@ -2769,7 +3258,7 @@ static void glink_core_rx_cmd_version_ack(struct glink_transport_if *if_ptr,
 					"%s: Transport negotiation failed\n",
 					__func__);
 				l_version = 0;
-				l_features = 0;
+				xprt_ptr->l_features = 0;
 				break;
 			}
 			--xprt_ptr->local_version_idx;
@@ -2778,21 +3267,23 @@ static void glink_core_rx_cmd_version_ack(struct glink_transport_if *if_ptr,
 			if (versions[lver_idx].version <= r_version) {
 				/* found a potential match */
 				l_version = versions[lver_idx].version;
-				l_features = versions[lver_idx].features;
+				xprt_ptr->l_features =
+					versions[lver_idx].features;
 				break;
 			}
 		}
 	} else if (l_version == r_version) {
-		if (l_features != r_features) {
+		if (xprt_ptr->l_features != r_features) {
 			/* version matches, negotiate features */
 			uint32_t lver_idx = xprt_ptr->local_version_idx;
 
-			l_features = versions[lver_idx].negotiate_features(
-					if_ptr, &versions[lver_idx],
-					r_features);
+			xprt_ptr->l_features = versions[lver_idx]
+						.negotiate_features(if_ptr,
+							&versions[lver_idx],
+							r_features);
 			GLINK_INFO_XPRT(xprt_ptr,
 				"%s: negotiation features %x:%08x\n",
-				__func__, l_version, l_features);
+				__func__, l_version, xprt_ptr->l_features);
 		} else {
 			neg_complete = true;
 		}
@@ -2806,22 +3297,23 @@ static void glink_core_rx_cmd_version_ack(struct glink_transport_if *if_ptr,
 		 */
 		GLINK_ERR_XPRT(xprt_ptr,
 			"%s: [local]%x:%08x [remote]%x:%08x neg failure\n",
-			__func__, l_version, l_features, r_version,
+			__func__, l_version, xprt_ptr->l_features, r_version,
 			r_features);
 		xprt_ptr->local_state = GLINK_XPRT_FAILED;
 		l_version = 0;
-		l_features = 0;
+		xprt_ptr->l_features = 0;
 	}
 
 	if (neg_complete) {
 		/* negotiation complete */
 		GLINK_INFO_XPRT(xprt_ptr,
 			"%s: Local negotiation complete %x:%08x\n",
-			__func__, l_version, l_features);
+			__func__, l_version, xprt_ptr->l_features);
 
 		if (xprt_ptr->remote_neg_completed) {
 			xprt_ptr->capabilities = if_ptr->set_version(if_ptr,
-							l_version, l_features);
+							l_version,
+							xprt_ptr->l_features);
 		}
 
 		xprt_ptr->local_state = GLINK_XPRT_OPENED;
@@ -2829,7 +3321,7 @@ static void glink_core_rx_cmd_version_ack(struct glink_transport_if *if_ptr,
 			check_link_notifier_and_notify(xprt_ptr,
 						       GLINK_LINK_STATE_UP);
 	} else {
-		if_ptr->tx_cmd_version(if_ptr, l_version, l_features);
+		if_ptr->tx_cmd_version(if_ptr, l_version, xprt_ptr->l_features);
 	}
 }
 
@@ -2952,6 +3444,9 @@ static bool will_migrate(struct channel_ctx *l_ctx, struct channel_ctx *r_ctx)
 	if (l_ctx->no_migrate)
 		goto exit;
 
+	if (l_ctx->local_xprt_req > r_ctx->transport_ptr->id)
+		l_ctx->local_xprt_req = r_ctx->transport_ptr->id;
+
 	new_xprt = max(l_ctx->local_xprt_req, r_ctx->remote_xprt_req);
 
 	if (new_xprt == l_ctx->transport_ptr->id)
@@ -3009,6 +3504,9 @@ static bool ch_migrate(struct channel_ctx *l_ctx, struct channel_ctx *r_ctx)
 	if (l_ctx->no_migrate)
 		goto exit;
 
+	if (l_ctx->local_xprt_req > r_ctx->transport_ptr->id)
+		l_ctx->local_xprt_req = r_ctx->transport_ptr->id;
+
 	new_xprt = max(l_ctx->local_xprt_req, r_ctx->remote_xprt_req);
 
 	if (new_xprt == l_ctx->transport_ptr->id)
@@ -3038,7 +3536,6 @@ static bool ch_migrate(struct channel_ctx *l_ctx, struct channel_ctx *r_ctx)
 	ctx_clone->notify_state = NULL;
 	ctx_clone->local_open_state = GLINK_CHANNEL_CLOSING;
 	rwref_lock_init(&ctx_clone->ch_state_lhc0, glink_ch_ctx_release);
-	init_completion(&ctx_clone->ch_close_complete);
 	init_completion(&ctx_clone->int_req_ack_complete);
 	init_completion(&ctx_clone->int_req_complete);
 	spin_lock_init(&ctx_clone->local_rx_intent_lst_lock_lhc1);
@@ -3058,34 +3555,49 @@ static bool ch_migrate(struct channel_ctx *l_ctx, struct channel_ctx *r_ctx)
 	spin_unlock_irqrestore(&l_ctx->transport_ptr->xprt_ctx_lock_lhb1,
 									flags);
 
-	r_ctx->local_xprt_req = 0;
-	r_ctx->local_xprt_resp = 0;
-	r_ctx->remote_xprt_req = 0;
-	r_ctx->remote_xprt_resp = 0;
-
 	l_ctx->transport_ptr->ops->tx_cmd_ch_close(l_ctx->transport_ptr->ops,
 								l_ctx->lcid);
+
 	l_ctx->transport_ptr = xprt;
 	l_ctx->local_xprt_req = 0;
 	l_ctx->local_xprt_resp = 0;
-	l_ctx->remote_xprt_req = 0;
-	l_ctx->remote_xprt_resp = 0;
-	l_ctx->remote_opened = false;
+	if (new_xprt != r_ctx->transport_ptr->id) {
+		r_ctx->local_xprt_req = 0;
+		r_ctx->local_xprt_resp = 0;
+		r_ctx->remote_xprt_req = 0;
+		r_ctx->remote_xprt_resp = 0;
 
-	rwref_write_get(&xprt->xprt_state_lhb0);
-	spin_lock_irqsave(&xprt->xprt_ctx_lock_lhb1, flags);
-	if (list_empty(&xprt->free_lcid_list)) {
-		l_ctx->lcid = xprt->next_lcid++;
-	} else {
-		flcid = list_first_entry(&xprt->free_lcid_list,
+		l_ctx->remote_xprt_req = 0;
+		l_ctx->remote_xprt_resp = 0;
+		l_ctx->remote_opened = false;
+
+		rwref_write_get(&xprt->xprt_state_lhb0);
+		spin_lock_irqsave(&xprt->xprt_ctx_lock_lhb1, flags);
+		if (list_empty(&xprt->free_lcid_list)) {
+			l_ctx->lcid = xprt->next_lcid++;
+		} else {
+			flcid = list_first_entry(&xprt->free_lcid_list,
 						struct channel_lcid, list_node);
-		l_ctx->lcid = flcid->lcid;
-		list_del(&flcid->list_node);
-		kfree(flcid);
+			l_ctx->lcid = flcid->lcid;
+			list_del(&flcid->list_node);
+			kfree(flcid);
+		}
+		list_add_tail(&l_ctx->port_list_node, &xprt->channels);
+		spin_unlock_irqrestore(&xprt->xprt_ctx_lock_lhb1, flags);
+		rwref_write_put(&xprt->xprt_state_lhb0);
+	} else {
+		l_ctx->lcid = r_ctx->lcid;
+		l_ctx->rcid = r_ctx->rcid;
+		l_ctx->remote_opened = r_ctx->remote_opened;
+		l_ctx->remote_xprt_req = r_ctx->remote_xprt_req;
+		l_ctx->remote_xprt_resp = r_ctx->remote_xprt_resp;
+		glink_delete_ch_from_list(r_ctx, false);
+
+		spin_lock_irqsave(&xprt->xprt_ctx_lock_lhb1, flags);
+		list_add_tail(&l_ctx->port_list_node, &xprt->channels);
+		spin_unlock_irqrestore(&xprt->xprt_ctx_lock_lhb1, flags);
 	}
-	list_add_tail(&l_ctx->port_list_node, &xprt->channels);
-	spin_unlock_irqrestore(&xprt->xprt_ctx_lock_lhb1, flags);
-	rwref_write_put(&xprt->xprt_state_lhb0);
+
 
 	mutex_lock(&transport_list_lock_lha0);
 	list_for_each_entry(xprt, &transport_list, list_node)
@@ -3179,10 +3691,10 @@ static void glink_core_rx_cmd_ch_remote_open(struct glink_transport_if *if_ptr,
 	GLINK_INFO_CH(ctx, "%s: remote: CLOSED->OPENED ; xprt req:resp %u:%u\n",
 			__func__, req_xprt, xprt_resp);
 
+	if_ptr->tx_cmd_ch_remote_open_ack(if_ptr, rcid, xprt_resp);
 	if (!do_migrate && ch_is_fully_opened(ctx))
 		ctx->notify_state(ctx, ctx->user_priv, GLINK_CONNECTED);
 
-	if_ptr->tx_cmd_ch_remote_open_ack(if_ptr, rcid, xprt_resp);
 
 	if (do_migrate)
 		ch_migrate(NULL, ctx);
@@ -3244,7 +3756,7 @@ static void glink_core_rx_cmd_ch_remote_close(
 		struct glink_transport_if *if_ptr, uint32_t rcid)
 {
 	struct channel_ctx *ctx;
-	unsigned long flags;
+	bool is_ch_fully_closed;
 
 	ctx = xprt_rcid_to_ch_ctx_get(if_ptr->glink_core_priv, rcid);
 	if (!ctx) {
@@ -3264,25 +3776,14 @@ static void glink_core_rx_cmd_ch_remote_close(
 	}
 	GLINK_INFO_CH(ctx, "%s: remote: OPENED->CLOSED\n", __func__);
 
-	glink_core_remote_close_common(ctx);
+	is_ch_fully_closed = glink_core_remote_close_common(ctx);
 
+	ctx->pending_delete = true;
 	if_ptr->tx_cmd_ch_remote_close_ack(if_ptr, rcid);
 
-	spin_lock_irqsave(&ctx->transport_ptr->xprt_ctx_lock_lhb1, flags);
-	ctx->pending_delete = true;
-	if (ch_is_fully_closed(ctx)) {
-		if (!list_empty(&ctx->port_list_node))
-			list_del_init(&ctx->port_list_node);
-		spin_unlock_irqrestore(&ctx->transport_ptr->xprt_ctx_lock_lhb1,
-					flags);
-		mutex_lock(&ctx->transport_ptr->xprt_dbgfs_lock_lhb3);
-		glink_debugfs_remove_channel(ctx, ctx->transport_ptr);
-		mutex_unlock(&ctx->transport_ptr->xprt_dbgfs_lock_lhb3);
-		flush_workqueue(if_ptr->glink_core_priv->tx_wq);
-		rwref_put(&ctx->ch_state_lhc0);
-	} else {
-		spin_unlock_irqrestore(&ctx->transport_ptr->xprt_ctx_lock_lhb1,
-				flags);
+	if (is_ch_fully_closed) {
+		glink_delete_ch_from_list(ctx, true);
+		flush_workqueue(ctx->transport_ptr->tx_wq);
 	}
 	rwref_put(&ctx->ch_state_lhc0);
 }
@@ -3297,7 +3798,7 @@ static void glink_core_rx_cmd_ch_close_ack(struct glink_transport_if *if_ptr,
 	uint32_t lcid)
 {
 	struct channel_ctx *ctx;
-	unsigned long flags;
+	bool is_ch_fully_closed;
 
 	ctx = xprt_lcid_to_ch_ctx_get(if_ptr->glink_core_priv, lcid);
 	if (!ctx) {
@@ -3316,36 +3817,10 @@ static void glink_core_rx_cmd_ch_close_ack(struct glink_transport_if *if_ptr,
 		return;
 	}
 
-	ctx->local_open_state = GLINK_CHANNEL_CLOSED;
-	GLINK_INFO_PERF_CH(ctx,
-		"%s: local:GLINK_CHANNEL_CLOSING->GLINK_CHANNEL_CLOSED\n",
-		__func__);
-
-	spin_lock_irqsave(&ctx->transport_ptr->xprt_ctx_lock_lhb1, flags);
-	if (ch_is_fully_closed(ctx)) {
-		if (!list_empty(&ctx->port_list_node))
-			list_del_init(&ctx->port_list_node);
-		spin_unlock_irqrestore(
-				&ctx->transport_ptr->xprt_ctx_lock_lhb1, flags);
-		mutex_lock(&ctx->transport_ptr->xprt_dbgfs_lock_lhb3);
-		glink_debugfs_remove_channel(ctx, ctx->transport_ptr);
-		mutex_unlock(&ctx->transport_ptr->xprt_dbgfs_lock_lhb3);
-
-	} else {
-		spin_unlock_irqrestore(&ctx->transport_ptr->xprt_ctx_lock_lhb1,
-					flags);
-	}
-	if (ctx->notify_state) {
-		ctx->notify_state(ctx, ctx->user_priv,
-				GLINK_LOCAL_DISCONNECTED);
-		ch_purge_intent_lists(ctx);
-		GLINK_INFO_PERF_CH(ctx,
-				"%s: notify state: GLINK_LOCAL_DISCONNECTED\n",
-				__func__);
-	}
-	if (ch_is_fully_closed(ctx)) {
-		flush_workqueue(if_ptr->glink_core_priv->tx_wq);
-		rwref_put(&ctx->ch_state_lhc0);
+	is_ch_fully_closed = glink_core_ch_close_ack_common(ctx);
+	if (is_ch_fully_closed) {
+		glink_delete_ch_from_list(ctx, true);
+		flush_workqueue(ctx->transport_ptr->tx_wq);
 	}
 	rwref_put(&ctx->ch_state_lhc0);
 }
@@ -3374,6 +3849,8 @@ static void glink_core_remote_rx_intent_put(struct glink_transport_if *if_ptr,
 
 	ch_push_remote_rx_intent(ctx, size, riid);
 	complete_all(&ctx->int_req_complete);
+	if (ctx->notify_remote_rx_intent)
+		ctx->notify_remote_rx_intent(ctx, ctx->user_priv, size);
 	rwref_put(&ctx->ch_state_lhc0);
 }
 
@@ -3516,6 +3993,17 @@ void glink_core_rx_put_pkt_ctx(struct glink_transport_if *if_ptr,
 		return;
 	}
 
+	if (unlikely(intent_ptr->tracer_pkt)) {
+		tracer_pkt_log_event(intent_ptr->data, GLINK_CORE_RX);
+		ch_set_local_rx_intent_notified(ctx, intent_ptr);
+		if (ctx->notify_rx_tracer_pkt)
+			ctx->notify_rx_tracer_pkt(ctx, ctx->user_priv,
+				intent_ptr->pkt_priv, intent_ptr->data,
+				intent_ptr->pkt_size);
+		rwref_put(&ctx->ch_state_lhc0);
+		return;
+	}
+
 	GLINK_PERF_CH(ctx, "%s: L[%u]: data[%p] size[%zu]\n",
 		__func__, intent_ptr->id,
 		intent_ptr->data ? intent_ptr->data : intent_ptr->iovec,
@@ -3623,6 +4111,10 @@ static void xprt_schedule_tx(struct glink_core_xprt_ctx *xprt_ptr,
 	mutex_unlock(&ch_ptr->tx_lists_mutex_lhc3);
 	mutex_unlock(&xprt_ptr->tx_ready_mutex_lhb2);
 
+	if (unlikely(tx_info->tracer_pkt))
+		tracer_pkt_log_event((void *)(tx_info->data),
+				     GLINK_QUEUE_TO_SCHEDULER);
+
 	queue_work(xprt_ptr->tx_wq, &xprt_ptr->tx_work);
 }
 
@@ -3694,12 +4186,21 @@ static void tx_work_func(struct work_struct *work)
 		spin_unlock_irqrestore(&ch_ptr->tx_pending_rmt_done_lock_lhc4,
 				flags);
 
-		ret = xprt_ptr->ops->tx(xprt_ptr->ops, ch_ptr->lcid, tx_info);
+		if (unlikely(tx_info->tracer_pkt)) {
+			tracer_pkt_log_event((void *)(tx_info->data),
+					      GLINK_SCHEDULER_TX);
+			ret = xprt_ptr->ops->tx_cmd_tracer_pkt(xprt_ptr->ops,
+							ch_ptr->lcid, tx_info);
+		} else {
+			ret = xprt_ptr->ops->tx(xprt_ptr->ops,
+						ch_ptr->lcid, tx_info);
+		}
 		if (ret == -EAGAIN) {
 			/*
 			 * transport unable to send at the moment and will call
 			 * tx_resume() when it can send again.
 			 */
+			mutex_unlock(&ch_ptr->tx_lists_mutex_lhc3);
 			break;
 		} else if (ret < 0) {
 			/*
@@ -3773,7 +4274,8 @@ static void glink_pm_qos_unvote(struct glink_core_xprt_ctx *xprt_ptr)
 	xprt_ptr->tx_path_activity = false;
 	if (xprt_ptr->qos_req_active) {
 		GLINK_PERF("%s: qos unvote\n", __func__);
-		schedule_delayed_work(&xprt_ptr->pm_qos_work,
+		queue_delayed_work(system_power_efficient_wq,
+				&xprt_ptr->pm_qos_work,
 				msecs_to_jiffies(GLINK_PM_QOS_HOLDOFF_MS));
 	}
 }

@@ -694,7 +694,7 @@ int adm_set_stereo_to_custom_stereo(int port_id, int copp_idx,
 	adm_params->hdr.dest_svc = APR_SVC_ADM;
 	adm_params->hdr.dest_domain = APR_DOMAIN_ADSP;
 	adm_params->hdr.dest_port = 0; /* Ignored */;
-	adm_params->hdr.token = 0;
+	adm_params->hdr.token = port_idx << 16 | copp_idx;
 	adm_params->hdr.opcode = ADM_CMD_SET_PSPD_MTMX_STRTR_PARAMS_V5;
 	adm_params->payload_addr_lsw = 0;
 	adm_params->payload_addr_msw = 0;
@@ -2109,6 +2109,19 @@ int adm_open(int port_id, int path, int rate, int channel_mode, int topology,
 		 __func__, port_id, path, rate, channel_mode, perf_mode,
 		 topology);
 
+#ifdef CONFIG_FORCE_24BIT_COPP
+	if ((topology == ADM_CMD_COPP_OPENOPOLOGY_ID_SPEAKER_STEREO_AUDIO_COPP_SOMC_HP) &&
+		(app_type == APPTYPE_GENERAL_PLAYBACK)) {
+		bit_width = 24;
+		pr_debug("%s: Force open adm in 24-bit for SOMC HP topology 0x%x\n",
+			__func__, topology);
+	} else if ((topology == ADM_CMD_COPP_OPENOPOLOGY_ID_SPEAKER_RX_MCH_IIR_COPP_MBDRC_V3) &&
+		(app_type == APPTYPE_GENERAL_PLAYBACK)) {
+		bit_width = 24;
+		pr_debug("%s: Force open adm in 24-bit for SOMC Speaker topology 0x%x\n",
+			__func__, topology);
+	}
+#endif
 	port_id = q6audio_convert_virtual_to_portid(port_id);
 	port_idx = adm_validate_and_get_port_index(port_id);
 	if (port_idx < 0) {
@@ -3271,7 +3284,7 @@ int adm_store_cal_data(int port_id, int copp_idx, int path, int perf_mode,
 	sample_rate = atomic_read(&this_adm.copp.rate[port_idx][copp_idx]);
 
 	mutex_lock(&this_adm.cal_data[cal_index]->lock);
-	cal_block = adm_find_cal(cal_index, path, app_type,
+	cal_block = adm_find_cal(cal_index, get_cal_path(path), app_type,
 				acdb_id, sample_rate);
 	if (cal_block == NULL)
 		goto unlock;
@@ -3282,11 +3295,6 @@ int adm_store_cal_data(int port_id, int copp_idx, int path, int perf_mode,
 		rc = -EINVAL;
 		goto unlock;
 	}
-
-	pr_debug("%s:port_id %d, copp_idx %d, path %d",
-		 __func__, port_id, copp_idx, path);
-	pr_debug("perf_mode %d, cal_type %d, size %d\n",
-		 perf_mode, cal_index, *size);
 
 	if (cal_index == ADM_AUDPROC_CAL) {
 		if (cal_block->cal_data.size > AUD_PROC_BLOCK_SIZE) {
@@ -3310,6 +3318,11 @@ int adm_store_cal_data(int port_id, int copp_idx, int path, int perf_mode,
 	}
 	memcpy(params, cal_block->cal_data.kvaddr, cal_block->cal_data.size);
 	*size = cal_block->cal_data.size;
+
+	pr_debug("%s:port_id %d, copp_idx %d, path %d",
+		 __func__, port_id, copp_idx, path);
+	pr_debug("perf_mode %d, cal_type %d, size %d\n",
+		 perf_mode, cal_index, *size);
 
 unlock:
 	mutex_unlock(&this_adm.cal_data[cal_index]->lock);

@@ -572,11 +572,10 @@ int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
 	u8 *prevhdr, nexthdr = 0;
 	struct net *net = dev_net(skb_dst(skb)->dev);
 
-	hlen = ip6_find_1stfragopt(skb, &prevhdr);
-	if (hlen < 0) {
-		err = hlen;
+	err = ip6_find_1stfragopt(skb, &prevhdr);
+	if (err < 0)
 		goto fail;
-	}
+	hlen = err;
 	nexthdr = *prevhdr;
 
 	mtu = ip6_skb_dst_mtu(skb);
@@ -1188,11 +1187,11 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
 			if (WARN_ON(np->cork.opt))
 				return -EINVAL;
 
-			np->cork.opt = kzalloc(opt->tot_len, sk->sk_allocation);
+			np->cork.opt = kzalloc(sizeof(*opt), sk->sk_allocation);
 			if (unlikely(np->cork.opt == NULL))
 				return -ENOBUFS;
 
-			np->cork.opt->tot_len = opt->tot_len;
+			np->cork.opt->tot_len = sizeof(*opt);
 			np->cork.opt->opt_flen = opt->opt_flen;
 			np->cork.opt->opt_nflen = opt->opt_nflen;
 
@@ -1225,10 +1224,10 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
 		np->cork.tclass = tclass;
 		if (rt->dst.flags & DST_XFRM_TUNNEL)
 			mtu = np->pmtudisc == IPV6_PMTUDISC_PROBE ?
-			      ACCESS_ONCE(rt->dst.dev->mtu) : dst_mtu(&rt->dst);
+			      READ_ONCE(rt->dst.dev->mtu) : dst_mtu(&rt->dst);
 		else
 			mtu = np->pmtudisc == IPV6_PMTUDISC_PROBE ?
-			      ACCESS_ONCE(rt->dst.dev->mtu) : dst_mtu(rt->dst.path);
+			      READ_ONCE(rt->dst.dev->mtu) : dst_mtu(rt->dst.path);
 		if (np->frag_size < mtu) {
 			if (np->frag_size)
 				mtu = np->frag_size;
@@ -1299,7 +1298,7 @@ int ip6_append_data(struct sock *sk, int getfrag(void *from, char *to,
 	    (((length + fragheaderlen) > mtu) &&
 	    (skb_queue_len(&sk->sk_write_queue) <= 1) &&
 	    (sk->sk_protocol == IPPROTO_UDP) &&
-	    (rt->dst.dev->features & NETIF_F_UFO) && !dst_xfrm(&rt->dst) &&
+	    (rt->dst.dev->features & NETIF_F_UFO) &&
 	    (sk->sk_type == SOCK_DGRAM))) {
 		err = ip6_ufo_append_data(sk, getfrag, from, length,
 					  hh_len, fragheaderlen,
@@ -1464,7 +1463,8 @@ alloc_new_skb:
 		if (copy > length)
 			copy = length;
 
-		if (!(rt->dst.dev->features&NETIF_F_SG)) {
+		if (!(rt->dst.dev->features&NETIF_F_SG) &&
+		    skb_tailroom(skb) >= copy) {
 			unsigned int off;
 
 			off = skb->len;

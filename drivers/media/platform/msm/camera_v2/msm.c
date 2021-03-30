@@ -37,6 +37,9 @@
 
 static struct v4l2_device *msm_v4l2_dev;
 static struct list_head    ordered_sd_list;
+static struct mutex        v4l2_event_mtx;
+
+static struct pm_qos_request msm_v4l2_pm_qos_request;
 
 static struct msm_queue_head *msm_session_q;
 
@@ -191,6 +194,24 @@ static inline int __msm_queue_find_command_ack_q(void *d1, void *d2)
 	return (ack->stream_id == *(unsigned int *)d2) ? 1 : 0;
 }
 
+static void msm_pm_qos_add_request(void)
+{
+	pr_debug("%s: add request", __func__);
+	pm_qos_add_request(&msm_v4l2_pm_qos_request, PM_QOS_CPU_DMA_LATENCY,
+		PM_QOS_DEFAULT_VALUE);
+}
+
+static void msm_pm_qos_remove_request(void)
+{
+	pr_debug("%s: remove request", __func__);
+	pm_qos_remove_request(&msm_v4l2_pm_qos_request);
+}
+
+void msm_pm_qos_update_request(int val)
+{
+	pr_debug("%s: update request %d", __func__, val);
+	pm_qos_update_request(&msm_v4l2_pm_qos_request, val);
+}
 
 struct msm_session *msm_session_find(unsigned int session_id)
 {
@@ -404,6 +425,7 @@ int msm_create_session(unsigned int session_id, struct video_device *vdev)
 	msm_init_queue(&session->stream_q);
 	msm_enqueue(msm_session_q, &session->list);
 	mutex_init(&session->lock);
+	mutex_init(&session->close_lock);
 	rwlock_init(&session->stream_rwlock);
 	return 0;
 }
@@ -556,6 +578,7 @@ int msm_destroy_session(unsigned int session_id)
 	msm_destroy_session_streams(session);
 	msm_remove_session_cmd_ack_q(session);
 	mutex_destroy(&session->lock);
+	mutex_destroy(&session->close_lock);
 	msm_delete_entry(msm_session_q, struct msm_session,
 		list, session);
 	buf_mgr_subdev = msm_buf_mngr_get_subdev();
@@ -597,6 +620,15 @@ static long msm_private_ioctl(struct file *file, void *fh,
 	unsigned int session_id;
 	unsigned int stream_id;
 	unsigned long spin_flags = 0;
+
+	switch(cmd) {
+	case MSM_CAM_V4L2_IOCTL_NOTIFY:
+	case MSM_CAM_V4L2_IOCTL_CMD_ACK:
+	case MSM_CAM_V4L2_IOCTL_NOTIFY_ERROR:
+		break;
+	default:
+		return -ENOTTY;
+	}
 
 	session_id = event_data->session_id;
 	stream_id = event_data->stream_id;
@@ -674,13 +706,25 @@ static long msm_private_ioctl(struct file *file, void *fh,
 static int msm_unsubscribe_event(struct v4l2_fh *fh,
 	const struct v4l2_event_subscription *sub)
 {
-	return v4l2_event_unsubscribe(fh, sub);
+	int rc;
+
+	mutex_lock(&v4l2_event_mtx);
+	rc = v4l2_event_unsubscribe(fh, sub);
+	mutex_unlock(&v4l2_event_mtx);
+
+	return rc;
 }
 
 static int msm_subscribe_event(struct v4l2_fh *fh,
 	const struct v4l2_event_subscription *sub)
 {
-	return v4l2_event_subscribe(fh, sub, 5, NULL);
+	int rc;
+
+	mutex_lock(&v4l2_event_mtx);
+	rc = v4l2_event_subscribe(fh, sub, 5, NULL);
+	mutex_unlock(&v4l2_event_mtx);
+
+	return rc;
 }
 
 static const struct v4l2_ioctl_ops g_msm_ioctl_ops = {
@@ -845,6 +889,9 @@ static int msm_close(struct file *filep)
 		list_for_each_entry(msm_sd, &ordered_sd_list, list)
 			__msm_sd_close_subdevs(msm_sd, &sd_close);
 
+	/* remove msm_v4l2_pm_qos_request */
+	msm_pm_qos_remove_request();
+
 	/* send v4l2_event to HAL next*/
 	msm_queue_traverse_action(msm_session_q, struct msm_session, list,
 		__msm_close_destry_session_notify_apps, NULL);
@@ -898,6 +945,9 @@ static int msm_open(struct file *filep)
 	spin_lock_irqsave(&msm_eventq_lock, flags);
 	msm_eventq = filep->private_data;
 	spin_unlock_irqrestore(&msm_eventq_lock, flags);
+
+	/* register msm_v4l2_pm_qos_request */
+	msm_pm_qos_add_request();
 
 	return rc;
 }
@@ -1112,8 +1162,8 @@ static int msm_probe(struct platform_device *pdev)
 	if (WARN_ON(rc < 0))
 		goto media_fail;
 
-	if (WARN_ON((rc == media_entity_init(&pvdev->vdev->entity,
-			0, NULL, 0)) < 0))
+	rc = media_entity_init(&pvdev->vdev->entity, 0, NULL, 0);
+	if (WARN_ON(rc < 0))
 		goto entity_fail;
 
 	pvdev->vdev->entity.type = MEDIA_ENT_T_DEVNODE_V4L;
@@ -1154,6 +1204,7 @@ static int msm_probe(struct platform_device *pdev)
 	msm_init_queue(msm_session_q);
 	spin_lock_init(&msm_eventq_lock);
 	spin_lock_init(&msm_pid_lock);
+	mutex_init(&v4l2_event_mtx);
 	INIT_LIST_HEAD(&ordered_sd_list);
 	goto probe_end;
 

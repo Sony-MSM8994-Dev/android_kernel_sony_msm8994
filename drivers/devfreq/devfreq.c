@@ -25,6 +25,7 @@
 #include <linux/list.h>
 #include <linux/printk.h>
 #include <linux/hrtimer.h>
+#include <linux/fb.h>
 #include "governor.h"
 
 static struct class *devfreq_class;
@@ -41,6 +42,15 @@ static LIST_HEAD(devfreq_governor_list);
 /* The list of all device-devfreq */
 static LIST_HEAD(devfreq_list);
 static DEFINE_MUTEX(devfreq_list_lock);
+
+/* List of devices to boost when the screen is woken */
+static const char *boost_devices[] = {
+	"soc:qcom,cpubw",
+};
+
+#define WAKE_BOOST_DURATION_MS (5000)
+static struct delayed_work wake_unboost_work;
+static struct work_struct wake_boost_work;
 
 /**
  * find_device_devfreq() - find devfreq struct using device pointer
@@ -120,6 +130,10 @@ static int devfreq_update_status(struct devfreq *devfreq, unsigned long freq)
 
 	cur_time = jiffies;
 
+	/* Immediately exit if previous_freq is not initialized yet. */
+	if (!devfreq->previous_freq)
+		goto out;
+
 	prev_lev = devfreq_get_freq_level(devfreq, devfreq->previous_freq);
 	if (prev_lev < 0) {
 		ret = prev_lev;
@@ -196,9 +210,14 @@ int update_devfreq(struct devfreq *devfreq)
 		return -EINVAL;
 
 	/* Reevaluate the proper frequency */
-	err = devfreq->governor->get_target_freq(devfreq, &freq, &flags);
-	if (err)
-		return err;
+	if (devfreq->do_wake_boost) {
+		/* Use the max freq when the screen is turned on */
+		freq = UINT_MAX;
+	} else {
+		err = devfreq->governor->get_target_freq(devfreq, &freq, &flags);
+		if (err)
+			return err;
+	}
 
 	/*
 	 * Adjust the freuqency with user freq and QoS.
@@ -349,7 +368,6 @@ void devfreq_interval_update(struct devfreq *devfreq, unsigned int *delay)
 	unsigned int new_delay = *delay;
 
 	mutex_lock(&devfreq->lock);
-	devfreq->profile->polling_ms = new_delay;
 
 	if (devfreq->stop_polling)
 		goto out;
@@ -409,7 +427,7 @@ static int devfreq_notifier_call(struct notifier_block *nb, unsigned long type,
  * @devfreq:	the devfreq struct
  * @skip:	skip calling device_unregister().
  */
-static void _remove_devfreq(struct devfreq *devfreq, bool skip)
+static void _remove_devfreq(struct devfreq *devfreq)
 {
 	mutex_lock(&devfreq_list_lock);
 	if (IS_ERR(find_device_devfreq(devfreq->dev.parent))) {
@@ -427,11 +445,6 @@ static void _remove_devfreq(struct devfreq *devfreq, bool skip)
 	if (devfreq->profile->exit)
 		devfreq->profile->exit(devfreq->dev.parent);
 
-	if (!skip && get_device(&devfreq->dev)) {
-		device_unregister(&devfreq->dev);
-		put_device(&devfreq->dev);
-	}
-
 	mutex_destroy(&devfreq->lock);
 	kfree(devfreq);
 }
@@ -441,14 +454,12 @@ static void _remove_devfreq(struct devfreq *devfreq, bool skip)
  * @dev:	the devfreq device
  *
  * This calls _remove_devfreq() if _remove_devfreq() is not called.
- * Note that devfreq_dev_release() could be called by _remove_devfreq() as
- * well as by others unregistering the device.
  */
 static void devfreq_dev_release(struct device *dev)
 {
 	struct devfreq *devfreq = to_devfreq(dev);
 
-	_remove_devfreq(devfreq, true);
+	_remove_devfreq(devfreq);
 }
 
 /**
@@ -526,22 +537,29 @@ struct devfreq *devfreq_add_device(struct device *dev,
 	list_add(&devfreq->node, &devfreq_list);
 
 	governor = find_devfreq_governor(devfreq->governor_name);
-	if (!IS_ERR(governor))
-		devfreq->governor = governor;
-	if (devfreq->governor)
-		err = devfreq->governor->event_handler(devfreq,
-					DEVFREQ_GOV_START, NULL);
-	mutex_unlock(&devfreq_list_lock);
+	if (IS_ERR(governor)) {
+		dev_err(dev, "%s: Unable to find governor for the device\n",
+			__func__);
+		err = PTR_ERR(governor);
+		goto err_init;
+	}
+
+	devfreq->governor = governor;
+	err = devfreq->governor->event_handler(devfreq, DEVFREQ_GOV_START,
+						NULL);
 	if (err) {
 		dev_err(dev, "%s: Unable to start governor for the device\n",
 			__func__);
 		goto err_init;
 	}
+	mutex_unlock(&devfreq_list_lock);
 
 	return devfreq;
 
 err_init:
 	list_del(&devfreq->node);
+	mutex_unlock(&devfreq_list_lock);
+
 	device_unregister(&devfreq->dev);
 err_dev:
 	kfree(devfreq);
@@ -559,7 +577,8 @@ int devfreq_remove_device(struct devfreq *devfreq)
 	if (!devfreq)
 		return -EINVAL;
 
-	_remove_devfreq(devfreq, false);
+	device_unregister(&devfreq->dev);
+	put_device(&devfreq->dev);
 
 	return 0;
 }
@@ -734,10 +753,19 @@ static ssize_t store_governor(struct device *dev, struct device_attribute *attr,
 	struct devfreq *df = to_devfreq(dev);
 	int ret;
 	char str_governor[DEVFREQ_NAME_LEN + 1];
-	struct devfreq_governor *governor;
+	const struct devfreq_governor *governor, *prev_gov;
 
 	ret = sscanf(buf, "%" __stringify(DEVFREQ_NAME_LEN) "s", str_governor);
 	if (ret != 1)
+		return -EINVAL;
+
+	/* Governor white list */
+	if (strncmp(str_governor, "bw_hwmon", DEVFREQ_NAME_LEN) &&
+		strncmp(str_governor, "cpufreq", DEVFREQ_NAME_LEN) &&
+		strncmp(str_governor, "performance", DEVFREQ_NAME_LEN) &&
+		strncmp(str_governor, "powersave", DEVFREQ_NAME_LEN) &&
+		strncmp(str_governor, "simple_ondemand", DEVFREQ_NAME_LEN) &&
+		strncmp(str_governor, "msm-adreno-tz", DEVFREQ_NAME_LEN))
 		return -EINVAL;
 
 	mutex_lock(&devfreq_list_lock);
@@ -757,12 +785,17 @@ static ssize_t store_governor(struct device *dev, struct device_attribute *attr,
 			goto out;
 		}
 	}
+	prev_gov = df->governor;
 	df->governor = governor;
 	strncpy(df->governor_name, governor->name, DEVFREQ_NAME_LEN);
 	ret = df->governor->event_handler(df, DEVFREQ_GOV_START, NULL);
-	if (ret)
+	if (ret) {
 		dev_warn(dev, "%s: Governor %s not started(%d)\n",
 			 __func__, df->governor->name, ret);
+		df->governor = prev_gov;
+		strncpy(df->governor_name, prev_gov->name, DEVFREQ_NAME_LEN);
+		df->governor->event_handler(df, DEVFREQ_GOV_START, NULL);
+	}
 out:
 	mutex_unlock(&devfreq_list_lock);
 
@@ -832,6 +865,7 @@ static ssize_t store_polling_interval(struct device *dev,
 	if (ret != 1)
 		return -EINVAL;
 
+	df->profile->polling_ms = value;
 	df->governor->event_handler(df, DEVFREQ_GOV_INTERVAL, &value);
 	ret = count;
 
@@ -997,6 +1031,76 @@ static struct device_attribute devfreq_attrs[] = {
 	{ },
 };
 
+static bool is_boost_device(struct devfreq *df)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(boost_devices); i++) {
+		if (!strncmp(dev_name(&df->dev), boost_devices[i],
+				DEVFREQ_NAME_LEN))
+			return true;
+	}
+
+	return false;
+}
+
+static void set_wake_boost(bool enable)
+{
+	struct devfreq *df;
+
+	mutex_lock(&devfreq_list_lock);
+	list_for_each_entry(df, &devfreq_list, node) {
+		if (!is_boost_device(df))
+			continue;
+
+		mutex_lock(&df->lock);
+		df->do_wake_boost = enable;
+		update_devfreq(df);
+		mutex_unlock(&df->lock);
+	}
+	mutex_unlock(&devfreq_list_lock);
+}
+
+static void wake_boost_fn(struct work_struct *work)
+{
+	set_wake_boost(true);
+	schedule_delayed_work(&wake_unboost_work,
+			msecs_to_jiffies(WAKE_BOOST_DURATION_MS));
+}
+
+static void wake_unboost_fn(struct work_struct *work)
+{
+	set_wake_boost(false);
+}
+
+static int fb_notifier_callback(struct notifier_block *nb,
+		unsigned long action, void *data)
+{
+	struct fb_event *evdata = data;
+	int *blank = evdata->data;
+
+	/* Parse framebuffer events as soon as they occur */
+	if (action != FB_EVENT_BLANK)
+		return NOTIFY_OK;
+
+	switch (*blank) {
+	case FB_BLANK_UNBLANK:
+		schedule_work(&wake_boost_work);
+		break;
+	default:
+		cancel_work_sync(&wake_boost_work);
+		if (cancel_delayed_work_sync(&wake_unboost_work))
+			set_wake_boost(false);
+	}
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block fb_notifier_callback_nb = {
+	.notifier_call = fb_notifier_callback,
+	.priority = INT_MAX,
+};
+
 static int __init devfreq_init(void)
 {
 	devfreq_class = class_create(THIS_MODULE, "devfreq");
@@ -1005,13 +1109,18 @@ static int __init devfreq_init(void)
 		return PTR_ERR(devfreq_class);
 	}
 
-	devfreq_wq = create_freezable_workqueue("devfreq_wq");
+	devfreq_wq = alloc_workqueue("devfreq_wq", WQ_HIGHPRI | WQ_FREEZABLE
+			| WQ_UNBOUND | WQ_MEM_RECLAIM, 1);
 	if (IS_ERR(devfreq_wq)) {
 		class_destroy(devfreq_class);
 		pr_err("%s: couldn't create workqueue\n", __FILE__);
 		return PTR_ERR(devfreq_wq);
 	}
 	devfreq_class->dev_attrs = devfreq_attrs;
+
+	INIT_WORK(&wake_boost_work, wake_boost_fn);
+	INIT_DELAYED_WORK(&wake_unboost_work, wake_unboost_fn);
+	fb_register_client(&fb_notifier_callback_nb);
 
 	return 0;
 }

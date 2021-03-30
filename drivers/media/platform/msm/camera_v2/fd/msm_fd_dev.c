@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015, 2018 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -554,6 +554,8 @@ static long msm_fd_compat_ioctl32(struct file *file,
 		break;
 	}
 	default:
+		pr_err_ratelimited("%s: unsupported compat type 0x%x\n",
+				__func__, cmd);
 		ret = -ENOIOCTLCMD;
 		break;
 
@@ -1203,6 +1205,10 @@ static void msm_fd_wq_handler(struct work_struct *work)
 	/* We have the data from fd hw, we can start next processing */
 	msm_fd_hw_schedule_next_buffer(fd);
 
+	/* Return buffer to vb queue */
+	active_buf->vb.v4l2_buf.sequence = ctx->fh.sequence;
+	vb2_buffer_done(&active_buf->vb, VB2_BUF_STATE_DONE);
+
 	/* Sent event */
 	memset(&event, 0x00, sizeof(event));
 	event.type = MSM_EVENT_FD;
@@ -1211,10 +1217,6 @@ static void msm_fd_wq_handler(struct work_struct *work)
 	fd_event->buf_index = active_buf->vb.v4l2_buf.index;
 	fd_event->frame_id = ctx->sequence;
 	v4l2_event_queue_fh(&ctx->fh, &event);
-
-	/* Return buffer to vb queue */
-	active_buf->vb.v4l2_buf.sequence = ctx->fh.sequence;
-	vb2_buffer_done(&active_buf->vb, VB2_BUF_STATE_DONE);
 
 	/* Release buffer from the device */
 	msm_fd_hw_buffer_done(fd, active_buf);

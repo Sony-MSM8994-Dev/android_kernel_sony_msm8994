@@ -21,6 +21,7 @@
 
 #define MSM_VDEC_DVC_NAME "msm_vdec_8974"
 #define MIN_NUM_OUTPUT_BUFFERS 4
+#define MIN_NUM_OUTPUT_BUFFERS_VP9 6
 #define MIN_NUM_CAPTURE_BUFFERS 6
 #define MIN_NUM_THUMBNAIL_MODE_CAPTURE_BUFFERS 1
 #define MAX_NUM_OUTPUT_BUFFERS VB2_MAX_FRAME
@@ -113,6 +114,22 @@ static const char *const vp8_profile_level[] = {
 	"1.0",
 	"2.0",
 	"3.0",
+};
+
+static const char *const mpeg2_profile[] = {
+	"Simple",
+	"Main",
+	"422",
+	"Snr Scalable",
+	"Spatial Scalable",
+	"High",
+};
+
+static const char *const mpeg2_level[] = {
+	"0",
+	"1",
+	"2",
+	"3",
 };
 
 static const char *const mpeg_vidc_video_h264_mvc_layout[] = {
@@ -445,7 +462,15 @@ static struct msm_vidc_ctrl msm_vdec_ctrls[] = {
 		.minimum = V4L2_MPEG_VIDC_VIDEO_MPEG2_PROFILE_SIMPLE,
 		.maximum = V4L2_MPEG_VIDC_VIDEO_MPEG2_PROFILE_HIGH,
 		.default_value = V4L2_MPEG_VIDC_VIDEO_MPEG2_PROFILE_SIMPLE,
-		.menu_skip_mask = 0,
+		.menu_skip_mask = ~(
+		(1 << V4L2_MPEG_VIDC_VIDEO_MPEG2_PROFILE_SIMPLE) |
+		(1 << V4L2_MPEG_VIDC_VIDEO_MPEG2_PROFILE_MAIN) |
+		(1 << V4L2_MPEG_VIDC_VIDEO_MPEG2_PROFILE_422) |
+		(1 << V4L2_MPEG_VIDC_VIDEO_MPEG2_PROFILE_SNR_SCALABLE) |
+		(1 << V4L2_MPEG_VIDC_VIDEO_MPEG2_PROFILE_SPATIAL_SCALABLE) |
+		(1 << V4L2_MPEG_VIDC_VIDEO_MPEG2_PROFILE_HIGH)
+		),
+		.qmenu = mpeg2_profile,
 		.flags = V4L2_CTRL_FLAG_VOLATILE,
 	},
 	{
@@ -455,7 +480,13 @@ static struct msm_vidc_ctrl msm_vdec_ctrls[] = {
 		.minimum = V4L2_MPEG_VIDC_VIDEO_MPEG2_LEVEL_0,
 		.maximum = V4L2_MPEG_VIDC_VIDEO_MPEG2_LEVEL_3,
 		.default_value = V4L2_MPEG_VIDC_VIDEO_MPEG2_LEVEL_0,
-		.menu_skip_mask = 0,
+		.menu_skip_mask = ~(
+			(1 << V4L2_MPEG_VIDC_VIDEO_MPEG2_LEVEL_0) |
+			(1 << V4L2_MPEG_VIDC_VIDEO_MPEG2_LEVEL_1) |
+			(1 << V4L2_MPEG_VIDC_VIDEO_MPEG2_LEVEL_2) |
+			(1 << V4L2_MPEG_VIDC_VIDEO_MPEG2_LEVEL_3)
+		),
+		.qmenu = mpeg2_level,
 		.flags = V4L2_CTRL_FLAG_VOLATILE,
 	},
 	{
@@ -713,6 +744,14 @@ struct msm_vidc_format vdec_formats[] = {
 		.name = "VP8",
 		.description = "VP8 compressed format",
 		.fourcc = V4L2_PIX_FMT_VP8,
+		.num_planes = 1,
+		.get_frame_size = get_frame_size_compressed,
+		.type = OUTPUT_PORT,
+	},
+	{
+		.name = "VP9",
+		.description = "VP9 compressed format",
+		.fourcc = V4L2_PIX_FMT_VP9,
 		.num_planes = 1,
 		.get_frame_size = get_frame_size_compressed,
 		.type = OUTPUT_PORT,
@@ -1154,7 +1193,7 @@ int msm_vdec_s_parm(struct msm_vidc_inst *inst, struct v4l2_streamparm *a)
 
 	if ((fps % 15 == 14) || (fps % 24 == 23))
 		fps = fps + 1;
-	else if ((fps % 24 == 1) || (fps % 15 == 1))
+	else if ((fps > 1) && ((fps % 24 == 1) || (fps % 15 == 1)))
 		fps = fps - 1;
 
 	if (inst->prop.fps != fps) {
@@ -1405,6 +1444,17 @@ static int msm_vdec_queue_setup(struct vb2_queue *q,
 		if (*num_buffers < MIN_NUM_OUTPUT_BUFFERS ||
 				*num_buffers > MAX_NUM_OUTPUT_BUFFERS)
 			*num_buffers = MIN_NUM_OUTPUT_BUFFERS;
+		/*
+		 * Increase input buffer count to 6 as for some
+		 * vp9 clips which have superframes with more
+		 * than 4 subframes requires more than 4
+		 * reference frames to decode.
+		 */
+		if (inst->fmts[OUTPUT_PORT]->fourcc ==
+				V4L2_PIX_FMT_VP9 &&
+				*num_buffers < MIN_NUM_OUTPUT_BUFFERS_VP9)
+			*num_buffers = MIN_NUM_OUTPUT_BUFFERS_VP9;
+
 		for (i = 0; i < *num_planes; i++) {
 			sizes[i] = get_frame_size(inst,
 					inst->fmts[OUTPUT_PORT], q->type, i);
@@ -2191,6 +2241,17 @@ static int try_set_ctrl(struct msm_vidc_inst *inst, struct v4l2_ctrl *ctrl)
 			if (rc)
 				dprintk(VIDC_ERR,
 					"Failed setting OUTPUT2 size : %d\n",
+					rc);
+
+			alloc_mode.buffer_mode =
+				inst->buffer_mode_set[CAPTURE_PORT];
+			alloc_mode.buffer_type = HAL_BUFFER_OUTPUT2;
+			rc = call_hfi_op(hdev, session_set_property,
+				inst->session, HAL_PARAM_BUFFER_ALLOC_MODE,
+				&alloc_mode);
+			if (rc)
+				dprintk(VIDC_ERR,
+					"Failed to set alloc_mode on OUTPUT2: %d\n",
 					rc);
 			break;
 		default:

@@ -41,6 +41,8 @@
 #include <linux/usb/ch9.h>
 #include <linux/usb/f_mtp.h>
 
+#define MTP_RX_BUFFER_INIT_SIZE    1048576
+#define MTP_TX_BUFFER_INIT_SIZE    1048576
 #define MTP_BULK_BUFFER_SIZE       16384
 #define INTR_BUFFER_SIZE           28
 
@@ -77,10 +79,10 @@
 #define MTP_RESPONSE_OK             0x2001
 #define MTP_RESPONSE_DEVICE_BUSY    0x2019
 
-unsigned int mtp_rx_req_len = MTP_BULK_BUFFER_SIZE;
+unsigned int mtp_rx_req_len = MTP_RX_BUFFER_INIT_SIZE;
 module_param(mtp_rx_req_len, uint, S_IRUGO | S_IWUSR);
 
-unsigned int mtp_tx_req_len = MTP_BULK_BUFFER_SIZE;
+unsigned int mtp_tx_req_len = MTP_TX_BUFFER_INIT_SIZE;
 module_param(mtp_tx_req_len, uint, S_IRUGO | S_IWUSR);
 
 unsigned int mtp_tx_reqs = MTP_TX_REQ_MAX;
@@ -122,7 +124,7 @@ struct mtp_dev {
 	struct file *xfer_file;
 	loff_t xfer_file_offset;
 	int64_t xfer_file_length;
-	unsigned xfer_send_header;
+	unsigned int xfer_send_header;
 	uint16_t xfer_command;
 	uint32_t xfer_transaction_id;
 	int xfer_result;
@@ -331,6 +333,40 @@ struct mtp_ext_config_desc_function {
 	__u8	reserved[6];
 };
 
+/* MTP Extended Configuration Descriptor */
+struct ext_mtp_desc {
+	struct mtp_ext_config_desc_header	header;
+	struct mtp_ext_config_desc_function	function;
+};
+
+struct ext_mtp_desc mtp_ext_config_desc = {
+	.header = {
+		.dwLength = __constant_cpu_to_le32(sizeof(mtp_ext_config_desc)),
+		.bcdVersion = __constant_cpu_to_le16(0x0100),
+		.wIndex = __constant_cpu_to_le16(4),
+		.bCount = __constant_cpu_to_le16(1),
+	},
+	.function = {
+		.bFirstInterfaceNumber = 0,
+		.bInterfaceCount = 1,
+		.compatibleID = { 'M', 'T', 'P' },
+	},
+};
+
+struct ext_mtp_desc ptp_ext_config_desc = {
+	.header = {
+		.dwLength = cpu_to_le32(sizeof(mtp_ext_config_desc)),
+		.bcdVersion = cpu_to_le16(0x0100),
+		.wIndex = cpu_to_le16(4),
+		.bCount = cpu_to_le16(1),
+	},
+	.function = {
+		.bFirstInterfaceNumber = 0,
+		.bInterfaceCount = 1,
+		.compatibleID = { 'P', 'T', 'P' },
+	},
+};
+
 struct mtp_device_status {
 	__le16	wLength;
 	__le16	wCode;
@@ -358,6 +394,7 @@ static inline struct mtp_dev *func_to_mtp(struct usb_function *f)
 static struct usb_request *mtp_request_new(struct usb_ep *ep, int buffer_size)
 {
 	struct usb_request *req = usb_ep_alloc_request(ep, GFP_KERNEL);
+
 	if (!req)
 		return NULL;
 
@@ -498,9 +535,6 @@ static int mtp_create_bulk_endpoints(struct mtp_dev *dev,
 	dev->ep_intr = ep;
 
 retry_tx_alloc:
-	if (mtp_tx_req_len > MTP_BULK_BUFFER_SIZE)
-		mtp_tx_reqs = 4;
-
 	/* now allocate requests for our endpoints */
 	for (i = 0; i < mtp_tx_reqs; i++) {
 		req = mtp_request_new(dev->ep_in, mtp_tx_req_len);
@@ -562,7 +596,7 @@ static ssize_t mtp_read(struct file *fp, char __user *buf,
 	struct usb_composite_dev *cdev = dev->cdev;
 	struct usb_request *req;
 	ssize_t r = count;
-	unsigned xfer;
+	unsigned int xfer;
 	int len;
 	int ret = 0;
 
@@ -576,6 +610,10 @@ static ssize_t mtp_read(struct file *fp, char __user *buf,
 		r = ret;
 		goto done;
 	}
+
+	if (!dev->ep_out)
+		return -EINVAL;
+
 	len = ALIGN(count, dev->ep_out->maxpacket);
 
 	if (len > mtp_rx_req_len)
@@ -661,11 +699,14 @@ static ssize_t mtp_write(struct file *fp, const char __user *buf,
 	struct usb_composite_dev *cdev = dev->cdev;
 	struct usb_request *req = 0;
 	ssize_t r = count;
-	unsigned xfer;
+	unsigned int xfer;
 	int sendZLP = 0;
 	int ret;
 
 	DBG(cdev, "mtp_write(%zu)\n", count);
+
+	if (!dev->ep_in)
+		return -EINVAL;
 
 	spin_lock_irq(&dev->lock);
 	if (dev->state == STATE_CANCELED) {
@@ -814,6 +855,11 @@ static void send_file_work(struct work_struct *data)
 		if (hdr_size) {
 			/* prepend MTP data header */
 			header = (struct mtp_data_header *)req->buf;
+			/*
+			 * Set length as 0xffffffff, if it is greater than
+			 * 0xffffffff. Otherwise host will throw error, if file
+			 * size greater than 0xffffffff being transferred.
+			 */
 			if (count >= 0xFFFFFFFF)
 				header->length = __cpu_to_le32(0xFFFFFFFF);
 			else
@@ -1003,7 +1049,7 @@ static int mtp_send_event(struct mtp_dev *dev, struct mtp_event *event)
 	return ret;
 }
 
-static long mtp_send_receive_ioctl(struct file *fp, unsigned code,
+static long mtp_send_receive_ioctl(struct file *fp, unsigned int code,
 	struct mtp_file_range *mfr)
 {
 	struct mtp_dev *dev = fp->private_data;
@@ -1275,7 +1321,7 @@ static int mtp_ctrlrequest(struct usb_composite_dev *cdev,
 			int interface_num = 0;
 			struct mtp_ext_config_desc_header *head;
 			struct mtp_ext_config_desc_function *func;
-			struct usb_configuration        *cfg;
+			struct usb_configuration *cfg;
 			struct usb_function *f;
 
 			head = (struct mtp_ext_config_desc_header *)
@@ -1365,6 +1411,7 @@ static int mtp_ctrlrequest(struct usb_composite_dev *cdev,
 		} else if (ctrl->bRequest == MTP_REQ_GET_DEVICE_STATUS
 				&& w_index == 0 && w_value == 0) {
 			struct mtp_device_status *status = cdev->req->buf;
+
 			status->wLength =
 				__constant_cpu_to_le16(sizeof(*status));
 
@@ -1391,6 +1438,7 @@ static int mtp_ctrlrequest(struct usb_composite_dev *cdev,
 	/* respond with data transfer or status phase? */
 	if (value >= 0) {
 		int rc;
+
 		cdev->req->zero = value < w_length;
 		cdev->req->length = value;
 		rc = usb_ep_queue(cdev->gadget->ep0, cdev->req, GFP_ATOMIC);
@@ -1462,7 +1510,7 @@ mtp_function_unbind(struct usb_configuration *c, struct usb_function *f)
 }
 
 static int mtp_function_set_alt(struct usb_function *f,
-		unsigned intf, unsigned alt)
+		unsigned int intf, unsigned int alt)
 {
 	struct mtp_dev	*dev = func_to_mtp(f);
 	struct usb_composite_dev *cdev = f->config->cdev;

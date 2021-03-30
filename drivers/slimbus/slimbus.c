@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -641,6 +641,7 @@ void slim_report_absent(struct slim_device *sbdev)
 }
 EXPORT_SYMBOL(slim_report_absent);
 
+static int slim_remove_ch(struct slim_controller *ctrl, struct slim_ich *slc);
 /*
  * slim_framer_booted: This function is called by controller after the active
  * framer has booted (using Bus Reset sequence, or after it has shutdown and has
@@ -653,8 +654,20 @@ void slim_framer_booted(struct slim_controller *ctrl)
 {
 	struct slim_device *sbdev;
 	struct list_head *pos, *next;
+	int i;
+
 	if (!ctrl)
 		return;
+
+	/* Since framer has rebooted, reset all data channels */
+	mutex_lock(&ctrl->sched.m_reconf);
+	for (i = 0; i < ctrl->nchans; i++) {
+		struct slim_ich *slc = &ctrl->chans[i];
+
+		if (slc->state > SLIM_CH_DEFINED)
+			slim_remove_ch(ctrl, slc);
+	}
+	mutex_unlock(&ctrl->sched.m_reconf);
 	mutex_lock(&ctrl->m_ctrl);
 	list_for_each_safe(pos, next, &ctrl->devs) {
 		struct slim_driver *sbdrv;
@@ -686,13 +699,14 @@ EXPORT_SYMBOL(slim_framer_booted);
 void slim_msg_response(struct slim_controller *ctrl, u8 *reply, u8 tid, u8 len)
 {
 	int i;
+	unsigned long flags;
 	bool async;
 	struct slim_msg_txn *txn;
 
-	spin_lock(&ctrl->txn_lock);
+	spin_lock_irqsave(&ctrl->txn_lock, flags);
 	txn = ctrl->txnt[tid];
 	if (txn == NULL || txn->rbuf == NULL) {
-		spin_unlock(&ctrl->txn_lock);
+		spin_unlock_irqrestore(&ctrl->txn_lock, flags);
 		if (txn == NULL)
 			dev_err(&ctrl->dev, "Got response to invalid TID:%d, len:%d",
 				tid, len);
@@ -706,7 +720,7 @@ void slim_msg_response(struct slim_controller *ctrl, u8 *reply, u8 tid, u8 len)
 	if (txn->comp)
 		complete(txn->comp);
 	ctrl->txnt[tid] = NULL;
-	spin_unlock(&ctrl->txn_lock);
+	spin_unlock_irqrestore(&ctrl->txn_lock, flags);
 	if (async)
 		kfree(txn);
 }
@@ -717,22 +731,24 @@ static int slim_processtxn(struct slim_controller *ctrl,
 {
 	u8 i = 0;
 	int ret = 0;
+	unsigned long flags;
+
 	if (need_tid) {
-		spin_lock(&ctrl->txn_lock);
+		spin_lock_irqsave(&ctrl->txn_lock, flags);
 		for (i = 0; i < ctrl->last_tid; i++) {
 			if (ctrl->txnt[i] == NULL)
 				break;
 		}
 		if (i >= ctrl->last_tid) {
 			if (ctrl->last_tid == 255) {
-				spin_unlock(&ctrl->txn_lock);
+				spin_unlock_irqrestore(&ctrl->txn_lock, flags);
 				return -ENOMEM;
 			}
 			ctrl->last_tid++;
 		}
 		ctrl->txnt[i] = txn;
 		txn->tid = i;
-		spin_unlock(&ctrl->txn_lock);
+		spin_unlock_irqrestore(&ctrl->txn_lock, flags);
 	}
 
 	ret = ctrl->xfer_msg(ctrl, txn);
@@ -1052,6 +1068,8 @@ int slim_xfer_msg(struct slim_controller *ctrl, struct slim_device *sbdev,
 	if (wbuf)
 		txn->rl += len;
 	if (rbuf) {
+		unsigned long flags;
+
 		txn->rl++;
 		ret = slim_processtxn(ctrl, txn, true);
 
@@ -1060,19 +1078,19 @@ int slim_xfer_msg(struct slim_controller *ctrl, struct slim_device *sbdev,
 			ret = wait_for_completion_timeout(&complete, HZ);
 			if (!ret) {
 				dev_err(&ctrl->dev, "slimbus Read timed out");
-				spin_lock(&ctrl->txn_lock);
+				spin_lock_irqsave(&ctrl->txn_lock, flags);
 				/* Invalidate the transaction */
 				ctrl->txnt[txn->tid] = NULL;
-				spin_unlock(&ctrl->txn_lock);
+				spin_unlock_irqrestore(&ctrl->txn_lock, flags);
 				ret = -ETIMEDOUT;
 			} else
 				ret = 0;
 		} else if (ret < 0 && !msg->comp) {
 			dev_err(&ctrl->dev, "slimbus Read error");
-			spin_lock(&ctrl->txn_lock);
+			spin_lock_irqsave(&ctrl->txn_lock, flags);
 			/* Invalidate the transaction */
 			ctrl->txnt[txn->tid] = NULL;
-			spin_unlock(&ctrl->txn_lock);
+			spin_unlock_irqrestore(&ctrl->txn_lock, flags);
 		}
 
 	} else
@@ -1103,6 +1121,50 @@ int slim_user_msg(struct slim_device *sb, u8 la, u8 mt, u8 mc,
 	return sb->ctrl->xfer_user_msg(sb->ctrl, la, mt, mc, msg, buf, len);
 }
 EXPORT_SYMBOL(slim_user_msg);
+
+/*
+ * Queue bulk of message writes:
+ * slim_bulk_msg_write: Write bulk of messages (e.g. downloading FW)
+ * @sb: Client handle sending these messages
+ * @la: Destination device for these messages
+ * @mt: Message Type
+ * @mc: Message Code
+ * @msgs: List of messages to be written in bulk
+ * @n: Number of messages in the list
+ * @cb: Callback if client needs this to be non-blocking
+ * @ctx: Context for this callback
+ * If supported by controller, this message list will be sent in bulk to the HW
+ * If the client specifies this to be non-blocking, the callback will be
+ * called from atomic context.
+ */
+int slim_bulk_msg_write(struct slim_device *sb, u8 mt, u8 mc,
+			struct slim_val_inf msgs[], int n,
+			int (*comp_cb)(void *ctx, int err), void *ctx)
+{
+	int i, ret;
+
+	if (!sb || !sb->ctrl || !msgs)
+		return -EINVAL;
+	if (!sb->ctrl->xfer_bulk_wr) {
+		pr_warn("controller does not support bulk WR, serializing");
+		for (i = 0; i < n; i++) {
+			struct slim_ele_access ele;
+
+			ele.comp = NULL;
+			ele.start_offset = msgs[i].start_offset;
+			ele.num_bytes = msgs[i].num_bytes;
+			ret = slim_xfer_msg(sb->ctrl, sb, &ele, mc,
+					msgs[i].rbuf, msgs[i].wbuf,
+					ele.num_bytes);
+			if (ret)
+				return ret;
+		}
+		return ret;
+	}
+	return sb->ctrl->xfer_bulk_wr(sb->ctrl, sb->laddr, mt, mc, msgs, n,
+					comp_cb, ctx);
+}
+EXPORT_SYMBOL(slim_bulk_msg_write);
 
 /*
  * slim_alloc_mgrports: Allocate port on manager side.
@@ -1230,6 +1292,37 @@ int slim_dealloc_mgrports(struct slim_device *sb, u32 *hdl, int nports)
 EXPORT_SYMBOL_GPL(slim_dealloc_mgrports);
 
 /*
+ * slim_config_mgrports: Configure manager side ports
+ * @sb: device/client handle.
+ * @ph: array of port handles for which this configuration is valid
+ * @nports: Number of ports in ph
+ * @cfg: configuration requested for port(s)
+ * Configure port settings if they are different than the default ones.
+ * Returns success if the config could be applied. Returns -EISCONN if the
+ * port is in use
+ */
+int slim_config_mgrports(struct slim_device *sb, u32 *ph, int nports,
+				struct slim_port_cfg *cfg)
+{
+	int i;
+	struct slim_controller *ctrl;
+	if (!sb || !ph || !nports || !sb->ctrl || !cfg)
+		return -EINVAL;
+
+	ctrl = sb->ctrl;
+	mutex_lock(&ctrl->sched.m_reconf);
+	for (i = 0; i < nports; i++) {
+		u8 pn = SLIM_HDL_TO_PORT(ph[i]);
+		if (ctrl->ports[pn].state == SLIM_P_CFG)
+			return -EISCONN;
+		ctrl->ports[pn].cfg = *cfg;
+	}
+	mutex_unlock(&ctrl->sched.m_reconf);
+	return 0;
+}
+EXPORT_SYMBOL(slim_config_mgrports);
+
+/*
  * slim_get_slaveport: Get slave port handle
  * @la: slave device logical address.
  * @idx: port index at slave
@@ -1282,8 +1375,12 @@ static int disconnect_port_ch(struct slim_controller *ctrl, u32 ph)
 	ret = slim_processtxn(ctrl, &txn, false);
 	if (ret)
 		return ret;
-	if (la == SLIM_LA_MANAGER)
+	if (la == SLIM_LA_MANAGER) {
 		ctrl->ports[pn].state = SLIM_P_UNCFG;
+		ctrl->ports[pn].cfg.watermark = 0;
+		ctrl->ports[pn].cfg.port_opts = 0;
+		ctrl->ports[pn].ch = NULL;
+	}
 	return 0;
 }
 
@@ -1307,6 +1404,7 @@ int slim_connect_src(struct slim_device *sb, u32 srch, u16 chanh)
 	struct slim_ich *slc = &ctrl->chans[chan];
 	enum slim_port_flow flow = SLIM_HDL_TO_FLOW(srch);
 	u8 la = SLIM_HDL_TO_LA(srch);
+	u8 pn = SLIM_HDL_TO_PORT(srch);
 
 	/* manager ports don't have direction when they are allocated */
 	if (la != SLIM_LA_MANAGER && flow != SLIM_SRC)
@@ -1315,7 +1413,6 @@ int slim_connect_src(struct slim_device *sb, u32 srch, u16 chanh)
 	mutex_lock(&ctrl->sched.m_reconf);
 
 	if (la == SLIM_LA_MANAGER) {
-		u8 pn = SLIM_HDL_TO_PORT(srch);
 		if (pn >= ctrl->nports ||
 			ctrl->ports[pn].state != SLIM_P_UNCFG) {
 			ret = -EINVAL;
@@ -1336,7 +1433,7 @@ int slim_connect_src(struct slim_device *sb, u32 srch, u16 chanh)
 		ret = -EALREADY;
 		goto connect_src_err;
 	}
-
+	ctrl->ports[pn].ch = &slc->prop;
 	ret = connect_port_ch(ctrl, chan, srch, SLIM_SRC);
 
 	if (!ret)
@@ -1395,8 +1492,10 @@ int slim_connect_sink(struct slim_device *sb, u32 *sinkh, int nsink, u16 chanh)
 				(pn >= ctrl->nports ||
 				ctrl->ports[pn].state != SLIM_P_UNCFG))
 				ret = -EINVAL;
-		else
+		else {
+			ctrl->ports[pn].ch = &slc->prop;
 			ret = connect_port_ch(ctrl, chan, sinkh[j], SLIM_SINK);
+		}
 		if (ret) {
 			for (j = j - 1; j >= 0; j--)
 				disconnect_port_ch(ctrl, sinkh[j]);
@@ -1579,6 +1678,7 @@ static int slim_remove_ch(struct slim_controller *ctrl, struct slim_ich *slc)
 	arr[*len] = NULL;
 
 	slc->state = SLIM_CH_ALLOCATED;
+	slc->def = 0;
 	slc->newintr = 0;
 	slc->newoff = 0;
 	for (i = 0; i < slc->nsink; i++) {
@@ -1589,14 +1689,20 @@ static int slim_remove_ch(struct slim_controller *ctrl, struct slim_ich *slc)
 		 * disconnect. It is client's responsibility to call disconnect
 		 * on ports owned by the slave device
 		 */
-		if (la == SLIM_LA_MANAGER)
+		if (la == SLIM_LA_MANAGER) {
 			ctrl->ports[SLIM_HDL_TO_PORT(ph)].state = SLIM_P_UNCFG;
+			ctrl->ports[SLIM_HDL_TO_PORT(ph)].ch = NULL;
+		}
 	}
 
 	ph = slc->srch;
 	la = SLIM_HDL_TO_LA(ph);
-	if (la == SLIM_LA_MANAGER)
-		ctrl->ports[SLIM_HDL_TO_PORT(ph)].state = SLIM_P_UNCFG;
+	if (la == SLIM_LA_MANAGER) {
+		u8 pn = SLIM_HDL_TO_PORT(ph);
+		ctrl->ports[pn].state = SLIM_P_UNCFG;
+		ctrl->ports[pn].cfg.watermark = 0;
+		ctrl->ports[pn].cfg.port_opts = 0;
+	}
 
 	kfree(slc->sinkh);
 	slc->sinkh = NULL;
@@ -2635,7 +2741,7 @@ static void slim_change_existing_chans(struct slim_controller *ctrl, int coeff)
 		if (slc->state == SLIM_CH_ACTIVE ||
 			slc->state == SLIM_CH_SUSPENDED)
 			slc->offset = slc->newoff;
-			slc->interval = slc->newintr;
+		slc->interval = slc->newintr;
 	}
 }
 static void slim_chan_changes(struct slim_device *sb, bool revert)
@@ -3004,6 +3110,7 @@ int slim_control_ch(struct slim_device *sb, u16 chanh,
 		return -EINVAL;
 
 	mutex_lock(&sb->sldev_reconf);
+	mutex_lock(&ctrl->sched.m_reconf);
 	do {
 		struct slim_pending_ch *pch;
 		u8 add_mark_removal  = true;
@@ -3062,6 +3169,7 @@ int slim_control_ch(struct slim_device *sb, u16 chanh,
 		if (nchan < SLIM_GRP_TO_NCHAN(chanh))
 			chan = SLIM_HDL_TO_CHIDX(slc->nextgrp);
 	} while (nchan < SLIM_GRP_TO_NCHAN(chanh));
+	mutex_unlock(&ctrl->sched.m_reconf);
 	if (!ret && commit == true)
 		ret = slim_reconfigure_now(sb);
 	mutex_unlock(&sb->sldev_reconf);

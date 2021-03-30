@@ -68,7 +68,8 @@ EXPORT_SYMBOL_GPL(crypto_shash_setkey);
 static inline unsigned int shash_align_buffer_size(unsigned len,
 						   unsigned long mask)
 {
-	return len + (mask & ~(__alignof__(u8 __attribute__ ((aligned))) - 1));
+	typedef u8 __attribute__ ((aligned)) u8_aligned;
+	return len + (mask & ~(__alignof__(u8_aligned) - 1));
 }
 
 static int shash_update_unaligned(struct shash_desc *desc, const u8 *data,
@@ -274,12 +275,14 @@ static int shash_async_finup(struct ahash_request *req)
 
 int shash_ahash_digest(struct ahash_request *req, struct shash_desc *desc)
 {
-	struct scatterlist *sg = req->src;
-	unsigned int offset = sg->offset;
 	unsigned int nbytes = req->nbytes;
+	struct scatterlist *sg;
+	unsigned int offset;
 	int err;
 
-	if (nbytes < min(sg->length, ((unsigned int)(PAGE_SIZE)) - offset)) {
+	if (nbytes &&
+	    (sg = req->src, offset = sg->offset,
+	     nbytes < min(sg->length, ((unsigned int)(PAGE_SIZE)) - offset))) {
 		void *data;
 
 		data = kmap_atomic(sg_page(sg));

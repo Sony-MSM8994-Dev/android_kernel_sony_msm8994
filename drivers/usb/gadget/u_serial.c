@@ -58,11 +58,8 @@
  * for a telephone or fax link.  And ttyGS2 might be something that just
  * needs a simple byte stream interface for some messaging protocol that
  * is managed in userspace ... OBEX, PTP, and MTP have been mentioned.
- */
-
-#define PREFIX	"ttyGS"
-
-/*
+ *
+ *
  * gserial is the lifecycle interface, used by USB functions
  * gs_port is the I/O nexus, used by the tty driver
  * tty_struct links to the tty/filesystem framework
@@ -416,6 +413,8 @@ __acquires(&port->port_lock)
 					printk(KERN_ERR "%s: %s err %d\n",
 					__func__, "queue", status);
 					list_add(&req->list, pool);
+				} else {
+					port->write_started++;
 				}
 				prev_len = 0;
 			}
@@ -427,9 +426,9 @@ __acquires(&port->port_lock)
 		req->length = len;
 		list_del(&req->list);
 
-		pr_vdebug(PREFIX "%d: tx len=%d, 0x%02x 0x%02x 0x%02x ...\n",
-				port->port_num, len, *((u8 *)req->buf),
-				*((u8 *)req->buf+1), *((u8 *)req->buf+2));
+		pr_vdebug("ttyGS%d: tx len=%d, 0x%02x 0x%02x 0x%02x ...\n",
+			  port->port_num, len, *((u8 *)req->buf),
+			  *((u8 *)req->buf+1), *((u8 *)req->buf+2));
 
 		/* Drop lock while we call out of driver; completions
 		 * could be issued while we do so.  Disconnection may
@@ -568,12 +567,12 @@ static void gs_rx_push(struct work_struct *w)
 		switch (req->status) {
 		case -ESHUTDOWN:
 			disconnect = true;
-			pr_vdebug(PREFIX "%d: shutdown\n", port->port_num);
+			pr_vdebug("ttyGS%d: shutdown\n", port->port_num);
 			break;
 
 		default:
 			/* presumably a transient fault */
-			pr_warning(PREFIX "%d: unexpected RX status %d\n",
+			pr_warn("ttyGS%d: unexpected RX status %d\n",
 					port->port_num, req->status);
 			/* FALLTHROUGH */
 		case 0:
@@ -603,7 +602,7 @@ static void gs_rx_push(struct work_struct *w)
 			if (count != size) {
 				/* stop pushing; TTY layer can't handle more */
 				port->n_read += count;
-				pr_vdebug(PREFIX "%d: rx block %d/%d\n",
+				pr_vdebug("ttyGS%d: rx block %d/%d\n",
 						port->port_num,
 						count, req->actual);
 				break;
@@ -615,23 +614,11 @@ static void gs_rx_push(struct work_struct *w)
 		port->read_started--;
 	}
 
-	/*
-	 * Push from tty to ldisc:
-	 * With low_latency set to 0:
-	 * this is handled by a workqueue, so we won't get callbacks
-	 * (tty->ops->flush_chars i.e. gs_flush_chars) and can hold
-	 * port_lock.
-	 * With low_latency set to 1:
-	 * gs_flush_chars (tty->ops->flush_chars) is called synchronosly
-	 * with port_lock held. Hence we need to release it temporarily
-	 * to avoid recursive spinlock.
+	/* Push from tty to ldisc; this is handled by a workqueue,
+	 * so we won't get callbacks and can hold port_lock
 	 */
 	if (do_push) {
-		if (port->port.low_latency)
-			spin_unlock(&port->port_lock);
 		tty_flip_buffer_push(&port->port);
-		if (port->port.low_latency)
-			spin_lock(&port->port_lock);
 	}
 
 	/* We want our data queue to become empty ASAP, keeping data
@@ -647,7 +634,7 @@ static void gs_rx_push(struct work_struct *w)
 			if (do_push)
 				queue_work(gserial_wq, &port->push);
 			else
-				pr_warning(PREFIX "%d: RX not scheduled?\n",
+				pr_warn("ttyGS%d: RX not scheduled?\n",
 					port->port_num);
 		}
 	}
@@ -1099,7 +1086,7 @@ static void gs_unthrottle(struct tty_struct *tty)
 		 * read queue backs up enough we'll be NAKing OUT packets.
 		 */
 		queue_work(gserial_wq, &port->push);
-		pr_vdebug(PREFIX "%d: unthrottle\n", port->port_num);
+		pr_vdebug("ttyGS%d: unthrottle\n", port->port_num);
 	}
 	spin_unlock_irqrestore(&port->port_lock, flags);
 }
@@ -1623,7 +1610,7 @@ static int userial_init(void)
 		return -ENOMEM;
 
 	gs_tty_driver->driver_name = "g_serial";
-	gs_tty_driver->name = PREFIX;
+	gs_tty_driver->name = "ttyGS";
 	/* uses dynamically assigned dev_t values */
 
 	gs_tty_driver->type = TTY_DRIVER_TYPE_SERIAL;

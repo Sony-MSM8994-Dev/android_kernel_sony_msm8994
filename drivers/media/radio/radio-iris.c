@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved
+/* Copyright (c) 2011-2015, The Linux Foundation. All rights reserved
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -1320,7 +1320,7 @@ static int __radio_hci_request(struct radio_hci_dev *hdev,
 
 	err = req(hdev, param);
 
-	schedule_timeout(timeout);
+	schedule_timeout(msecs_to_jiffies(timeout));
 
 	remove_wait_queue(&hdev->req_wait_q, &wait);
 
@@ -1738,90 +1738,90 @@ static int hci_cmd(unsigned int cmd, struct radio_hci_dev *hdev)
 	switch (cmd) {
 	case HCI_FM_ENABLE_RECV_CMD:
 		ret = radio_hci_request(hdev, hci_fm_enable_recv_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_DISABLE_RECV_CMD:
 		ret = radio_hci_request(hdev, hci_fm_disable_recv_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_GET_RECV_CONF_CMD:
 		ret = radio_hci_request(hdev, hci_get_fm_recv_conf_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_GET_STATION_PARAM_CMD:
 		ret = radio_hci_request(hdev,
 			hci_fm_get_station_param_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_GET_SIGNAL_TH_CMD:
 		ret = radio_hci_request(hdev,
 			hci_fm_get_sig_threshold_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_GET_PROGRAM_SERVICE_CMD:
 		ret = radio_hci_request(hdev,
 			hci_fm_get_program_service_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_GET_RADIO_TEXT_CMD:
 		ret = radio_hci_request(hdev, hci_fm_get_radio_text_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_GET_AF_LIST_CMD:
 		ret = radio_hci_request(hdev, hci_fm_get_af_list_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_CANCEL_SEARCH_CMD:
 		ret = radio_hci_request(hdev, hci_fm_cancel_search_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_RESET_CMD:
 		ret = radio_hci_request(hdev, hci_fm_reset_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_GET_FEATURES_CMD:
 		ret = radio_hci_request(hdev,
 		hci_fm_get_feature_lists_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_STATION_DBG_PARAM_CMD:
 		ret = radio_hci_request(hdev,
 		hci_fm_get_station_dbg_param_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_ENABLE_TRANS_CMD:
 		ret = radio_hci_request(hdev, hci_fm_enable_trans_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_DISABLE_TRANS_CMD:
 		ret = radio_hci_request(hdev, hci_fm_disable_trans_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 
 	case HCI_FM_GET_TX_CONFIG:
 		ret = radio_hci_request(hdev, hci_get_fm_trans_conf_req, arg,
-			msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+			RADIO_HCI_TIMEOUT);
 		break;
 	case HCI_FM_GET_DET_CH_TH_CMD:
 		ret = radio_hci_request(hdev, hci_fm_get_ch_det_th, arg,
-					msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+					RADIO_HCI_TIMEOUT);
 		break;
 	case HCI_FM_GET_BLND_TBL_CMD:
 		ret = radio_hci_request(hdev, hci_fm_get_blend_tbl, arg,
-					msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+					RADIO_HCI_TIMEOUT);
 		break;
 	default:
 		ret = -EINVAL;
@@ -3089,6 +3089,7 @@ static int set_low_power_mode(struct iris_device *radio, int power_mode)
 
 	int rds_grps_proc = 0x00;
 	int retval = 0;
+	struct hci_fm_rds_grp_req grp_3a;
 
 	if (unlikely(radio == NULL)) {
 		FMDERR(":radio is null");
@@ -3098,6 +3099,13 @@ static int set_low_power_mode(struct iris_device *radio, int power_mode)
 	if (radio->power_mode != power_mode) {
 
 		if (power_mode) {
+			memcpy(&grp_3a, &radio->rds_grp,
+					sizeof(struct hci_fm_rds_grp_req));
+			/* Disable 3A group */
+			grp_3a.rds_grp_enable_mask &= ~FM_RDS_3A_GRP;
+			retval = hci_fm_rds_grp(&grp_3a, radio->fm_hdev);
+			if (retval < 0)
+				FMDERR("error in disable 3A group mask\n");
 			radio->event_mask = 0x00;
 			if (radio->af_jump_bit)
 				rds_grps_proc = 0x00 | AF_JUMP_ENABLE;
@@ -3113,7 +3121,11 @@ static int set_low_power_mode(struct iris_device *radio, int power_mode)
 			retval = hci_conf_event_mask(&radio->event_mask,
 				radio->fm_hdev);
 		} else {
-
+			/* Enable RDS group to normal */
+			retval = hci_fm_rds_grp(&radio->rds_grp,
+							radio->fm_hdev);
+			if (retval < 0)
+				FMDERR("error in enable 3A group mask\n");
 			radio->event_mask = SIG_LEVEL_INTR |
 					RDS_SYNC_INTR | AUDIO_CTRL_INTR;
 			retval = hci_conf_event_mask(&radio->event_mask,
@@ -3243,8 +3255,6 @@ static int iris_do_calibration(struct iris_device *radio)
 			radio->fm_hdev);
 	if (retval < 0)
 		FMDERR("Disable Failed after calibration %d", retval);
-	else
-		radio->mode = FM_OFF;
 
 	return retval;
 }
@@ -3597,9 +3607,8 @@ static int iris_vidioc_g_ctrl(struct file *file, void *priv,
 END:
 	if (retval > 0)
 		retval = -EINVAL;
-	if (retval < 0)
-		FMDERR("get control failed with %d, id: %d\n",
-			retval, ctrl->id);
+	if (ctrl != NULL && retval < 0)
+		FMDERR("get control failed: %d, ret: %d\n", ctrl->id, retval);
 
 	return retval;
 }
@@ -3922,7 +3931,7 @@ static int iris_vidioc_s_ctrl(struct file *file, void *priv,
 		radio->tone_freq = ctrl->value;
 		retval = radio_hci_request(radio->fm_hdev,
 				hci_fm_tone_generator, arg,
-				msecs_to_jiffies(RADIO_HCI_TIMEOUT));
+				RADIO_HCI_TIMEOUT);
 		if (retval < 0) {
 			FMDERR("Error while setting the tone %d", retval);
 			radio->tone_freq = saved_val;
@@ -5159,17 +5168,27 @@ static int iris_fops_release(struct file *file)
 		return -EINVAL;
 
 	if (radio->mode == FM_OFF)
-		return 0;
+		goto END;
 
 	if (radio->mode == FM_RECV) {
 		radio->mode = FM_OFF;
 		retval = hci_cmd(HCI_FM_DISABLE_RECV_CMD,
 						radio->fm_hdev);
+		/* wait for disable cmd resp from controller */
+		msleep(50);
 	} else if (radio->mode == FM_TRANS) {
 		radio->mode = FM_OFF;
 		retval = hci_cmd(HCI_FM_DISABLE_TRANS_CMD,
 					radio->fm_hdev);
+		/* wait for disable cmd resp from controller */
+		msleep(50);
+	} else if (radio->mode == FM_CALIB) {
+		radio->mode = FM_OFF;
+		return retval;
 	}
+END:
+	if (radio->fm_hdev != NULL)
+		radio->fm_hdev->close_smd();
 	if (retval < 0)
 		FMDERR("Err on disable FM %d\n", retval);
 

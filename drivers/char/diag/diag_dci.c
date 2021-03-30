@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2015, 2017-2018 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -653,7 +653,7 @@ int diag_dci_query_log_mask(struct diag_dci_client_tbl *entry,
 	byte_mask = 0x01 << (item_num % 8);
 	offset = equip_id * 514;
 
-	if (offset + byte_index > DCI_LOG_MASK_SIZE) {
+	if (offset + byte_index >= DCI_LOG_MASK_SIZE) {
 		pr_err("diag: In %s, invalid offset: %d, log_code: %d, byte_index: %d\n",
 				__func__, offset, log_code, byte_index);
 		return 0;
@@ -680,7 +680,7 @@ int diag_dci_query_event_mask(struct diag_dci_client_tbl *entry,
 	bit_index = event_id % 8;
 	byte_mask = 0x1 << bit_index;
 
-	if (byte_index > DCI_EVENT_MASK_SIZE) {
+	if (byte_index >= DCI_EVENT_MASK_SIZE) {
 		pr_err("diag: In %s, invalid, event_id: %d, byte_index: %d\n",
 				__func__, event_id, byte_index);
 		return 0;
@@ -809,7 +809,7 @@ static void dci_process_ctrl_status(unsigned char *buf, int len, int token)
 	int peripheral_mask, status;
 
 	if (!buf || len < 2 || (len < sizeof(struct diag_ctrl_dci_status))) {
-		pr_err("diag: In %s, invalid buf %p or length: %d\n",
+		pr_err("diag: In %s, invalid buf %pK or length: %d\n",
 		       __func__, buf, len);
 		return;
 	}
@@ -1112,11 +1112,10 @@ void extract_dci_events(unsigned char *buf, int len, int data_source, int token)
 		pr_err("diag: In %s buffer is NULL\n", __func__);
 		return;
 	}
-
 	/*
 	 * 1 byte for event code and 2 bytes for the length field.
 	 * The length field indicates the total length removing the cmd_code
-	 * and the length field. The event parsing in that case should happen
+	 * and the lenght field. The event parsing in that case should happen
 	 * till the end.
 	 */
 	if (len < 3) {
@@ -2186,10 +2185,26 @@ struct diag_dci_client_tbl *dci_lookup_client_entry_pid(int tgid)
 {
 	struct list_head *start, *temp;
 	struct diag_dci_client_tbl *entry = NULL;
+	struct pid *pid_struct = NULL;
+	struct task_struct *task_s = NULL;
+
 	list_for_each_safe(start, temp, &driver->dci_client_list) {
 		entry = list_entry(start, struct diag_dci_client_tbl, track);
-		if (entry->client->tgid == tgid)
-			return entry;
+		pid_struct = find_get_pid(entry->tgid);
+		if (!pid_struct) {
+			pr_err("diag: valid pid doesn't exist for pid = %d\n",
+				entry->tgid);
+			continue;
+		}
+		task_s = get_pid_task(pid_struct, PIDTYPE_PID);
+		if (!task_s) {
+			pr_err("diag: valid task doesn't exist for pid = %d\n",
+				entry->tgid);
+			continue;
+		}
+		if (task_s == entry->client)
+			if (entry->client->tgid == tgid)
+				return entry;
 	}
 	return NULL;
 }

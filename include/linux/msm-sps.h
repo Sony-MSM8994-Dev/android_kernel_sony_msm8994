@@ -24,7 +24,7 @@
 
 /* Returns 36bits physical address from 32bit address &
  * flags word */
-#define DESC_FULL_ADDR(flags, addr) (((flags & 0xF) << 32) | addr)
+#define DESC_FULL_ADDR(flags, addr) ((((phys_addr_t)flags & 0xF) << 32) | addr)
 
 /* Returns flags word with flags and 4bit upper address
  * from flags and 36bit physical address */
@@ -57,7 +57,7 @@
 #define SPS_IRQ_INVALID          0
 
 /* Invalid address value */
-#define SPS_ADDR_INVALID      ((unsigned long)0)
+#define SPS_ADDR_INVALID      ((unsigned long)0xDEADBEEF)
 
 /* Invalid peripheral device enumeration class */
 #define SPS_CLASS_INVALID     ((unsigned long)-1)
@@ -111,6 +111,8 @@
 #define SPS_BAM_CANCEL_WB           (1UL << 6)
 /* Confirm resource status before access BAM*/
 #define SPS_BAM_RES_CONFIRM         (1UL << 7)
+/* Hold memory for BAM DMUX */
+#define SPS_BAM_HOLD_MEM            (1UL << 8)
 
 /* BAM device management flags */
 

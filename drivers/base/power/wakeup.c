@@ -15,6 +15,7 @@
 #include <linux/seq_file.h>
 #include <linux/debugfs.h>
 #include <linux/types.h>
+#include <linux/proc_fs.h>
 #include <trace/events/power.h>
 
 #include "power.h"
@@ -353,10 +354,16 @@ int device_init_wakeup(struct device *dev, bool enable)
 {
 	int ret = 0;
 
+	if (!dev)
+		return -EINVAL;
+
 	if (enable) {
 		device_set_wakeup_capable(dev, true);
 		ret = device_wakeup_enable(dev);
 	} else {
+		if (dev->power.can_wakeup)
+			device_wakeup_disable(dev);
+
 		device_set_wakeup_capable(dev, false);
 	}
 
@@ -791,8 +798,10 @@ bool pm_wakeup_pending(void)
 	}
 	spin_unlock_irqrestore(&events_lock, flags);
 
-	if (ret)
+	if (ret) {
+		pr_info("PM: Wakeup pending, aborting suspend\n");
 		print_active_wakeup_sources();
+	}
 
 	return ret || pm_abort_suspend;
 }
@@ -1002,6 +1011,7 @@ static int __init wakeup_sources_debugfs_init(void)
 {
 	wakeup_sources_stats_dentry = debugfs_create_file("wakeup_sources",
 			S_IRUGO, NULL, NULL, &wakeup_sources_stats_fops);
+	proc_create("wakelocks", S_IRUGO, NULL, &wakeup_sources_stats_fops);
 	return 0;
 }
 

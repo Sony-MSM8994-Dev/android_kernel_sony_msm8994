@@ -222,6 +222,14 @@ enum usb_ctrl {
 };
 
 /**
+ * USB ID state
+ */
+enum usb_id_state {
+	USB_ID_GROUND = 0,
+	USB_ID_FLOAT,
+};
+
+/**
  * struct msm_otg_platform_data - platform device data
  *              for msm_otg driver.
  * @phy_init_seq: PHY configuration sequence. val, reg pairs
@@ -274,6 +282,7 @@ enum usb_ctrl {
  * @usb_id_gpio: Gpio used for USB ID detection.
  * @bool phy_dvdd_always_on: PHY DVDD is supplied by always on PMIC LDO.
  * @bool emulation: Indicates whether we are running on emulation platform.
+ * @bool enable_epprime_fix: Indicates whether HW fix for epprime failure is enabled.
  */
 struct msm_otg_platform_data {
 	int *phy_init_seq;
@@ -307,6 +316,9 @@ struct msm_otg_platform_data {
 	int usb_id_gpio;
 	bool phy_dvdd_always_on;
 	bool emulation;
+	bool enable_epprime_fix;
+	struct clk *system_clk;
+	struct clk *pclk;
 };
 
 /* phy related flags */
@@ -410,7 +422,8 @@ struct msm_otg_platform_data {
  * @bus_clks_enabled: indicates pcnoc/snoc/bimc clocks are on or not.
  * @chg_check_timer: The timer used to implement the workaround to detect
  *               very slow plug in of wall charger.
- * @ui_enabled: USB Intterupt is enabled or disabled.
+ * @bc1p2_current_max: Max charging current allowed as per bc1.2 chg detection
+ * @typec_current_max: Max charging current allowed as per type-c chg detection
  * @is_ext_chg_dcp: To indicate whether charger detected by external entity
 		SMB hardware is DCP charger or not.
  * @pm_done: It is used to increment the pm counter using pm_runtime_get_sync.
@@ -419,6 +432,9 @@ struct msm_otg_platform_data {
 	     pm_done is set to true.
  * @ext_id_irq: IRQ for ID interrupt.
  * @phy_irq_pending: Gets set when PHY IRQ arrives in LPM.
+ * host_suspend_wait: wait_queue on which USB core waits for USB entering lpm
+	     in host bus suspend case.
+ * @id_state: Indicates USBID line status.
  */
 struct msm_otg {
 	struct usb_phy phy;
@@ -545,6 +561,8 @@ struct msm_otg {
 	unsigned int host_mode;
 	unsigned int voltage_max;
 	unsigned int current_max;
+	unsigned int bc1p2_current_max;
+	unsigned int typec_current_max;
 	unsigned int usbin_health;
 
 	dev_t ext_chg_dev;
@@ -555,13 +573,14 @@ struct msm_otg {
 	enum usb_ext_chg_status ext_chg_active;
 	struct completion ext_chg_wait;
 	struct pinctrl *phy_pinctrl;
-	int ui_enabled;
 	bool is_ext_chg_dcp;
 	bool pm_done;
 	struct qpnp_vadc_chip	*vadc_dev;
 	int ext_id_irq;
 	bool phy_irq_pending;
 	wait_queue_head_t	host_suspend_wait;
+	enum usb_id_state id_state;
+	unsigned int vbus_state;
 };
 
 struct ci13xxx_platform_data {
@@ -574,6 +593,9 @@ struct ci13xxx_platform_data {
 	void *prv_data;
 	bool l1_supported;
 	bool enable_ahb2ahb_bypass;
+	bool enable_epprime_fix;
+	struct clk *system_clk;
+	struct clk *pclk;
 };
 
 /**
@@ -677,6 +699,7 @@ void msm_bam_usb_host_notify_on_resume(void);
 void msm_bam_hsic_host_notify_on_resume(void);
 bool msm_bam_hsic_host_pipe_empty(void);
 void msm_bam_set_qdss_usb_active(bool is_active);
+bool msm_usb_bam_enable(enum usb_ctrl ctrl, bool bam_enable);
 #else
 static inline bool msm_bam_usb_lpm_ok(enum usb_ctrl ctrl) { return true; }
 static inline void msm_bam_notify_lpm_resume(enum usb_ctrl ctrl) {}
@@ -690,11 +713,24 @@ static inline void msm_bam_hsic_host_notify_on_resume(void) {}
 static inline void msm_bam_usb_host_notify_on_resume(void) {}
 static inline bool msm_bam_hsic_host_pipe_empty(void) { return true; }
 static inline void msm_bam_set_qdss_usb_active(bool is_active) {}
+static inline bool msm_usb_bam_enable(enum usb_ctrl ctrl, bool bam_enable)
+{
+	return true;
+}
 #endif
+
 #ifdef CONFIG_USB_CI13XXX_MSM
+void msm_hw_soft_reset(void);
 void msm_hw_bam_disable(bool bam_disable);
+void msm_usb_irq_disable(bool disable);
 #else
+static inline void msm_hw_soft_reset(void)
+{
+}
 static inline void msm_hw_bam_disable(bool bam_disable)
+{
+}
+static inline void msm_usb_irq_disable(bool disable)
 {
 }
 #endif

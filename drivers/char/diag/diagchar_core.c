@@ -1,5 +1,4 @@
-/* Copyright (c) 2008-2015, 2017-2018 The Linux Foundation.
- * All rights reserved.
+/* Copyright (c) 2008-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -297,8 +296,8 @@ static int diagchar_open(struct inode *inode, struct file *file)
 				diag_add_client(i, file);
 			} else {
 				mutex_unlock(&driver->diagchar_mutex);
-				pr_alert("Max client limit for DIAG reached\n");
-				pr_info("Cannot open handle %s"
+				pr_err_ratelimited("diag: Max client limit for DIAG reached\n");
+				pr_err_ratelimited("diag: Cannot open handle %s"
 					   " %d", current->comm, current->tgid);
 				for (i = 0; i < driver->num_clients; i++)
 					pr_debug("%d) %s PID=%d", i, driver->
@@ -350,7 +349,7 @@ static int diagchar_close(struct inode *inode, struct file *file)
 	* This call will remove any pending registrations of such client
 	*/
 	mutex_lock(&driver->dci_mutex);
-	dci_entry = dci_lookup_client_entry_pid(current->pid);
+	dci_entry = dci_lookup_client_entry_pid(current->tgid);
 	if (dci_entry)
 		diag_dci_deinit_client(dci_entry);
 	mutex_unlock(&driver->dci_mutex);
@@ -682,8 +681,8 @@ static int diag_cb_send_data_remote(int proc, void *buf, int len)
 	err = diagfwd_bridge_write(proc, driver->cb_buf,
 				   driver->cb_buf_len);
 	if (err) {
-		pr_err("diag: Error writing Callback packet to proc: %d, err: %d\n",
-			proc, err);
+		pr_err_ratelimited("diag: Error writing Callback packet to proc: %d, err: %d\n",
+				   proc, err);
 		driver->cb_buf_len = 0;
 	}
 
@@ -1078,6 +1077,15 @@ static int diag_ioctl_vote_real_time(unsigned long ioarg)
 	if (copy_from_user(&vote, (void __user *)ioarg,
 			sizeof(struct real_time_vote_t)))
 		return -EFAULT;
+
+	if (vote.proc > DIAG_PROC_MEMORY_DEVICE ||
+		vote.real_time_vote > MODE_UNKNOWN ||
+		vote.client_id < 0) {
+		pr_err("diag: %s, invalid params, proc: %d, vote: %d, client_id: %d\n",
+			__func__, vote.proc, vote.real_time_vote,
+			vote.client_id);
+		return -EINVAL;
+	}
 
 	driver->real_time_update_busy++;
 	if (vote.proc == DIAG_PROC_DCI) {
@@ -2398,6 +2406,7 @@ static int __init diagchar_init(void)
 	buf_hdlc_ctxt = SET_BUF_CTXT(APPS_DATA, SMD_DATA_TYPE, 1);
 	mutex_init(&driver->diagchar_mutex);
 	mutex_init(&driver->delayed_rsp_mutex);
+	mutex_init(&driver->msg_mask_lock);
 	init_waitqueue_head(&driver->wait_q);
 	init_waitqueue_head(&driver->smd_wait_q);
 	INIT_WORK(&(driver->diag_drain_work), diag_drain_work_fn);

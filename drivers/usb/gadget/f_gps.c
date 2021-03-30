@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2014, 2016-2017, The Linux Foundation.
+ * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,14 +17,12 @@
 #include <linux/device.h>
 #include <linux/spinlock.h>
 
-
 #include "usb_gadget_xport.h"
 #include "u_rmnet.h"
 #include "gadget_chips.h"
 
 #define GPS_NOTIFY_INTERVAL	5
 #define GPS_MAX_NOTIFY_SIZE	64
-
 
 #define ACM_CTRL_DTR	(1 << 0)
 
@@ -252,6 +251,7 @@ static void gps_purge_responses(struct f_gps *dev)
 
 	pr_debug("%s: port#%d\n", __func__, dev->port_num);
 
+	usb_ep_dequeue(dev->notify, dev->notify_req);
 	spin_lock_irqsave(&dev->lock, flags);
 	while (!list_empty(&dev->cpkt_resp_q)) {
 		cpkt = list_first_entry(&dev->cpkt_resp_q,
@@ -358,6 +358,11 @@ static void gps_ctrl_response_available(struct f_gps *dev)
 
 	ret = usb_ep_queue(dev->notify, dev->notify_req, GFP_ATOMIC);
 	if (ret) {
+		if (ret == -EBUSY) {
+			pr_err("%s: notify_count:%u\n",
+				__func__, atomic_read(&dev->notify_count));
+			WARN_ON(1);
+		}
 		spin_lock_irqsave(&dev->lock, flags);
 		if (!list_empty(&dev->cpkt_resp_q)) {
 			atomic_dec(&dev->notify_count);
@@ -388,8 +393,6 @@ static void gps_connect(struct grmnet *gr)
 static void gps_disconnect(struct grmnet *gr)
 {
 	struct f_gps			*dev;
-	struct usb_cdc_notification	*event;
-	int				status;
 
 	if (!gr) {
 		pr_err("%s: Invalid grmnet:%pK\n", __func__, gr);
@@ -405,24 +408,8 @@ static void gps_disconnect(struct grmnet *gr)
 		return;
 	}
 
-	usb_ep_fifo_flush(dev->notify);
-
-	event = dev->notify_req->buf;
-	event->bmRequestType = USB_DIR_IN | USB_TYPE_CLASS
-			| USB_RECIP_INTERFACE;
-	event->bNotificationType = USB_CDC_NOTIFY_NETWORK_CONNECTION;
-	event->wValue = cpu_to_le16(0);
-	event->wIndex = cpu_to_le16(dev->ifc_id);
-	event->wLength = cpu_to_le16(0);
-
-	status = usb_ep_queue(dev->notify, dev->notify_req, GFP_ATOMIC);
-	if (status < 0) {
-		if (!atomic_read(&dev->online))
-			return;
-		pr_err("%s: gps notify ep enqueue error %d\n",
-				__func__, status);
-	}
-
+	/* dequeue any pending notify_req */
+	usb_ep_dequeue(dev->notify, dev->notify_req);
 	gps_purge_responses(dev);
 }
 
@@ -440,7 +427,8 @@ gps_send_cpkt_response(void *gr, void *buf, size_t len)
 	}
 	cpkt = gps_alloc_ctrl_pkt(len, GFP_ATOMIC);
 	if (IS_ERR(cpkt)) {
-		pr_err("%s: Unable to allocate ctrl pkt\n", __func__);
+		pr_err_ratelimited("%s: Unable to allocate ctrl pkt\n",
+					__func__);
 		return -ENOMEM;
 	}
 	memcpy(cpkt->buf, buf, len);
@@ -448,7 +436,7 @@ gps_send_cpkt_response(void *gr, void *buf, size_t len)
 
 	dev = port_to_gps(gr);
 
-	pr_debug("%s: dev:%pK\n", __func__, dev);
+	pr_debug_ratelimited("%s: dev:%pK\n", __func__, dev);
 
 	if (!atomic_read(&dev->online) || !atomic_read(&dev->ctrl_online)) {
 		gps_free_ctrl_pkt(cpkt);
@@ -505,11 +493,20 @@ static void gps_notify_complete(struct usb_ep *ep, struct usb_request *req)
 		if (!atomic_read(&dev->ctrl_online))
 			break;
 
+		pr_debug("%s: decrement notify_count:%u\n", __func__,
+				atomic_read(&dev->notify_count));
 		if (atomic_dec_and_test(&dev->notify_count))
 			break;
 
 		status = usb_ep_queue(dev->notify, req, GFP_ATOMIC);
 		if (status) {
+			if (status == -EBUSY) {
+				pr_err("%s: notify_count:%u\n",
+					__func__,
+					atomic_read(&dev->notify_count));
+				WARN_ON(1);
+			}
+
 			spin_lock_irqsave(&dev->lock, flags);
 			if (!list_empty(&dev->cpkt_resp_q)) {
 				atomic_dec(&dev->notify_count);
@@ -561,8 +558,9 @@ gps_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 
 			spin_lock(&dev->lock);
 			if (list_empty(&dev->cpkt_resp_q)) {
-				pr_err("%s: ctrl resp queue empty", __func__);
 				spin_unlock(&dev->lock);
+				pr_debug("%s: ctrl resp queue empty", __func__);
+				ret = 0;
 				goto invalid;
 			}
 

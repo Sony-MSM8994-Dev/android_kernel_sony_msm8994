@@ -55,6 +55,10 @@
 /*************************************************************************
  * FUNCTIONS WHICH HAS KERNEL VERSION DEPENDENCY
  *************************************************************************/
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
+#define CURRENT_TIME_SEC	timespec_trunc(current_kernel_time(), NSEC_PER_SEC)
+#endif
+
 #ifdef CONFIG_SDFAT_UEVENT
 static struct kobject sdfat_uevent_kobj;
 
@@ -456,4 +460,3 @@ void __sdfat_dmsg(int level, const char *fmt, ...)
 #endif
 }
 #endif
-

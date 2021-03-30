@@ -369,6 +369,7 @@ typedef unsigned char *sk_buff_data_t;
  *	@tc_verd: traffic control verdict
  *	@rxhash: the packet hash computed on receive
  *	@queue_mapping: Queue mapping for multiqueue devices
+ *	@pfmemalloc: skbuff was allocated from PFMEMALLOC reserves
  *	@ndisc_nodetype: router type (from link layer)
  *	@ooo_okay: allow the mapping of a socket to a queue to be changed
  *	@l4_rxhash: indicate rxhash is a canonical 4-tuple hash over transport
@@ -441,7 +442,8 @@ struct sk_buff {
 				fclone:2,
 				ipvs_property:1,
 				peeked:1,
-				nf_trace:1;
+				nf_trace:1,
+				pfmemalloc:1;
 	kmemcheck_bitfield_end(flags1);
 	__be16			protocol;
 
@@ -472,7 +474,6 @@ struct sk_buff {
 #ifdef CONFIG_IPV6_NDISC_NODETYPE
 	__u8			ndisc_nodetype:2;
 #endif
-	__u8			pfmemalloc:1;
 	__u8			ooo_okay:1;
 	__u8			l4_rxhash:1;
 	__u8			wifi_acked_valid:1;

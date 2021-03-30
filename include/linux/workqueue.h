@@ -333,7 +333,7 @@ enum {
 
 	__WQ_DRAINING		= 1 << 16, /* internal: workqueue is draining */
 	__WQ_ORDERED		= 1 << 17, /* internal: workqueue is ordered */
-	__WQ_ORDERED_EXPLICIT	= 1 << 18, /* internal: alloc_ordered_workqueue() */
+	__WQ_ORDERED_EXPLICIT	= 1 << 19, /* internal: alloc_ordered_workqueue() */
 
 	WQ_MAX_ACTIVE		= 512,	  /* I like 512, better ideas? */
 	WQ_MAX_UNBOUND_PER_CPU	= 4,	  /* 4 * #cpus for unbound wq */
@@ -351,6 +351,9 @@ enum {
  * Multi-CPU multi-threaded.  There are users which expect relatively
  * short queue flush time.  Don't queue works which can run for too
  * long.
+ *
+ * system_highpri_wq is similar to system_wq but for work items which
+ * require WQ_HIGHPRI.
  *
  * system_long_wq is similar to system_wq but may host long running
  * works.  Queue flushing might take relatively long.
@@ -370,6 +373,7 @@ enum {
  * 'wq_power_efficient' is disabled.  See WQ_POWER_EFFICIENT for more info.
  */
 extern struct workqueue_struct *system_wq;
+extern struct workqueue_struct *system_highpri_wq;
 extern struct workqueue_struct *system_long_wq;
 extern struct workqueue_struct *system_unbound_wq;
 extern struct workqueue_struct *system_freezable_wq;
@@ -477,6 +481,7 @@ extern int schedule_on_each_cpu(work_func_t func);
 int execute_in_process_context(work_func_t fn, struct execute_work *);
 
 extern bool flush_work(struct work_struct *work);
+extern bool cancel_work(struct work_struct *work);
 extern bool cancel_work_sync(struct work_struct *work);
 
 extern bool flush_delayed_work(struct delayed_work *dwork);
@@ -592,6 +597,15 @@ static inline bool schedule_delayed_work(struct delayed_work *dwork,
 					 unsigned long delay)
 {
 	return queue_delayed_work(system_wq, dwork, delay);
+}
+
+/**
+ * delayed_work_busy - See work_busy()
+ * @dwork: the delayed work to be tested
+ */
+static inline unsigned int delayed_work_busy(struct delayed_work *dwork)
+{
+	return work_busy(&dwork->work);
 }
 
 /**

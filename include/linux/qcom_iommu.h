@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2015, 2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -101,6 +101,7 @@ struct msm_iommu_bfb_settings {
  * @clk_reg_virt: Optional clock register virtual address.
  * @halt_enabled: Set to 1 if IOMMU halt is supported in the IOMMU, 0 otherwise.
  * @ctx_attach_count: Count of how many context are attached.
+ * @sec_cfg_restored: status of restore sec cfg.
  * @bus_client  : Bus client needed to vote for bus bandwidth.
  * @needs_rem_spinlock  : 1 if remote spinlock is needed, 0 otherwise
  * @powered_on: Powered status of the IOMMU. 0 means powered off.
@@ -114,6 +115,7 @@ struct msm_iommu_drvdata {
 	void __iomem *glb_base;
 	void __iomem *cb_base;
 	void __iomem *smmu_local_base;
+	void __iomem *vbif_base;
 	int ncb;
 	int ttbr_split;
 	struct clk *clk;
@@ -130,6 +132,7 @@ struct msm_iommu_drvdata {
 	void __iomem *clk_reg_virt;
 	int halt_enabled;
 	unsigned int ctx_attach_count;
+	bool sec_cfg_restored;
 	unsigned int bus_client;
 	int needs_rem_spinlock;
 	int powered_on;
@@ -180,6 +183,7 @@ void iommu_resume(const struct msm_iommu_drvdata *iommu_drvdata);
 			the secure environment, false otherwise
  * @asid		ASID used with this context.
  * @attach_count	Number of time this context has been attached.
+ * @report_error_on_fault - true if error is returned back to master
  *
  * A msm_iommu_ctx_drvdata holds the driver data for a single context bank
  * within each IOMMU hardware instance
@@ -197,6 +201,7 @@ struct msm_iommu_ctx_drvdata {
 	int attach_count;
 	u32 sid_mask[MAX_NUM_SMR];
 	unsigned int n_sid_mask;
+	bool report_error_on_fault;
 };
 
 enum dump_reg {

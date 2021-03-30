@@ -106,31 +106,6 @@ int seq_path(struct seq_file *, const struct path *, const char *);
 int seq_dentry(struct seq_file *, struct dentry *, const char *);
 int seq_path_root(struct seq_file *m, const struct path *path,
 		  const struct path *root, const char *esc);
-int seq_bitmap(struct seq_file *m, const unsigned long *bits,
-				   unsigned int nr_bits);
-static inline int seq_cpumask(struct seq_file *m, const struct cpumask *mask)
-{
-	return seq_bitmap(m, cpumask_bits(mask), nr_cpu_ids);
-}
-
-static inline int seq_nodemask(struct seq_file *m, nodemask_t *mask)
-{
-	return seq_bitmap(m, mask->bits, MAX_NUMNODES);
-}
-
-int seq_bitmap_list(struct seq_file *m, const unsigned long *bits,
-		unsigned int nr_bits);
-
-static inline int seq_cpumask_list(struct seq_file *m,
-				   const struct cpumask *mask)
-{
-	return seq_bitmap_list(m, cpumask_bits(mask), nr_cpu_ids);
-}
-
-static inline int seq_nodemask_list(struct seq_file *m, nodemask_t *mask)
-{
-	return seq_bitmap_list(m, mask->bits, MAX_NUMNODES);
-}
 
 int single_open(struct file *, int (*)(struct seq_file *, void *), void *);
 int single_open_size(struct file *, int (*)(struct seq_file *, void *), void *, size_t);
@@ -151,6 +126,23 @@ static inline struct user_namespace *seq_user_ns(struct seq_file *seq)
 	extern struct user_namespace init_user_ns;
 	return &init_user_ns;
 #endif
+}
+
+/**
+ * seq_show_options - display mount options with appropriate escapes.
+ * @m: the seq_file handle
+ * @name: the mount option name
+ * @value: the mount option name's value, can be NULL
+ */
+static inline void seq_show_option(struct seq_file *m, const char *name,
+				   const char *value)
+{
+	seq_putc(m, ',');
+	seq_escape(m, name, ",= \t\n\\");
+	if (value) {
+		seq_putc(m, '=');
+		seq_escape(m, value, ", \t\n\\");
+	}
 }
 
 #define SEQ_START_TOKEN ((void *)1)

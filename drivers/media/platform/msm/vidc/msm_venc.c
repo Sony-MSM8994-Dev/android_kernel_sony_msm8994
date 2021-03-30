@@ -25,13 +25,13 @@
 #define DEFAULT_BIT_RATE 64000
 #define BIT_RATE_STEP 100
 #define DEFAULT_FRAME_RATE 15
-#define MAX_SLICE_BYTE_SIZE 1024
-#define MIN_SLICE_BYTE_SIZE 1024
-#define MAX_SLICE_MB_SIZE 300
+#define MAX_SLICE_BYTE_SIZE ((MAX_BIT_RATE)>>3)
+#define MIN_SLICE_BYTE_SIZE 512
+#define MAX_SLICE_MB_SIZE ((4096 * 2304) >> 8)
 #define I_FRAME_QP 26
 #define P_FRAME_QP 28
 #define B_FRAME_QP 30
-#define MAX_INTRA_REFRESH_MBS 300
+#define MAX_INTRA_REFRESH_MBS ((4096 * 2304) >> 8)
 #define MAX_NUM_B_FRAMES 4
 #define MAX_LTR_FRAME_COUNT 10
 
@@ -1102,6 +1102,14 @@ static u32 get_frame_size_compressed(int plane, u32 height, u32 width)
 {
 	int sz = ((height + 31) & (~31)) * ((width + 31) & (~31)) * 3/2;
 	sz = (sz + 4095) & (~4095);
+
+	/*
+	 * double the buffer size if resolution is less than
+	 * or equal to CIF (352x288) resolution.
+	 */
+	if (width * height <= 352 * 288)
+		sz = sz * 2;
+
 	return sz;
 }
 
@@ -1276,6 +1284,18 @@ static int msm_venc_queue_setup(struct vb2_queue *q,
 			max(*num_buffers, inst->buff_req.buffer[0].
 				buffer_count_actual);
 
+		if (*num_buffers < MIN_NUM_OUTPUT_BUFFERS  ||
+				*num_buffers > VB2_MAX_FRAME) {
+			int temp = *num_buffers;
+
+			*num_buffers = clamp_val(*num_buffers,
+					MIN_NUM_OUTPUT_BUFFERS,
+					VB2_MAX_FRAME);
+			dprintk(VIDC_INFO,
+				"Changing buffer count on OUTPUT_MPLANE from %d to %d for best effort encoding\n",
+				temp, *num_buffers);
+		}
+
 		property_id = HAL_PARAM_BUFFER_COUNT_ACTUAL;
 		new_buf_count.buffer_type = HAL_BUFFER_INPUT;
 		new_buf_count.buffer_count_actual = *num_buffers;
@@ -1433,8 +1453,12 @@ static inline int start_streaming(struct msm_vidc_inst *inst)
 	if (rc) {
 		dprintk(VIDC_ERR,
 			"Failed to move inst: %pK to start done state\n", inst);
+		msm_comm_session_clean(inst);
 		goto fail_start;
 	}
+
+	msm_comm_scale_clocks_and_bus(inst);
+
 	msm_dcvs_init_load(inst);
 	mutex_lock(&inst->pendingq.lock);
 	list_for_each_safe(ptr, next, &inst->pendingq.list) {
@@ -1873,8 +1897,11 @@ static int try_set_ctrl(struct msm_vidc_inst *inst, struct v4l2_ctrl *ctrl)
 	case V4L2_CID_MPEG_VIDC_VIDEO_IDR_PERIOD:
 		if (inst->fmts[CAPTURE_PORT]->fourcc != V4L2_PIX_FMT_H264 &&
 			inst->fmts[CAPTURE_PORT]->fourcc !=
-				V4L2_PIX_FMT_H264_NO_SC) {
-			dprintk(VIDC_ERR, "Control 0x%x only valid for H264\n",
+				V4L2_PIX_FMT_H264_NO_SC &&
+			inst->fmts[CAPTURE_PORT]->fourcc !=
+				V4L2_PIX_FMT_HEVC) {
+			dprintk(VIDC_ERR,
+				"Control 0x%x only valid for H264 and HEVC\n",
 					ctrl->id);
 			rc = -ENOTSUPP;
 			break;
@@ -2658,7 +2685,7 @@ static int try_set_ctrl(struct msm_vidc_inst *inst, struct v4l2_ctrl *ctrl)
 		break;
 	case V4L2_CID_MPEG_VIDC_VIDEO_USELTRFRAME:
 		property_id = HAL_CONFIG_VENC_USELTRFRAME;
-		use_ltr.ref_ltr = (1 << ctrl->val);
+		use_ltr.ref_ltr = ctrl->val;
 		use_ltr.use_constraint = false;
 		use_ltr.frames = 0;
 		pdata = &use_ltr;
@@ -3108,7 +3135,7 @@ int msm_venc_s_parm(struct msm_vidc_inst *inst, struct v4l2_streamparm *a)
 
 	if ((fps % 15 == 14) || (fps % 24 == 23))
 		fps = fps + 1;
-	else if ((fps % 24 == 1) || (fps % 15 == 1))
+	else if ((fps > 1) && ((fps % 24 == 1) || (fps % 15 == 1)))
 		fps = fps - 1;
 
 	if (inst->prop.fps != fps) {
@@ -3738,6 +3765,11 @@ int msm_venc_ctrl_init(struct msm_vidc_inst *inst)
 					msm_venc_ctrls[idx].step,
 					msm_venc_ctrls[idx].default_value);
 			}
+		}
+
+		if (!ctrl) {
+			dprintk(VIDC_ERR, "%s - invalid ctrl\n", __func__);
+			return -EINVAL;
 		}
 
 		ret_val = inst->ctrl_handler.error;

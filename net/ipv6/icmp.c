@@ -70,6 +70,10 @@
 
 #include <asm/uaccess.h>
 
+#define ICMP6_MAX_TYPES 256
+static struct atomic_notifier_head notifier_head[ICMP6_MAX_TYPES];
+
+
 /*
  *	The ICMP socket(s). This is the most convenient way to flow control
  *	our ICMP output as well as maintain a clean interface throughout
@@ -90,13 +94,13 @@ static void icmpv6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 	struct net *net = dev_net(skb->dev);
 
 	if (type == ICMPV6_PKT_TOOBIG)
-		ip6_update_pmtu(skb, net, info, 0, 0);
+		ip6_update_pmtu(skb, net, info, 0, 0, sock_net_uid(net, NULL));
 	else if (type == NDISC_REDIRECT)
-		ip6_redirect(skb, net, 0, 0);
+		ip6_redirect(skb, net, 0, 0, sock_net_uid(net, NULL));
 
 	if (!(type & ICMPV6_INFOMSG_MASK))
 		if (icmp6->icmp6_type == ICMPV6_ECHO_REQUEST)
-			ping_err(skb, offset, info);
+			ping_err(skb, offset, ntohl(info));
 }
 
 static int icmpv6_rcv(struct sk_buff *skb);
@@ -467,6 +471,7 @@ static void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info)
 	fl6.flowi6_oif = iif;
 	fl6.fl6_icmp_type = type;
 	fl6.fl6_icmp_code = code;
+	fl6.flowi6_uid = sock_net_uid(net, NULL);
 	security_skb_classify_flow(skb, flowi6_to_flowi(&fl6));
 
 	sk = icmpv6_xmit_lock(net);
@@ -532,6 +537,18 @@ out:
 	icmpv6_xmit_unlock(sk);
 }
 
+void icmpv6_register_notifier(struct notifier_block *nb, u8 icmp_type)
+{
+	atomic_notifier_chain_register(&notifier_head[icmp_type], nb);
+}
+EXPORT_SYMBOL(icmpv6_register_notifier);
+
+void icmpv6_unregister_notifier(struct notifier_block *nb, u8 icmp_type)
+{
+	atomic_notifier_chain_unregister(&notifier_head[icmp_type], nb);
+}
+EXPORT_SYMBOL(icmpv6_unregister_notifier);
+
 /* Slightly more convenient version of icmp6_send.
  */
 void icmpv6_param_prob(struct sk_buff *skb, u8 code, int pos)
@@ -572,6 +589,7 @@ static void icmpv6_echo_reply(struct sk_buff *skb)
 	fl6.flowi6_oif = skb->dev->ifindex;
 	fl6.fl6_icmp_type = ICMPV6_ECHO_REPLY;
 	fl6.flowi6_mark = mark;
+	fl6.flowi6_uid = sock_net_uid(net, NULL);
 	security_skb_classify_flow(skb, flowi6_to_flowi(&fl6));
 
 	sk = icmpv6_xmit_lock(net);
@@ -797,6 +815,9 @@ static int icmpv6_rcv(struct sk_buff *skb)
 		icmpv6_notify(skb, type, hdr->icmp6_code, hdr->icmp6_mtu);
 	}
 
+	atomic_notifier_call_chain(&notifier_head[type],
+			hdr->icmp6_code, (void *)skb);
+
 	kfree_skb(skb);
 	return 0;
 
@@ -892,6 +913,7 @@ static struct pernet_operations icmpv6_sk_ops = {
 int __init icmpv6_init(void)
 {
 	int err;
+	int i;
 
 	err = register_pernet_subsys(&icmpv6_sk_ops);
 	if (err < 0)
@@ -904,6 +926,10 @@ int __init icmpv6_init(void)
 	err = inet6_register_icmp_sender(icmp6_send);
 	if (err)
 		goto sender_reg_err;
+
+	for (i = 0; i < ARRAY_SIZE(notifier_head); i++)
+		ATOMIC_INIT_NOTIFIER_HEAD(&notifier_head[i]);
+
 	return 0;
 
 sender_reg_err:

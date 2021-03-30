@@ -30,7 +30,7 @@ static void __jump_label_transform(struct jump_entry *entry,
 {
 	union jump_code_union code;
 
-	if (type == JUMP_LABEL_ENABLE) {
+	if (type == JUMP_LABEL_JMP) {
 		code.jump = 0xe9;
 		code.offset = entry->target -
 				(entry->code + JUMP_LABEL_NOP_SIZE);

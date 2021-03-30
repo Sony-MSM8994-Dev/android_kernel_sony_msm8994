@@ -271,7 +271,8 @@ static void adreno_input_event(struct input_handle *handle, unsigned int type,
 		mod_timer(&device->idle_timer,
 			jiffies + device->pwrctrl.interval_timeout);
 	} else if (device->state == KGSL_STATE_SLUMBER) {
-		schedule_work(&adreno_dev->input_work);
+		queue_work(system_highpri_wq,
+				&adreno_dev->input_work);
 	}
 }
 
@@ -776,7 +777,7 @@ static int adreno_of_get_pdata(struct platform_device *pdev)
 
 	if (of_property_read_u32(pdev->dev.of_node, "qcom,idle-timeout",
 		&pdata->idle_timeout))
-		pdata->idle_timeout = HZ/12;
+		pdata->idle_timeout = 80;
 
 	pdata->strtstp_sleepwake = of_property_read_bool(pdev->dev.of_node,
 						"qcom,strtstp-sleepwake");
@@ -926,14 +927,14 @@ int adreno_probe(struct platform_device *pdev)
 
 	adreno_input_handler.private = device;
 
-#ifdef CONFIG_INPUT
+//#ifdef CONFIG_INPUT
 	/*
 	 * It isn't fatal if we cannot register the input handler.  Sad,
 	 * perhaps, but not fatal
 	 */
-	if (input_register_handler(&adreno_input_handler))
-		KGSL_DRV_ERR(device, "Unable to register the input handler\n");
-#endif
+	//if (input_register_handler(&adreno_input_handler))
+		//KGSL_DRV_ERR(device, "Unable to register the input handler\n");
+//#endif
 out:
 	if (status) {
 		adreno_ringbuffer_close(adreno_dev);
@@ -957,9 +958,9 @@ static int adreno_remove(struct platform_device *pdev)
 	if (test_bit(ADRENO_DEVICE_CMDBATCH_PROFILE, &adreno_dev->priv))
 		kgsl_free_global(&adreno_dev->cmdbatch_profile_buffer);
 
-#ifdef CONFIG_INPUT
-	input_unregister_handler(&adreno_input_handler);
-#endif
+//#ifdef CONFIG_INPUT
+	//input_unregister_handler(&adreno_input_handler);
+//#endif
 	adreno_uninit_sysfs(device);
 
 	adreno_coresight_remove(adreno_dev);
@@ -2208,6 +2209,23 @@ static int adreno_getproperty(struct kgsl_device *device,
 			status = 0;
 		}
 		break;
+	case KGSL_PROP_DEVICE_BITNESS:
+	{
+		unsigned int bitness = 32;
+
+		if (sizebytes != sizeof(unsigned int)) {
+			status = -EINVAL;
+			break;
+		}
+
+		if (copy_to_user(value, &bitness,
+				sizeof(unsigned int))) {
+			status = -EFAULT;
+			break;
+		}
+		status = 0;
+	}
+	break;
 	default:
 		status = -EINVAL;
 	}

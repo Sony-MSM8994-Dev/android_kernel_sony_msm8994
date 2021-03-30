@@ -23,7 +23,7 @@ comment "Crypto core or helper"
 
 config CRYPTO_FIPS
 	bool "FIPS 200 compliance"
-	depends on CRYPTO_ANSI_CPRNG && !CRYPTO_MANAGER_DISABLE_TESTS
+	depends on (CRYPTO_ANSI_CPRNG || CRYPTO_DRBG) && !CRYPTO_MANAGER_DISABLE_TESTS
 	help
 	  This options enables the fips boot option which is
 	  required if you want to system to operate in a FIPS 200
@@ -207,6 +207,18 @@ config CRYPTO_GCM
 	  Support for Galois/Counter Mode (GCM) and Galois Message
 	  Authentication Code (GMAC). Required for IPSec.
 
+config CRYPTO_CHACHA20POLY1305
+	tristate "ChaCha20-Poly1305 AEAD support"
+	select CRYPTO_CHACHA20
+	select CRYPTO_POLY1305
+	select CRYPTO_AEAD
+	help
+	  ChaCha20-Poly1305 AEAD support, RFC7539.
+
+	  Support for the AEAD wrapper using the ChaCha20 stream cipher combined
+	  with the Poly1305 authenticator. It is defined in RFC7539 for use in
+	  IETF protocols.
+
 config CRYPTO_SEQIV
 	tristate "Sequence Number IV Generator"
 	select CRYPTO_AEAD
@@ -380,11 +392,30 @@ config CRYPTO_CRC32_PCLMUL
 	  which will enable any routine to use the CRC-32-IEEE 802.3 checksum
 	  and gain better performance as compared with the table implementation.
 
+config CRYPTO_CRCT10DIF
+	tristate "CRCT10DIF algorithm"
+	select CRYPTO_HASH
+	help
+	  CRC T10 Data Integrity Field computation is being cast as
+	  a crypto transform.  This allows for faster crc t10 diff
+	  transforms to be used if they are available.
+
 config CRYPTO_GHASH
 	tristate "GHASH digest algorithm"
 	select CRYPTO_GF128MUL
+	select CRYPTO_HASH
 	help
 	  GHASH is message digest algorithm for GCM (Galois/Counter Mode).
+
+config CRYPTO_POLY1305
+	tristate "Poly1305 authenticator algorithm"
+	select CRYPTO_HASH
+	help
+	  Poly1305 authenticator algorithm, RFC7539.
+
+	  Poly1305 is an authenticator algorithm designed by Daniel J. Bernstein.
+	  It is used for the ChaCha20-Poly1305 AEAD, specified in RFC7539 for use
+	  in IETF protocols. This is the portable C implementation of Poly1305.
 
 config CRYPTO_MD4
 	tristate "MD4 digest algorithm"
@@ -575,6 +606,27 @@ config CRYPTO_SHA512_SPARC64
 	  SHA-512 secure hash standard (DFIPS 180-2) implemented
 	  using sparc64 crypto instructions, when available.
 
+config CRYPTO_SHA3
+	tristate "SHA3 digest algorithm"
+	select CRYPTO_HASH
+	help
+	  SHA-3 secure hash standard (DFIPS 202). It's based on
+	  cryptographic sponge function family called Keccak.
+
+	  References:
+	  http://keccak.noekeon.org/
+
+config CRYPTO_SM3
+	tristate "SM3 digest algorithm"
+	select CRYPTO_HASH
+	help
+	  SM3 secure hash function as defined by OSCCA GM/T 0004-2012 SM3).
+	  It is part of the Chinese Commercial Cryptography suite.
+
+	  References:
+	  http://www.oscca.gov.cn/UpFile/20101222141857786.pdf
+	  https://datatracker.ietf.org/doc/html/draft-shen-sm3-hash
+
 config CRYPTO_TGR192
 	tristate "Tiger digest algorithms"
 	select CRYPTO_HASH
@@ -629,6 +681,23 @@ config CRYPTO_AES
 	  The AES specifies three key sizes: 128, 192 and 256 bits
 
 	  See <http://csrc.nist.gov/CryptoToolkit/aes/> for more information.
+
+config CRYPTO_AES_TI
+	tristate "Fixed time AES cipher"
+	select CRYPTO_ALGAPI
+	help
+	  This is a generic implementation of AES that attempts to eliminate
+	  data dependent latencies as much as possible without affecting
+	  performance too much. It is intended for use by the generic CCM
+	  and GCM drivers, and other CTR or CMAC/XCBC based modes that rely
+	  solely on encryption (although decryption is supported as well, but
+	  with a more dramatic performance hit)
+
+	  Instead of using 16 lookup tables of 1 KB each, (8 for encryption and
+	  8 for decryption), this implementation only uses just two S-boxes of
+	  256 bytes each, and attempts to eliminate data dependent latencies by
+	  prefetching the entire table into the cache at the start of each
+	  block.
 
 config CRYPTO_AES_586
 	tristate "AES cipher algorithms (i586)"
@@ -1066,6 +1135,19 @@ config CRYPTO_SALSA20_X86_64
 	  The Salsa20 stream cipher algorithm is designed by Daniel J.
 	  Bernstein <djb@cr.yp.to>. See <http://cr.yp.to/snuffle.html>
 
+config CRYPTO_CHACHA20
+	tristate "ChaCha20 cipher algorithm"
+	select CRYPTO_BLKCIPHER
+	help
+	  ChaCha20 cipher algorithm, RFC7539.
+
+	  ChaCha20 is a 256-bit high-speed stream cipher designed by Daniel J.
+	  Bernstein and further specified in RFC7539 for use in IETF protocols.
+	  This is the portable C implementation of ChaCha20.
+
+	  See also:
+	  <http://cr.yp.to/chacha/chacha-20080128.pdf>
+
 config CRYPTO_SEED
 	tristate "SEED cipher algorithm"
 	select CRYPTO_ALGAPI
@@ -1109,7 +1191,7 @@ config CRYPTO_SERPENT_SSE2_X86_64
 	  Keys are allowed to be from 0 to 256 bits in length, in steps
 	  of 8 bits.
 
-	  This module provides Serpent cipher algorithm that processes eigth
+	  This module provides Serpent cipher algorithm that processes eight
 	  blocks parallel using SSE2 instruction set.
 
 	  See also:
@@ -1181,6 +1263,45 @@ config CRYPTO_SERPENT_AVX2_X86_64
 
 	  See also:
 	  <http://www.cl.cam.ac.uk/~rja14/serpent.html>
+
+config CRYPTO_SM4
+	tristate "SM4 cipher algorithm"
+	select CRYPTO_ALGAPI
+	help
+	  SM4 cipher algorithms (OSCCA GB/T 32907-2016).
+
+	  SM4 (GBT.32907-2016) is a cryptographic standard issued by the
+	  Organization of State Commercial Administration of China (OSCCA)
+	  as an authorized cryptographic algorithms for the use within China.
+
+	  SMS4 was originally created for use in protecting wireless
+	  networks, and is mandated in the Chinese National Standard for
+	  Wireless LAN WAPI (Wired Authentication and Privacy Infrastructure)
+	  (GB.15629.11-2003).
+
+	  The latest SM4 standard (GBT.32907-2016) was proposed by OSCCA and
+	  standardized through TC 260 of the Standardization Administration
+	  of the People's Republic of China (SAC).
+
+	  The input, output, and key of SMS4 are each 128 bits.
+
+	  See also: <https://eprint.iacr.org/2008/329.pdf>
+
+	  If unsure, say N.
+
+config CRYPTO_SPECK
+	tristate "Speck cipher algorithm"
+	select CRYPTO_ALGAPI
+	help
+	  Speck is a lightweight block cipher that is tuned for optimal
+	  performance in software (rather than hardware).
+
+	  Speck may not be as secure as AES, and should only be used on systems
+	  where AES is not fast enough.
+
+	  See also: <https://eprint.iacr.org/2013/404.pdf>
+
+	  If unsure, say N.
 
 config CRYPTO_TEA
 	tristate "TEA, XTEA and XETA cipher algorithms"
@@ -1358,12 +1479,36 @@ config CRYPTO_LZO
 
 config CRYPTO_842
 	tristate "842 compression algorithm"
+	select CRYPTO_ALGAPI
+	select 842_COMPRESS
+	select 842_DECOMPRESS
+	help
+	  This is the 842 algorithm.
+
+config CRYPTO_842
+	tristate "842 compression algorithm"
 	depends on CRYPTO_DEV_NX_COMPRESS
 	# 842 uses lzo if the hardware becomes unavailable
 	select LZO_COMPRESS
 	select LZO_DECOMPRESS
 	help
 	  This is the 842 algorithm.
+
+config CRYPTO_LZ4
+	tristate "LZ4 compression algorithm"
+	select CRYPTO_ALGAPI
+	select LZ4_COMPRESS
+	select LZ4_DECOMPRESS
+	help
+	  This is the LZ4 algorithm.
+
+config CRYPTO_LZ4HC
+	tristate "LZ4HC compression algorithm"
+	select CRYPTO_ALGAPI
+	select LZ4HC_COMPRESS
+	select LZ4_DECOMPRESS
+	help
+	  This is the LZ4 high compression mode algorithm.
 
 comment "Random Number Generation"
 
@@ -1377,6 +1522,53 @@ config CRYPTO_ANSI_CPRNG
 	  for cryptographic modules.  Uses the Algorithm specified in
 	  ANSI X9.31 A.2.4. Note that this option must be enabled if
 	  CRYPTO_FIPS is selected
+
+menuconfig CRYPTO_DRBG_MENU
+	tristate "NIST SP800-90A DRBG"
+	help
+	  NIST SP800-90A compliant DRBG. In the following submenu, one or
+	  more of the DRBG types must be selected.
+
+if CRYPTO_DRBG_MENU
+
+config CRYPTO_DRBG_HMAC
+	bool "Enable HMAC DRBG"
+	default y
+	select CRYPTO_HMAC
+	select CRYPTO_SHA256
+	help
+	  Enable the HMAC DRBG variant as defined in NIST SP800-90A.
+
+config CRYPTO_DRBG_HASH
+	bool "Enable Hash DRBG"
+	select CRYPTO_HASH
+	select CRYPTO_SHA256
+	help
+	  Enable the Hash DRBG variant as defined in NIST SP800-90A.
+
+config CRYPTO_DRBG_CTR
+	bool "Enable CTR DRBG"
+	select CRYPTO_AES
+	help
+	  Enable the CTR DRBG variant as defined in NIST SP800-90A.
+
+config CRYPTO_DRBG
+	tristate
+	default CRYPTO_DRBG_MENU if (CRYPTO_DRBG_HMAC || CRYPTO_DRBG_HASH || CRYPTO_DRBG_CTR)
+	select CRYPTO_RNG
+	select CRYPTO_JITTERENTROPY
+
+endif	# if CRYPTO_DRBG_MENU
+
+config CRYPTO_JITTERENTROPY
+	tristate "Jitterentropy Non-Deterministic Random Number Generator"
+	select CRYPTO_RNG
+	help
+	  The Jitterentropy RNG is a noise that is intended
+	  to provide seed to another RNG. The RNG does not
+	  perform any cryptographic whitening of the generated
+	  random numbers. This Jitterentropy RNG registers with
+	  the kernel crypto API and can be used by any caller.
 
 config CRYPTO_USER_API
 	tristate
@@ -1398,6 +1590,9 @@ config CRYPTO_USER_API_SKCIPHER
 	help
 	  This option enables the user-spaces interface for symmetric
 	  key cipher algorithms.
+
+config CRYPTO_HASH_INFO
+	bool
 
 source "drivers/crypto/Kconfig"
 source crypto/asymmetric_keys/Kconfig

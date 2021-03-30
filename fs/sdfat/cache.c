@@ -246,7 +246,6 @@ static inline int __mark_delayed_dirty(struct super_block *sb, cache_ent_t *bp)
 }
 
 
-
 s32 fcache_modify(struct super_block *sb, u64 sec)
 {
 	cache_ent_t *bp;
@@ -837,6 +836,5 @@ static void __dcache_remove_hash(cache_ent_t *bp)
 	WARN_ON(bp->flag & DIRTYBIT);
 	__remove_from_hash(bp);
 }
-
 
 /* end of cache.c */

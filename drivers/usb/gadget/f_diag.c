@@ -2,7 +2,7 @@
  * Diag Function Device - Route ARM9 and ARM11 DIAG messages
  * between HOST and DEVICE.
  * Copyright (C) 2007 Google, Inc.
- * Copyright (c) 2008-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2008-2016, The Linux Foundation. All rights reserved.
  * Author: Brian Swetland <swetland@google.com>
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -240,6 +240,7 @@ static void diag_write_complete(struct usb_ep *ep,
 			/* Queue zero length packet */
 			if (!usb_ep_queue(ctxt->in, req, GFP_ATOMIC))
 				return;
+			ctxt->dpkts_tolaptop_pending--;
 		} else {
 			ctxt->dpkts_tolaptop++;
 		}
@@ -423,6 +424,27 @@ fail:
 
 }
 EXPORT_SYMBOL(usb_diag_alloc_req);
+
+#define DWC3_MAX_REQUEST_SIZE (1024 * 1024)
+#define CI_MAX_REQUEST_SIZE   (16 * 1024)
+/**
+ * usb_diag_request_size - Max request size for controller
+ * @ch: Channel handler
+ *
+ * Infom max request size so that diag driver can split packets
+ * in chunks of max size which controller can handle.
+ */
+int usb_diag_request_size(struct usb_diag_ch *ch)
+{
+	struct diag_context *ctxt = ch->priv_usb;
+	struct usb_composite_dev *cdev = ctxt->cdev;
+
+	if (gadget_is_dwc3(cdev->gadget))
+		return DWC3_MAX_REQUEST_SIZE;
+	else
+		return CI_MAX_REQUEST_SIZE;
+}
+EXPORT_SYMBOL(usb_diag_request_size);
 
 /**
  * usb_diag_read() - Read data from USB diag channel

@@ -125,9 +125,9 @@ static void __timerfd_remove_cancel(struct timerfd_ctx *ctx)
 
 static void timerfd_remove_cancel(struct timerfd_ctx *ctx)
 {
-		spin_lock(&ctx->cancel_lock);
-		__timerfd_remove_cancel(ctx);
-		spin_unlock(&ctx->cancel_lock);
+	spin_lock(&ctx->cancel_lock);
+	__timerfd_remove_cancel(ctx);
+	spin_unlock(&ctx->cancel_lock);
 }
 
 static bool timerfd_canceled(struct timerfd_ctx *ctx)
@@ -151,10 +151,10 @@ static void timerfd_setup_cancel(struct timerfd_ctx *ctx, int flags)
 			list_add_rcu(&ctx->clist, &cancel_list);
 			spin_unlock(&cancel_lock);
 		}
-		} else {
-				__timerfd_remove_cancel(ctx);
-		}
-		spin_unlock(&ctx->cancel_lock);
+	} else {
+		__timerfd_remove_cancel(ctx);
+	}
+	spin_unlock(&ctx->cancel_lock);
 }
 
 static ktime_t timerfd_get_remaining(struct timerfd_ctx *ctx)
@@ -252,8 +252,13 @@ static ssize_t timerfd_read(struct file *file, char __user *buf, size_t count,
 	spin_lock_irq(&ctx->wqh.lock);
 	if (file->f_flags & O_NONBLOCK)
 		res = -EAGAIN;
-	else
+	else {
+		pr_debug("timerfd blocking read by tid %d\n",
+			pid_nr(get_task_pid(current, PIDTYPE_PID)));
 		res = wait_event_interruptible_locked_irq(ctx->wqh, ctx->ticks);
+		pr_debug("timerfd blocking read released by tid %d\n",
+			pid_nr(get_task_pid(current, PIDTYPE_PID)));
+	}
 
 	/*
 	 * If clock has changed, we do not care about the

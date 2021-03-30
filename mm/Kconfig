@@ -302,6 +302,14 @@ config VIRT_TO_BUS
 config MMU_NOTIFIER
 	bool
 
+config OOM_SCORE_NOTIFIER
+	bool "OOM score notifier"
+	default n
+	help
+	  This creates a notifier for process oom_score_adj status.
+	  It create events for new, updated or freed tasks and
+	  are used to build a mirrored task list in lowmemorykiller.
+
 config KSM
 	bool "Enable KSM for page merging"
 	depends on MMU
@@ -532,7 +540,7 @@ config ZSWAP
 	bool "Compressed cache for swap pages (EXPERIMENTAL)"
 	depends on FRONTSWAP && CRYPTO=y
 	select CRYPTO_LZO
-	select ZBUD
+	select ZPOOL
 	default n
 	help
 	  A lightweight compressed cache for swap pages.  It takes
@@ -572,6 +580,26 @@ config KSWAPD_CPU_AFFINITY_MASK
 	  the resultant bitmask.
 	  For example to limit kswapd to the first 4 cores use the following:
 	  CONFIG_KSWAPD_CPU_AFFINITY_MASK="f"
+
+config FORCE_SKB_ALLOC_FROM_DMA_ZONE
+	bool "Force SKB allocations to always return ZONE_DMA memory"
+	depends on ZONE_DMA
+	help
+	  Ensure SKB allocations to always return memory from ZONE_DMA.
+	  This option helps ensure that clients who require ZONE_DMA memory are
+	  always using ZONE_DMA memory.
+
+	  If unsure, say "n".
+
+config FORCE_KMALLOC_FROM_DMA_ZONE
+	bool "Force kmalloc to always return ZONE_DMA memory"
+	depends on ZONE_DMA
+	help
+	  Ensure kmalloc to always return memory from ZONE_DMA.
+	  This option helps ensure that clients who require ZONE_DMA memory are
+	  always using ZONE_DMA memory.
+
+	  If unsure, say "n".
 
 config ZPOOL
 	tristate "Common API for compressed memory storage"
@@ -623,3 +651,20 @@ config VM_MAX_READAHEAD
 	  This sets the VM_MAX_READAHEAD value to allow the readahead window
 	  to grow to a maximum size of configured. This will benefit sequential
 	  read throughput and thus early boot performance.
+
+config ZCACHE
+       bool "Compressed cache for file pages (EXPERIMENTAL)"
+       depends on CRYPTO && CLEANCACHE
+       select CRYPTO_LZO
+       select ZBUD
+       default n
+       help
+         A compressed cache for file pages.
+         It takes active file pages that are in the process of being reclaimed
+         and attempts to compress them into a dynamically allocated RAM-based
+         memory pool.
+
+         If this process is successful, when those file pages needed again, the
+         I/O reading operation was avoided. This results in a significant performance
+         gains under memory pressure for systems full with file pages.
+

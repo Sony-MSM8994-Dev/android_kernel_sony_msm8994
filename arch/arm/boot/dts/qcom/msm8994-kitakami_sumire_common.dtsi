@@ -782,87 +782,30 @@
 	status = "disabled";
 };
 
-
 &spmi_bus {
 	qcom,pmi8994@3 {
 		qcom,leds@d000 {
 			status = "okay";
-			qcom,rgb_sync = <0>;
+			qcom,rgb_sync = <1>;
 
 			qcom,rgb_0 {
-				label = "rgb";
-				qcom,id = <3>;
-				qcom,mode = "pwm";
-				pwms = <&pmi8994_pwm_3 0 0>;
-				qcom,pwm-us = <1000>;
-				qcom,max-current = <12>;
-				qcom,default-state = "off";
-				qcom,duty-pcts = [00 0c 19 25 32 48 55 64];
-				qcom,duty-ms = <50>;
-				qcom,start-idx = <0>;
-				qcom,idx-len = <8>;
-				qcom,lut-flags = <0x1f>;
-				qcom,ramp-step-ms = <100>;
-				qcom,pause-lo = <2000>;
-				qcom,pause-hi = <1000>;
-
-				linux,name = "red";
-				qcom,use-blink;
 				somc,pwm-channel = <2>;
 				qcom,pwm-max-value = <154>;
+				linux,name = "led:rgb_red";
 				linux,default-trigger = "none";
 			};
-
 			qcom,rgb_1 {
-				label = "rgb";
-				qcom,id = <4>;
-				qcom,mode = "pwm";
-				pwms = <&pmi8994_pwm_2 0 0>;
-				qcom,pwm-us = <1000>;
-				qcom,max-current = <12>;
-				qcom,default-state = "off";
-				qcom,duty-pcts = [00 0c 19 25 32 48 55 64];
-				qcom,duty-ms = <50>;
-				qcom,start-idx = <8>;
-				qcom,idx-len = <8>;
-
-				qcom,lut-flags = <0x1f>;
-				qcom,ramp-step-ms = <100>;
-				qcom,pause-lo = <2000>;
-				qcom,pause-hi = <1000>;
-
-				linux,name = "green";
-				qcom,use-blink;
 				somc,pwm-channel = <1>;
 				qcom,pwm-max-value = <511>;
+				linux,name = "led:rgb_green";
 				linux,default-trigger = "none";
 			};
-
 			qcom,rgb_2 {
-				label = "rgb";
-				qcom,id = <5>;
-				qcom,mode = "pwm";
-				pwms = <&pmi8994_pwm_1 0 0>;
-				qcom,pwm-us = <1000>;
-				qcom,max-current = <12>;
-				qcom,default-state = "off";
-				qcom,duty-pcts = [00 0c 19 25 32 48 55 64];
-				qcom,duty-ms = <50>;
-				qcom,start-idx = <16>;
-				qcom,idx-len = <8>;
-
-				qcom,lut-flags = <0x1f>;
-				qcom,ramp-step-ms = <100>;
-				qcom,pause-lo = <2000>;
-				qcom,pause-hi = <1000>;
-
-				linux,name = "blue";
-				qcom,use-blink;
 				somc,pwm-channel = <0>;
 				qcom,pwm-max-value = <460>;
+				linux,name = "led:rgb_blue";
 				linux,default-trigger = "none";
 			};
-
 		};
 		qcom,leds@d800 {
 			qcom,ilim-ma = <660>;
@@ -874,6 +817,7 @@
 		};
 	};
 };
+
 &tlmm_pinmux {
 	/* GPIO_9: USB_SHELL_SEL */
 	msm_gpio_9 {
@@ -995,8 +939,8 @@
 };
 
 &sdhc_2 {
-	qcom,nonremovable;
-	/delete-property/ cd-gpios;
+	interrupt-map-mask = <0x3>;
+	cd-gpios = <&msm_gpio 100 0x0>;
 	qcom,clk-rates = <400000 20000000 25000000 40000000 50000000 80000000
 				100000000 200000000>;
 	qcom,msm-bus,num-cases = <10>;

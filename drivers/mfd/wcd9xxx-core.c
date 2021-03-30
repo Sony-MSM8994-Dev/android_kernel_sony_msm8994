@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -296,6 +296,13 @@ static int wcd9xxx_slim_read_device(struct wcd9xxx *wcd9xxx, unsigned short reg,
 	msg.num_bytes = bytes;
 	msg.comp = NULL;
 
+	if (!wcd9xxx->dev_up) {
+		dev_dbg_ratelimited(
+			wcd9xxx->dev, "%s: No read allowed. dev_up = %d\n",
+			__func__, wcd9xxx->dev_up);
+		return 0;
+	}
+
 	while (1) {
 		mutex_lock(&wcd9xxx->xfer_lock);
 		ret = slim_request_val_element(interface ?
@@ -359,6 +366,13 @@ int wcd9xxx_slim_write_repeat(struct wcd9xxx *wcd9xxx, unsigned short reg,
 		return -EINVAL;
 	}
 
+	if (!wcd9xxx->dev_up) {
+		dev_dbg_ratelimited(
+			wcd9xxx->dev, "%s: No write allowed. dev_up = %d\n",
+			__func__, wcd9xxx->dev_up);
+		return 0;
+	}
+
 	while (bytes_to_write > 0) {
 		bytes_allowed = wcd9xxx_slim_get_allowed_slice(wcd9xxx,
 				       bytes_to_write);
@@ -418,6 +432,13 @@ static int wcd9xxx_slim_write_device(struct wcd9xxx *wcd9xxx,
 	msg.start_offset = WCD9XXX_REGISTER_START_OFFSET + reg;
 	msg.num_bytes = bytes;
 	msg.comp = NULL;
+
+	if (!wcd9xxx->dev_up) {
+		dev_dbg_ratelimited(
+			wcd9xxx->dev, "%s: No write allowed. dev_up = %d\n",
+			__func__, wcd9xxx->dev_up);
+		return 0;
+	}
 
 	while (1) {
 		mutex_lock(&wcd9xxx->xfer_lock);
@@ -580,7 +601,7 @@ static int wcd9xxx_reset(struct wcd9xxx *wcd9xxx)
 	int ret;
 	struct wcd9xxx_pdata *pdata = wcd9xxx->dev->platform_data;
 
-	if (wcd9xxx->reset_gpio && wcd9xxx->slim_device_bootup
+	if (wcd9xxx->reset_gpio && wcd9xxx->dev_up
 			&& !pdata->use_pinctrl) {
 		ret = gpio_request(wcd9xxx->reset_gpio, "CDC_RESET");
 		if (ret) {
@@ -1458,7 +1479,7 @@ static int wcd9xxx_i2c_probe(struct i2c_client *client,
 		dev_set_drvdata(&client->dev, wcd9xxx);
 		wcd9xxx->dev = &client->dev;
 		wcd9xxx->reset_gpio = pdata->reset_gpio;
-		wcd9xxx->slim_device_bootup = true;
+		wcd9xxx->dev_up = true;
 		if (client->dev.of_node)
 			wcd9xxx->mclk_rate = pdata->mclk_rate;
 
@@ -2100,6 +2121,11 @@ static int wcd9xxx_slim_probe(struct slim_device *slim)
 
 	intf_type = wcd9xxx_get_intf_type();
 
+	if (!slim) {
+		ret = -EINVAL;
+		goto err;
+	}
+
 	if (intf_type == WCD9XXX_INTERFACE_TYPE_I2C) {
 		dev_dbg(&slim->dev, "%s:Codec is detected in I2C mode\n",
 			__func__);
@@ -2153,7 +2179,7 @@ static int wcd9xxx_slim_probe(struct slim_device *slim)
 	wcd9xxx->reset_gpio = pdata->reset_gpio;
 	wcd9xxx->dev = &slim->dev;
 	wcd9xxx->mclk_rate = pdata->mclk_rate;
-	wcd9xxx->slim_device_bootup = true;
+	wcd9xxx->dev_up = true;
 
 	ret = extcodec_get_pinctrl(&slim->dev);
 	if (ret < 0)
@@ -2226,19 +2252,19 @@ static int wcd9xxx_slim_probe(struct slim_device *slim)
 		("wcd9xxx_core", 0);
 	if (!IS_ERR(debugfs_wcd9xxx_dent)) {
 		debugfs_peek = debugfs_create_file("slimslave_peek",
-		S_IFREG | S_IRUGO, debugfs_wcd9xxx_dent,
+		S_IFREG | S_IRUSR, debugfs_wcd9xxx_dent,
 		(void *) "slimslave_peek", &codec_debug_ops);
 
 		debugfs_poke = debugfs_create_file("slimslave_poke",
-		S_IFREG | S_IRUGO, debugfs_wcd9xxx_dent,
+		S_IFREG | S_IRUSR, debugfs_wcd9xxx_dent,
 		(void *) "slimslave_poke", &codec_debug_ops);
 
 		debugfs_power_state = debugfs_create_file("power_state",
-		S_IFREG | S_IRUGO, debugfs_wcd9xxx_dent,
+		S_IFREG | S_IRUSR, debugfs_wcd9xxx_dent,
 		(void *) "power_state", &codec_debug_ops);
 
 		debugfs_reg_dump = debugfs_create_file("slimslave_reg_dump",
-		S_IFREG | S_IRUGO, debugfs_wcd9xxx_dent,
+		S_IFREG | S_IRUSR, debugfs_wcd9xxx_dent,
 		(void *) "slimslave_reg_dump", &codec_debug_ops);
 	}
 #endif
@@ -2279,11 +2305,6 @@ static int wcd9xxx_device_up(struct wcd9xxx *wcd9xxx)
 	int ret = 0;
 	struct wcd9xxx_core_resource *wcd9xxx_res = &wcd9xxx->core_res;
 
-	if (wcd9xxx->slim_device_bootup) {
-		wcd9xxx->slim_device_bootup = false;
-		return 0;
-	}
-
 	dev_info(wcd9xxx->dev, "%s: codec bring up\n", __func__);
 	wcd9xxx_bring_up(wcd9xxx);
 	ret = wcd9xxx_irq_init(wcd9xxx_res);
@@ -2305,9 +2326,11 @@ static int wcd9xxx_slim_device_reset(struct slim_device *sldev)
 		return -EINVAL;
 	}
 
-	dev_info(wcd9xxx->dev, "%s: device reset\n", __func__);
-	if (wcd9xxx->slim_device_bootup)
+	dev_info(wcd9xxx->dev, "%s: device reset, dev_up = %d\n",
+		__func__, wcd9xxx->dev_up);
+	if (wcd9xxx->dev_up)
 		return 0;
+
 	ret = wcd9xxx_reset(wcd9xxx);
 	if (ret)
 		dev_err(wcd9xxx->dev, "%s: Resetting Codec failed\n", __func__);
@@ -2322,7 +2345,12 @@ static int wcd9xxx_slim_device_up(struct slim_device *sldev)
 		pr_err("%s: wcd9xxx is NULL\n", __func__);
 		return -EINVAL;
 	}
-	dev_info(wcd9xxx->dev, "%s: slim device up\n", __func__);
+	dev_info(wcd9xxx->dev, "%s: slim device up, dev_up = %d\n",
+		__func__, wcd9xxx->dev_up);
+	if (wcd9xxx->dev_up)
+		return 0;
+
+	wcd9xxx->dev_up = true;
 	return wcd9xxx_device_up(wcd9xxx);
 }
 
@@ -2334,16 +2362,84 @@ static int wcd9xxx_slim_device_down(struct slim_device *sldev)
 		pr_err("%s: wcd9xxx is NULL\n", __func__);
 		return -EINVAL;
 	}
+
+	dev_info(wcd9xxx->dev, "%s: device down, dev_up = %d\n",
+		__func__, wcd9xxx->dev_up);
+	if (!wcd9xxx->dev_up)
+		return 0;
+
+	wcd9xxx->dev_up = false;
 	wcd9xxx_irq_exit(&wcd9xxx->core_res);
 	if (wcd9xxx->dev_down)
 		wcd9xxx->dev_down(wcd9xxx);
-	dev_dbg(wcd9xxx->dev, "%s: device down\n", __func__);
 	return 0;
+}
+
+/*
+ * wcd9xxx_disable_static_supplies_to_optimum: to set supplies to optimum mode
+ */
+static int wcd9xxx_disable_static_supplies_to_optimum(
+			struct wcd9xxx *wcd9xxx,
+			struct wcd9xxx_pdata *pdata)
+{
+	int i;
+	int ret = 0;
+
+	for (i = 0; i < wcd9xxx->num_of_supplies; i++) {
+		if (pdata->regulator[i].ondemand)
+			continue;
+		if (regulator_count_voltages(wcd9xxx->supplies[i].consumer) <= 0)
+			continue;
+		regulator_set_voltage(wcd9xxx->supplies[i].consumer, 0,
+			pdata->regulator[i].max_uV);
+		regulator_set_optimum_mode(wcd9xxx->supplies[i].consumer, 0);
+		dev_dbg(wcd9xxx->dev, "Regulator %s set optimum mode\n",
+				 wcd9xxx->supplies[i].supply);
+	}
+	return ret;
+}
+
+/*
+ * wcd9xxx_enable_static_supplies_to_optimum(): to set supplies to optimum mode
+ *
+ * To set all the static supplied to optimum mode so as to save power
+ */
+static int wcd9xxx_enable_static_supplies_to_optimum(
+			struct wcd9xxx *wcd9xxx,
+			struct wcd9xxx_pdata *pdata)
+{
+	int i;
+	int ret = 0;
+
+	for (i = 0; i < wcd9xxx->num_of_supplies; i++) {
+		if (pdata->regulator[i].ondemand)
+			continue;
+		if (regulator_count_voltages(wcd9xxx->supplies[i].consumer) <= 0)
+			continue;
+
+		ret = regulator_set_voltage(wcd9xxx->supplies[i].consumer,
+			pdata->regulator[i].min_uV,
+			pdata->regulator[i].max_uV);
+		if (ret) {
+			dev_err(wcd9xxx->dev,
+				"Setting volt failed for regulator %s err %d\n",
+				wcd9xxx->supplies[i].supply, ret);
+		}
+
+		ret = regulator_set_optimum_mode(wcd9xxx->supplies[i].consumer,
+			pdata->regulator[i].optimum_uA);
+		dev_dbg(wcd9xxx->dev, "Regulator %s set optimum mode\n",
+			wcd9xxx->supplies[i].supply);
+	}
+	return ret;
 }
 
 static int wcd9xxx_slim_resume(struct slim_device *sldev)
 {
 	struct wcd9xxx *wcd9xxx = slim_get_devicedata(sldev);
+	struct wcd9xxx_pdata *pdata = sldev->dev.platform_data;
+
+	wcd9xxx_enable_static_supplies_to_optimum(wcd9xxx, pdata);
 	return wcd9xxx_core_res_resume(&wcd9xxx->core_res);
 }
 
@@ -2359,6 +2455,9 @@ static int wcd9xxx_i2c_resume(struct i2c_client *i2cdev)
 static int wcd9xxx_slim_suspend(struct slim_device *sldev, pm_message_t pmesg)
 {
 	struct wcd9xxx *wcd9xxx = slim_get_devicedata(sldev);
+	struct wcd9xxx_pdata *pdata = sldev->dev.platform_data;
+
+	wcd9xxx_disable_static_supplies_to_optimum(wcd9xxx, pdata);
 	return wcd9xxx_core_res_suspend(&wcd9xxx->core_res, pmesg);
 }
 

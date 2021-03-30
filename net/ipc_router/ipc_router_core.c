@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -217,7 +217,7 @@ static void init_routing_table(void)
  */
 static void skb_copy_to_log_buf(struct sk_buff_head *skb_head,
 				unsigned int pl_len, unsigned int hdr_offset,
-				uint64_t *log_buf)
+				unsigned char *log_buf)
 {
 	struct sk_buff *temp_skb;
 	unsigned int copied_len = 0, copy_len = 0;
@@ -297,7 +297,8 @@ static void ipc_router_log_msg(void *log_ctx, uint32_t xchng_type,
 			else if (hdr->version == IPC_ROUTER_V2)
 				hdr_offset = sizeof(struct rr_header_v2);
 		}
-		skb_copy_to_log_buf(skb_head, buf_len, hdr_offset, &pl_buf);
+		skb_copy_to_log_buf(skb_head, buf_len, hdr_offset,
+				    (unsigned char *)&pl_buf);
 
 		if (port_ptr && rport_ptr && (port_ptr->type == CLIENT_PORT)
 				&& (rport_ptr->server != NULL)) {
@@ -500,7 +501,17 @@ struct rr_packet *clone_pkt(struct rr_packet *pkt)
 		return NULL;
 	}
 	memcpy(&(cloned_pkt->hdr), &(pkt->hdr), sizeof(struct rr_header_v1));
-	/* TODO: Copy optional headers, if available */
+	if (pkt->opt_hdr.len > 0) {
+		cloned_pkt->opt_hdr.data = kmalloc(pkt->opt_hdr.len,
+							GFP_KERNEL);
+		if (!cloned_pkt->opt_hdr.data) {
+			IPC_RTR_ERR("%s: Memory allocation Failed\n", __func__);
+		} else {
+			cloned_pkt->opt_hdr.len = pkt->opt_hdr.len;
+			memcpy(cloned_pkt->opt_hdr.data, pkt->opt_hdr.data,
+			       pkt->opt_hdr.len);
+		}
+	}
 
 	pkt_fragment_q = kmalloc(sizeof(struct sk_buff_head), GFP_KERNEL);
 	if (!pkt_fragment_q) {
@@ -526,7 +537,8 @@ fail_clone:
 		kfree_skb(temp_skb);
 	}
 	kfree(pkt_fragment_q);
-	/* TODO: Free optional headers, if present */
+	if (cloned_pkt->opt_hdr.len > 0)
+		kfree(cloned_pkt->opt_hdr.data);
 	kfree(cloned_pkt);
 	return NULL;
 }
@@ -583,7 +595,8 @@ void release_pkt(struct rr_packet *pkt)
 		kfree_skb(temp_skb);
 	}
 	kfree(pkt->pkt_fragment_q);
-	/* TODO: Free Optional headers, if present */
+	if (pkt->opt_hdr.len > 0)
+		kfree(pkt->opt_hdr.data);
 	kfree(pkt);
 	return;
 }
@@ -693,6 +706,42 @@ void msm_ipc_router_free_skb(struct sk_buff_head *skb_head)
 }
 
 /**
+ * extract_optional_header() - Extract the optional header from skb
+ * @pkt:	Packet structure into which the header has to be extracted.
+ * @opt_len:	The optional header length in word size.
+ *
+ * @return:	Length of optional header in bytes if success, zero otherwise.
+ */
+static int extract_optional_header(struct rr_packet *pkt, uint8_t opt_len)
+{
+	size_t offset = 0, buf_len = 0, copy_len, opt_hdr_len;
+	struct sk_buff *temp;
+	struct sk_buff_head *skb_head;
+
+	opt_hdr_len = opt_len * IPCR_WORD_SIZE;
+	pkt->opt_hdr.data = kmalloc(opt_hdr_len, GFP_KERNEL);
+	if (!pkt->opt_hdr.data) {
+		IPC_RTR_ERR("%s: Memory allocation Failed\n", __func__);
+		return 0;
+	}
+	skb_head = pkt->pkt_fragment_q;
+	buf_len = opt_hdr_len;
+	skb_queue_walk(skb_head, temp) {
+		copy_len = buf_len < temp->len ? buf_len : temp->len;
+		memcpy(pkt->opt_hdr.data + offset, temp->data, copy_len);
+		offset += copy_len;
+		buf_len -= copy_len;
+		skb_pull(temp, copy_len);
+		if (temp->len == 0) {
+			skb_dequeue(skb_head);
+			kfree_skb(temp);
+		}
+	}
+	pkt->opt_hdr.len = opt_hdr_len;
+	return opt_hdr_len;
+}
+
+/**
  * extract_header_v1() - Extract IPC Router header of version 1
  * @pkt: Packet structure into which the header has to be extraced.
  * @skb: SKB from which the header has to be extracted.
@@ -722,6 +771,9 @@ static int extract_header_v1(struct rr_packet *pkt, struct sk_buff *skb)
 static int extract_header_v2(struct rr_packet *pkt, struct sk_buff *skb)
 {
 	struct rr_header_v2 *hdr;
+	uint8_t opt_len;
+	size_t opt_hdr_len;
+	size_t total_hdr_size = sizeof(*hdr);
 
 	if (!pkt || !skb) {
 		IPC_RTR_ERR("%s: Invalid pkt or skb\n", __func__);
@@ -737,8 +789,13 @@ static int extract_header_v2(struct rr_packet *pkt, struct sk_buff *skb)
 	pkt->hdr.control_flag = (uint32_t)hdr->control_flag;
 	pkt->hdr.dst_node_id = (uint32_t)hdr->dst_node_id;
 	pkt->hdr.dst_port_id = (uint32_t)hdr->dst_port_id;
-	skb_pull(skb, sizeof(struct rr_header_v2));
-	pkt->length -= sizeof(struct rr_header_v2);
+	opt_len = hdr->opt_len;
+	skb_pull(skb, total_hdr_size);
+	if (opt_len > 0) {
+		opt_hdr_len = extract_optional_header(pkt, opt_len);
+		total_hdr_size += opt_hdr_len;
+	}
+	pkt->length -= total_hdr_size;
 	return 0;
 }
 
@@ -771,7 +828,6 @@ static int extract_header(struct rr_packet *pkt)
 		ret = extract_header_v1(pkt, temp_skb);
 	} else if (temp_skb->data[0] == IPC_ROUTER_V2) {
 		ret = extract_header_v2(pkt, temp_skb);
-		/* TODO: Extract optional headers if present */
 	} else {
 		IPC_RTR_ERR("%s: Invalid Header version %02x\n",
 			__func__, temp_skb->data[0]);
@@ -814,8 +870,7 @@ static int calc_tx_header_size(struct rr_packet *pkt,
 		hdr_size = sizeof(struct rr_header_v1);
 	} else if (xprt_version == IPC_ROUTER_V2) {
 		pkt->hdr.version = IPC_ROUTER_V2;
-		hdr_size = sizeof(struct rr_header_v2);
-		/* TODO: Calculate optional header length, if present */
+		hdr_size = sizeof(struct rr_header_v2) + pkt->opt_hdr.len;
 	} else {
 		IPC_RTR_ERR("%s: Invalid xprt_version %d\n",
 			__func__, xprt_version);
@@ -923,13 +978,18 @@ static int prepend_header_v2(struct rr_packet *pkt, int hdr_size)
 	hdr = (struct rr_header_v2 *)skb_push(temp_skb, hdr_size);
 	hdr->version = (uint8_t)pkt->hdr.version;
 	hdr->type = (uint8_t)pkt->hdr.type;
-	hdr->control_flag = (uint16_t)pkt->hdr.control_flag;
+	hdr->control_flag = (uint8_t)pkt->hdr.control_flag;
 	hdr->size = (uint32_t)pkt->hdr.size;
 	hdr->src_node_id = (uint16_t)pkt->hdr.src_node_id;
 	hdr->src_port_id = (uint16_t)pkt->hdr.src_port_id;
 	hdr->dst_node_id = (uint16_t)pkt->hdr.dst_node_id;
 	hdr->dst_port_id = (uint16_t)pkt->hdr.dst_port_id;
-	/* TODO: Add optional headers, if present */
+	if (pkt->opt_hdr.len > 0) {
+		hdr->opt_len = pkt->opt_hdr.len/IPCR_WORD_SIZE;
+		memcpy(hdr + sizeof(*hdr), pkt->opt_hdr.data, pkt->opt_hdr.len);
+	} else {
+		hdr->opt_len = 0;
+	}
 	if (temp_skb != skb_peek(pkt->pkt_fragment_q))
 		skb_queue_head(pkt->pkt_fragment_q, temp_skb);
 	pkt->length += hdr_size;
@@ -1034,6 +1094,7 @@ static int post_pkt_to_port(struct msm_ipc_port *port_ptr,
 		       size_t oob_data_len, void *priv);
 	void (*data_ready)(struct sock *sk, int bytes) = NULL;
 	struct sock *sk;
+	uint32_t pkt_type;
 
 	if (unlikely(!port_ptr || !pkt))
 		return -EINVAL;
@@ -1054,6 +1115,7 @@ static int post_pkt_to_port(struct msm_ipc_port *port_ptr,
 	list_add_tail(&temp_pkt->list, &port_ptr->port_rx_q);
 	wake_up(&port_ptr->port_rx_wait_q);
 	notify = port_ptr->notify;
+	pkt_type = temp_pkt->hdr.type;
 	sk = (struct sock *)port_ptr->endpoint;
 	if (sk) {
 		read_lock(&sk->sk_callback_lock);
@@ -1062,7 +1124,7 @@ static int post_pkt_to_port(struct msm_ipc_port *port_ptr,
 	}
 	mutex_unlock(&port_ptr->port_rx_q_lock_lhc3);
 	if (notify)
-		notify(pkt->hdr.type, NULL, 0, port_ptr->priv);
+		notify(pkt_type, NULL, 0, port_ptr->priv);
 	else if (sk && data_ready)
 		data_ready(sk, pkt->hdr.size);
 
@@ -1088,13 +1150,13 @@ int ipc_router_peek_pkt_size(char *data)
 		return -EINVAL;
 	}
 
-	/* FUTURE: Calculate optional header len in V2 header*/
 	if (data[0] == IPC_ROUTER_V1)
 		size = ((struct rr_header_v1 *)data)->size +
 			sizeof(struct rr_header_v1);
 	else if (data[0] == IPC_ROUTER_V2)
 		size = ((struct rr_header_v2 *)data)->size +
-			sizeof(struct rr_header_v2);
+			((struct rr_header_v2 *)data)->opt_len * IPCR_WORD_SIZE
+			+ sizeof(struct rr_header_v2);
 	else
 		return -EINVAL;
 
@@ -1449,6 +1511,8 @@ static void post_resume_tx(struct msm_ipc_router_remote_port *rport_ptr,
 {
 	struct msm_ipc_resume_tx_port *rtx_port, *tmp_rtx_port;
 	struct msm_ipc_port *local_port;
+	struct sock *sk;
+	void (*write_space)(struct sock *sk) = NULL;
 
 	list_for_each_entry_safe(rtx_port, tmp_rtx_port,
 				&rport_ptr->resume_tx_port_list, list) {
@@ -1459,7 +1523,16 @@ static void post_resume_tx(struct msm_ipc_router_remote_port *rport_ptr,
 					   sizeof(*msg), local_port->priv);
 		} else if (local_port) {
 			wake_up(&local_port->port_tx_wait_q);
-			post_pkt_to_port(local_port, pkt, 1);
+			sk = ipc_port_sk(local_port->endpoint);
+			if (sk) {
+				read_lock(&sk->sk_callback_lock);
+				write_space = sk->sk_write_space;
+				read_unlock(&sk->sk_callback_lock);
+				if (write_space)
+					write_space(sk);
+			}
+			if (!write_space)
+				post_pkt_to_port(local_port, pkt, 1);
 		} else {
 			IPC_RTR_ERR("%s: Local Port %d not Found",
 				__func__, rtx_port->port_id);
@@ -2684,6 +2757,9 @@ int msm_ipc_router_register_server(struct msm_ipc_port *port_ptr,
 		return -ENOMEM;
 	}
 
+	rport_ptr->sec_rule = msm_ipc_get_security_rule(
+				server->name.service, server->name.instance);
+
 	memset(&ctl, 0, sizeof(ctl));
 	ctl.cmd = IPC_ROUTER_CTRL_CMD_NEW_SERVER;
 	ctl.srv.service = server->name.service;
@@ -2770,6 +2846,10 @@ static int loopback_data(struct msm_ipc_port *src,
 	}
 
 	temp_skb = skb_peek_tail(pkt->pkt_fragment_q);
+	if (!temp_skb) {
+		IPC_RTR_ERR("%s: Empty skb\n", __func__);
+		return -EINVAL;
+	}
 	align_size = ALIGN_SIZE(pkt->length);
 	skb_put(temp_skb, align_size);
 	pkt->length += align_size;
@@ -2924,6 +3004,11 @@ static int msm_ipc_router_write_pkt(struct msm_ipc_port *src,
 	}
 
 	temp_skb = skb_peek_tail(pkt->pkt_fragment_q);
+	if (!temp_skb) {
+		IPC_RTR_ERR("%s: Abort invalid pkt\n", __func__);
+		ret = -EINVAL;
+		goto out_write_pkt;
+	}
 	align_size = ALIGN_SIZE(pkt->length);
 	skb_put(temp_skb, align_size);
 	pkt->length += align_size;
@@ -3242,7 +3327,8 @@ int msm_ipc_router_recv_from(struct msm_ipc_port *port_ptr,
 	align_size = ALIGN_SIZE(data_len);
 	if (align_size) {
 		temp_skb = skb_peek_tail((*pkt)->pkt_fragment_q);
-		skb_trim(temp_skb, (temp_skb->len - align_size));
+		if (temp_skb)
+			skb_trim(temp_skb, (temp_skb->len - align_size));
 	}
 	return data_len;
 }
@@ -3778,6 +3864,7 @@ static int msm_ipc_router_add_xprt(struct msm_ipc_router_xprt *xprt)
 static void msm_ipc_router_remove_xprt(struct msm_ipc_router_xprt *xprt)
 {
 	struct msm_ipc_router_xprt_info *xprt_info;
+	struct rr_packet *temp_pkt, *pkt;
 
 	if (xprt && xprt->priv) {
 		xprt_info = xprt->priv;
@@ -3787,6 +3874,15 @@ static void msm_ipc_router_remove_xprt(struct msm_ipc_router_xprt *xprt)
 		mutex_lock(&xprt_info->rx_lock_lhb2);
 		xprt_info->abort_data_read = 1;
 		mutex_unlock(&xprt_info->rx_lock_lhb2);
+		flush_workqueue(xprt_info->workqueue);
+		destroy_workqueue(xprt_info->workqueue);
+		mutex_lock(&xprt_info->rx_lock_lhb2);
+		list_for_each_entry_safe(pkt, temp_pkt,
+					 &xprt_info->pkt_list, list) {
+			list_del(&pkt->list);
+			release_pkt(pkt);
+		}
+		mutex_unlock(&xprt_info->rx_lock_lhb2);
 
 		down_write(&xprt_info_list_lock_lha5);
 		list_del(&xprt_info->list);
@@ -3794,8 +3890,6 @@ static void msm_ipc_router_remove_xprt(struct msm_ipc_router_xprt *xprt)
 
 		msm_ipc_cleanup_routing_table(xprt_info);
 
-		flush_workqueue(xprt_info->workqueue);
-		destroy_workqueue(xprt_info->workqueue);
 		wakeup_source_trash(&xprt_info->ws);
 
 		xprt->priv = 0;

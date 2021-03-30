@@ -2,7 +2,7 @@
  * Core MDSS framebuffer driver.
  *
  * Copyright (C) 2007 Google Incorporated
- * Copyright (c) 2008-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2008-2018, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -311,7 +311,7 @@ static int mdss_fb_notify_update(struct msm_fb_data_type *mfd,
 		mfd->update.ref_count++;
 		mutex_unlock(&mfd->update.lock);
 		ret = wait_for_completion_interruptible_timeout(
-						&mfd->update.comp, 4 * HZ);
+						&mfd->update.comp, msecs_to_jiffies(4000));
 		mutex_lock(&mfd->update.lock);
 		mfd->update.ref_count--;
 		mutex_unlock(&mfd->update.lock);
@@ -334,7 +334,7 @@ static int mdss_fb_notify_update(struct msm_fb_data_type *mfd,
 		mfd->no_update.ref_count++;
 		mutex_unlock(&mfd->no_update.lock);
 		ret = wait_for_completion_interruptible_timeout(
-						&mfd->no_update.comp, 4 * HZ);
+						&mfd->no_update.comp, msecs_to_jiffies(4000));
 		mutex_lock(&mfd->no_update.lock);
 		mfd->no_update.ref_count--;
 		mutex_unlock(&mfd->no_update.lock);
@@ -343,7 +343,7 @@ static int mdss_fb_notify_update(struct msm_fb_data_type *mfd,
 		if (mdss_fb_is_power_on(mfd)) {
 			INIT_COMPLETION(mfd->power_off_comp);
 			ret = wait_for_completion_interruptible_timeout(
-						&mfd->power_off_comp, 1 * HZ);
+						&mfd->power_off_comp, msecs_to_jiffies(1000));
 		}
 	}
 
@@ -388,7 +388,7 @@ static void mdss_fb_set_bl_brightness(struct led_classdev *led_cdev,
 
 static struct led_classdev backlight_led = {
 	.name           = "lcd-backlight",
-	.brightness     = MDSS_MAX_BL_BRIGHTNESS,
+	.brightness     = MDSS_MAX_BL_BRIGHTNESS / 2,
 	.brightness_set = mdss_fb_set_bl_brightness,
 	.max_brightness = MDSS_MAX_BL_BRIGHTNESS,
 };
@@ -668,13 +668,14 @@ static ssize_t mdss_fb_get_panel_info(struct device *dev,
 			"pu_en=%d\nxstart=%d\nwalign=%d\nystart=%d\nhalign=%d\n"
 			"min_w=%d\nmin_h=%d\nroi_merge=%d\ndyn_fps_en=%d\n"
 			"min_fps=%d\nmax_fps=%d\npanel_name=%s\n"
-			"primary_panel=%d\n",
+			"primary_panel=%d\nis_pluggable=%d\n",
 			pinfo->partial_update_enabled, pinfo->xstart_pix_align,
 			pinfo->width_pix_align, pinfo->ystart_pix_align,
 			pinfo->height_pix_align, pinfo->min_width,
 			pinfo->min_height, pinfo->partial_update_roi_merge,
 			pinfo->dynamic_fps, pinfo->min_fps, pinfo->max_fps,
-			pinfo->panel_name, pinfo->is_prim_panel);
+			pinfo->panel_name, pinfo->is_prim_panel,
+			pinfo->is_pluggable);
 
 	return ret;
 }
@@ -793,7 +794,7 @@ static int mdss_fb_blanking_mode_switch(struct msm_fb_data_type *mfd, int mode)
 	unlock_fb_info(mfd->fbi);
 
 	mutex_lock(&mfd->bl_lock);
-	mfd->bl_updated = true;
+	mfd->allow_bl_update = true;
 	mdss_fb_set_backlight(mfd, bl_lvl);
 	mutex_unlock(&mfd->bl_lock);
 
@@ -1065,7 +1066,13 @@ static int mdss_fb_probe(struct platform_device *pdev)
 	mfd->mdp_fb_page_protection = MDP_FB_PAGE_PROTECTION_WRITECOMBINE;
 
 	mfd->ext_ad_ctrl = -1;
-	mfd->bl_level = 0;
+	if (mfd->panel_info && mfd->panel_info->brightness_max > 0)
+		MDSS_BRIGHT_TO_BL(mfd->bl_level,
+			backlight_led.brightness, mfd->panel_info->bl_max,
+					mfd->panel_info->brightness_max);
+	else
+		mfd->bl_level = 0;
+
 	mfd->bl_scale = 1024;
 	mfd->bl_min_lvl = 30;
 	mfd->ad_bl_level = 0;
@@ -1576,7 +1583,7 @@ void mdss_fb_set_backlight(struct msm_fb_data_type *mfd, u32 bkl_lvl)
 #endif /* CONFIG_FB_MSM_MDSS_SPECIFIC_PANEL */
 
 	if ((((mdss_fb_is_power_off(mfd) && mfd->dcm_state != DCM_ENTER)
-		|| !mfd->bl_updated) && !IS_CALIB_MODE_BL(mfd)) ||
+		|| !mfd->allow_bl_update) && !IS_CALIB_MODE_BL(mfd)) ||
 		mfd->panel_info->cont_splash_enabled) {
 		mfd->unset_bl_level = bkl_lvl;
 		return;
@@ -1638,7 +1645,7 @@ void mdss_fb_update_backlight(struct msm_fb_data_type *mfd)
 	if (!mfd->unset_bl_level)
 		return;
 	mutex_lock(&mfd->bl_lock);
-	if (!mfd->bl_updated) {
+	if (!mfd->allow_bl_update) {
 		pdata = dev_get_platdata(&mfd->pdev->dev);
 		if ((pdata) && (pdata->set_backlight)) {
 			mfd->bl_level = mfd->unset_bl_level;
@@ -1651,7 +1658,7 @@ void mdss_fb_update_backlight(struct msm_fb_data_type *mfd)
 					NOTIFY_TYPE_BL_AD_ATTEN_UPDATE);
 			pdata->set_backlight(pdata, temp);
 			mfd->bl_level_scaled = mfd->unset_bl_level;
-			mfd->bl_updated = 1;
+			mfd->allow_bl_update = true;
 		}
 	}
 	mutex_unlock(&mfd->bl_lock);
@@ -1686,8 +1693,10 @@ static void mdss_fb_stop_disp_thread(struct msm_fb_data_type *mfd)
 	pr_debug("%pS: stop display thread fb%d\n",
 		__builtin_return_address(0), mfd->index);
 
+	mutex_lock(&mfd->mdp_sync_pt_data.sync_mutex);
 	kthread_stop(mfd->disp_thread);
 	mfd->disp_thread = NULL;
+	mutex_unlock(&mfd->mdp_sync_pt_data.sync_mutex);
 }
 
 static void mdss_panel_validate_debugfs_info(struct msm_fb_data_type *mfd)
@@ -1756,12 +1765,14 @@ static int mdss_fb_blank_blank(struct msm_fb_data_type *mfd,
 
 	mfd->op_enable = false;
 	if (mdss_panel_is_power_off(req_power_state)) {
+		int current_bl = mfd->bl_level;
 		/* Stop Display thread */
 		if (mfd->disp_thread)
 			mdss_fb_stop_disp_thread(mfd);
 		mutex_lock(&mfd->bl_lock);
 		mdss_fb_set_backlight(mfd, 0);
-		mfd->bl_updated = 0;
+		mfd->allow_bl_update = false;
+		mfd->unset_bl_level = current_bl;
 #ifdef CONFIG_FB_MSM_MDSS_SPECIFIC_PANEL
 		if (backlight_led.brightness) {
 			 mfd->unset_bl_level =
@@ -1790,6 +1801,7 @@ static int mdss_fb_blank_unblank(struct msm_fb_data_type *mfd)
 {
 	int ret = 0;
 	int cur_power_state;
+	bool cur_panel_dead;
 
 	if (!mfd)
 		return -EINVAL;
@@ -1805,6 +1817,7 @@ static int mdss_fb_blank_unblank(struct msm_fb_data_type *mfd)
 	}
 
 	cur_power_state = mfd->panel_power_state;
+	cur_panel_dead = mfd->panel_info->panel_dead;
 	pr_debug("Transitioning from %d --> %d\n", cur_power_state,
 		MDSS_PANEL_POWER_ON);
 
@@ -1836,17 +1849,33 @@ static int mdss_fb_blank_unblank(struct msm_fb_data_type *mfd)
 	/* Reset the backlight only if the panel was off */
 	if (mdss_panel_is_power_off(cur_power_state)) {
 		mutex_lock(&mfd->bl_lock);
-		if (!mfd->bl_updated) {
+		if (!mfd->allow_bl_update) {
+			mfd->allow_bl_update = true;
 			/*
-			 * If in AD calibration mode then frameworks would not
-			 * be allowed to update backlight hence post unblank
+			 * 1.) If in AD calibration mode then frameworks would
+			 * not be allowed to update backlight hence post unblank
 			 * the backlight would remain 0 (0 is set in blank).
 			 * Hence resetting back to calibration mode value
+			 *
+			 * 2.) If the panel is recovering from ESD attack, then
+			 * the frameworks might not set the backlight post
+			 * unblank, hence the backlight might remain zero. Set
+			 * the backlight in such cases to the unset_bl_level
+			 * value which will be stored prior to ESD recovery
+			 * during blank.
 			 */
-			if (!IS_CALIB_MODE_BL(mfd))
-				mdss_fb_set_backlight(mfd, mfd->unset_bl_level);
-			else
+			if (IS_CALIB_MODE_BL(mfd))
 				mdss_fb_set_backlight(mfd, mfd->calib_mode_bl);
+			else if (!mfd->panel_info->mipi.post_init_delay ||
+				cur_panel_dead)
+				mdss_fb_set_backlight(mfd, mfd->unset_bl_level);
+
+			/*
+			 * it blocks the backlight update between unblank and
+			 * first kickoff to avoid backlight turn on before black
+			 * frame is transferred to panel through unblank call.
+			 */
+			mfd->allow_bl_update = false;
 		}
 		mutex_unlock(&mfd->bl_lock);
 	}
@@ -2111,7 +2140,7 @@ int mdss_fb_alloc_fb_ion_memory(struct msm_fb_data_type *mfd, size_t fb_size)
 			ion_unmap_iommu(mfd->fb_ion_client, mfd->fb_ion_handle,
 					mfd->mdp.fb_mem_get_iommu_domain(), 0);
 		}
-		goto fb_mmap_failed;
+		goto err_put;
 	}
 
 	pr_debug("alloc 0x%zuB vaddr = %pK (%pa iova) for fb%d\n", fb_size,
@@ -2123,6 +2152,8 @@ int mdss_fb_alloc_fb_ion_memory(struct msm_fb_data_type *mfd, size_t fb_size)
 
 	return rc;
 
+err_put:
+	dma_buf_put(mfd->fbmem_buf);
 fb_mmap_failed:
 	ion_free(mfd->fb_ion_client, mfd->fb_ion_handle);
 	mfd->fb_ion_handle = NULL;
@@ -3247,7 +3278,7 @@ static int mdss_fb_pan_display_ex(struct fb_info *info,
 	if (var->yoffset > (info->var.yres_virtual - info->var.yres))
 		return -EINVAL;
 
-	ret = mdss_fb_wait_for_kickoff(mfd);
+	ret = mdss_fb_pan_idle(mfd);
 	if (ret) {
 		pr_err("wait_for_kick failed. rc=%d\n", ret);
 		return ret;
@@ -3274,10 +3305,12 @@ static int mdss_fb_pan_display_ex(struct fb_info *info,
 	mfd->msm_fb_backup.info = *info;
 	mfd->msm_fb_backup.disp_commit = *disp_commit;
 
-	atomic_inc(&mfd->mdp_sync_pt_data.commit_cnt);
-	atomic_inc(&mfd->commits_pending);
-	atomic_inc(&mfd->kickoff_pending);
-	wake_up_all(&mfd->commit_wait_q);
+	if (mfd->disp_thread) {
+		atomic_inc(&mfd->mdp_sync_pt_data.commit_cnt);
+		atomic_inc(&mfd->commits_pending);
+		atomic_inc(&mfd->kickoff_pending);
+		wake_up_all(&mfd->commit_wait_q);
+	}
 	mutex_unlock(&mfd->mdp_sync_pt_data.sync_mutex);
 	if (wait_for_finish) {
 		ret = mdss_fb_pan_idle(mfd);
@@ -3491,9 +3524,14 @@ static int __mdss_fb_display_thread(void *data)
 				mfd->index);
 
 	while (1) {
-		wait_event(mfd->commit_wait_q,
+		ret = wait_event_interruptible(mfd->commit_wait_q,
 				(atomic_read(&mfd->commits_pending) ||
 				 kthread_should_stop()));
+
+		if (ret) {
+			pr_info("%s: interrupted", __func__);
+			continue;
+		}
 
 		if (kthread_should_stop())
 			break;

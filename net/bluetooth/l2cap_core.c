@@ -58,6 +58,18 @@ static void l2cap_send_disconn_req(struct l2cap_chan *chan, int err);
 static void l2cap_tx(struct l2cap_chan *chan, struct l2cap_ctrl *control,
 		     struct sk_buff_head *skbs, u8 event);
 
+static inline __u8 bdaddr_type(struct hci_conn *hcon, __u8 type)
+{
+	if (hcon->type == LE_LINK) {
+		if (type == ADDR_LE_DEV_PUBLIC)
+			return BDADDR_LE_PUBLIC;
+		else
+			return BDADDR_LE_RANDOM;
+	}
+
+	return BDADDR_BREDR;
+}
+
 /* ---- L2CAP channels ---- */
 
 static struct l2cap_chan *__l2cap_get_chan_by_dcid(struct l2cap_conn *conn,
@@ -1364,6 +1376,10 @@ static void l2cap_le_conn_ready(struct l2cap_conn *conn)
 
 	hci_conn_hold(conn->hcon);
 	conn->hcon->disc_timeout = HCI_DISCONN_TIMEOUT;
+	bacpy(&chan->src, &conn->hcon->src);
+	bacpy(&chan->dst, &conn->hcon->dst);
+	chan->src_type = bdaddr_type(conn->hcon, conn->hcon->src_type);
+	chan->dst_type = bdaddr_type(conn->hcon, conn->hcon->dst_type);
 
 	bacpy(&bt_sk(sk)->src, conn->src);
 	bacpy(&bt_sk(sk)->dst, conn->dst);
@@ -1789,6 +1805,8 @@ int l2cap_chan_connect(struct l2cap_chan *chan, __le16 psm, u16 cid,
 	lock_sock(sk);
 	bacpy(&bt_sk(sk)->dst, dst);
 	release_sock(sk);
+	bacpy(&chan->dst, dst);
+	chan->dst_type = dst_type;
 
 	chan->psm = psm;
 	chan->dcid = cid;
@@ -1828,6 +1846,8 @@ int l2cap_chan_connect(struct l2cap_chan *chan, __le16 psm, u16 cid,
 
 	/* Update source addr of the socket */
 	bacpy(src, conn->src);
+	bacpy(&chan->src, &hcon->src);
+	chan->src_type = bdaddr_type(hcon, hcon->src_type);
 
 	l2cap_chan_unlock(chan);
 	l2cap_chan_add(conn, chan);
@@ -1857,13 +1877,21 @@ done:
 int __l2cap_wait_ack(struct sock *sk)
 {
 	struct l2cap_chan *chan = l2cap_pi(sk)->chan;
+	struct l2cap_conn *conn;
 	DECLARE_WAITQUEUE(wait, current);
 	int err = 0;
 	int timeo = HZ/5;
 
 	add_wait_queue(sk_sleep(sk), &wait);
 	set_current_state(TASK_INTERRUPTIBLE);
-	while (chan->unacked_frames > 0 && chan->conn) {
+
+	conn = chan->conn;
+	if (conn)
+		mutex_lock(&conn->chan_lock);
+	l2cap_chan_lock(chan);
+	lock_sock(sk);
+
+	while (chan->unacked_frames > 0 && conn) {
 		if (!timeo)
 			timeo = HZ/5;
 
@@ -1873,14 +1901,29 @@ int __l2cap_wait_ack(struct sock *sk)
 		}
 
 		release_sock(sk);
+		l2cap_chan_unlock(chan);
+		if (conn)
+			mutex_unlock(&conn->chan_lock);
+
 		timeo = schedule_timeout(timeo);
+
+		if (conn)
+			mutex_lock(&conn->chan_lock);
+		l2cap_chan_lock(chan);
 		lock_sock(sk);
+
 		set_current_state(TASK_INTERRUPTIBLE);
 
 		err = sock_error(sk);
 		if (err)
 			break;
 	}
+
+	release_sock(sk);
+	l2cap_chan_unlock(chan);
+	if (conn)
+		mutex_unlock(&conn->chan_lock);
+
 	set_current_state(TASK_RUNNING);
 	remove_wait_queue(sk_sleep(sk), &wait);
 	return err;
@@ -3320,9 +3363,10 @@ static int l2cap_parse_conf_req(struct l2cap_chan *chan, void *data, size_t data
 			break;
 
 		case L2CAP_CONF_EFS:
-			remote_efs = 1;
-			if (olen == sizeof(efs))
+			if (olen == sizeof(efs)) {
+				remote_efs = 1;
 				memcpy(&efs, (void *) val, olen);
+			}
 			break;
 
 		case L2CAP_CONF_EWS:
@@ -3541,16 +3585,17 @@ static int l2cap_parse_conf_rsp(struct l2cap_chan *chan, void *rsp, int len,
 			break;
 
 		case L2CAP_CONF_EFS:
-			if (olen == sizeof(efs))
+			if (olen == sizeof(efs)) {
 				memcpy(&efs, (void *)val, olen);
 
-			if (chan->local_stype != L2CAP_SERV_NOTRAFIC &&
-			    efs.stype != L2CAP_SERV_NOTRAFIC &&
-			    efs.stype != chan->local_stype)
-				return -ECONNREFUSED;
+				if (chan->local_stype != L2CAP_SERV_NOTRAFIC &&
+				    efs.stype != L2CAP_SERV_NOTRAFIC &&
+				    efs.stype != chan->local_stype)
+					return -ECONNREFUSED;
 
-			l2cap_add_conf_opt(&ptr, L2CAP_CONF_EFS, sizeof(efs),
-					   (unsigned long) &efs, endptr - ptr);
+				l2cap_add_conf_opt(&ptr, L2CAP_CONF_EFS, sizeof(efs),
+						   (unsigned long) &efs, endptr - ptr);
+			}
 			break;
 
 		case L2CAP_CONF_FCS:
@@ -3629,6 +3674,8 @@ void __l2cap_connect_rsp_defer(struct l2cap_chan *chan)
 		rsp_code = L2CAP_CREATE_CHAN_RSP;
 	else
 		rsp_code = L2CAP_CONN_RSP;
+
+	l2cap_chan_check_security(chan);
 
 	BT_DBG("chan %pK rsp_code %u", chan, rsp_code);
 
@@ -3769,6 +3816,10 @@ static struct l2cap_chan *l2cap_connect(struct l2cap_conn *conn,
 
 	bacpy(&bt_sk(sk)->src, conn->src);
 	bacpy(&bt_sk(sk)->dst, conn->dst);
+	bacpy(&chan->src, &conn->hcon->src);
+	bacpy(&chan->dst, &conn->hcon->dst);
+	chan->src_type = bdaddr_type(conn->hcon, conn->hcon->src_type);
+	chan->dst_type = bdaddr_type(conn->hcon, conn->hcon->dst_type);
 	chan->psm  = psm;
 	chan->dcid = scid;
 	chan->local_amp_id = amp_id;

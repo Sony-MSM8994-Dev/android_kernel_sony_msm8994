@@ -141,12 +141,16 @@ void cpuinfo_store_cpu(void)
 
 void __init smp_setup_processor_id(void)
 {
+	u64 mpidr = read_cpuid_mpidr() & MPIDR_HWID_BITMASK;
+	cpu_logical_map(0) = mpidr;
+
 	/*
 	 * clear __my_cpu_offset on boot CPU to avoid hang caused by
 	 * using percpu variable early, for example, lockdep will
 	 * access percpu variable inside lock_release
 	 */
 	set_my_cpu_offset(0);
+	pr_info("Booting Linux on physical CPU 0x%lx\n", (unsigned long)mpidr);
 }
 
 bool arch_match_cpu_phys_id(int cpu, u64 phys_id)
@@ -223,27 +227,11 @@ static void __init smp_build_mpidr_hash(void)
 }
 #endif
 
-static void __init setup_processor(void)
+void __init setup_cpu_features(void)
 {
-	struct cpu_info *cpu_info;
 	u64 features, block;
 	u32 cwg;
 	int cls;
-
-	cpu_info = lookup_processor_type(read_cpuid_id());
-	if (!cpu_info) {
-		printk("CPU configuration botched (ID %08x), unable to continue.\n",
-		       read_cpuid_id());
-		while (1);
-	}
-
-	cpu_name = cpu_info->cpu_name;
-
-	printk("CPU: %s [%08x] revision %d\n",
-	       cpu_name, read_cpuid_id(), read_cpuid_id() & 15);
-
-	sprintf(init_utsname()->machine, ELF_PLATFORM);
-	elf_hwcap = 0;
 
 	/*
 	 * Check for sane CTR_EL0.CWG value.
@@ -319,6 +307,25 @@ static void __init setup_processor(void)
 	if (block && !(block & 0x8))
 		compat_elf_hwcap2 |= COMPAT_HWCAP2_CRC32;
 #endif
+}
+
+static void __init setup_processor(void)
+{
+	struct cpu_info *cpu_info;
+
+	cpu_info = lookup_processor_type(read_cpuid_id());
+	if (!cpu_info) {
+		printk("CPU configuration botched (ID %08x), unable to continue.\n",
+		       read_cpuid_id());
+		while (1);
+	}
+
+	cpu_name = cpu_info->cpu_name;
+
+	printk("CPU: %s [%08x] revision %d\n",
+	       cpu_name, read_cpuid_id(), read_cpuid_id() & 15);
+
+	sprintf(init_utsname()->machine, ELF_PLATFORM);
 }
 
 static void __init setup_machine_fdt(phys_addr_t dt_phys)
@@ -424,11 +431,6 @@ early_param("warmboot", sony_param_warmboot);
 
 void __init setup_arch(char **cmdline_p)
 {
-	/*
-	 * Unmask asynchronous aborts early to catch possible system errors.
-	 */
-	local_async_enable();
-
 	setup_processor();
 
 	setup_machine_fdt(__fdt_pointer);
@@ -445,6 +447,12 @@ void __init setup_arch(char **cmdline_p)
 
 	parse_early_param();
 
+	/*
+	 *  Unmask asynchronous aborts after bringing up possible earlycon.
+	 * (Report possible System Errors once we can report this occurred)
+	 */
+	local_async_enable();
+
 	efi_init();
 	arm64_memblock_init();
 
@@ -452,12 +460,12 @@ void __init setup_arch(char **cmdline_p)
 	request_standard_resources();
 
 	efi_idmap_init();
+	early_ioremap_reset();
 
 	unflatten_device_tree();
 
 	psci_init();
 
-	cpu_logical_map(0) = read_cpuid_mpidr() & MPIDR_HWID_BITMASK;
 	cpu_read_bootcpu_ops();
 #ifdef CONFIG_SMP
 	smp_init_cpus();
@@ -493,7 +501,7 @@ static int __init topology_init(void)
 
 	return 0;
 }
-subsys_initcall(topology_init);
+postcore_initcall(topology_init);
 
 static const char *hwcap_str[] = {
 	"fp",
@@ -533,6 +541,15 @@ static const char *compat_hwcap_str[] = {
 	"evtstrm",
 	NULL
 };
+
+static const char *compat_hwcap2_str[] = {
+	"aes",
+	"pmull",
+	"sha1",
+	"sha2",
+	"crc32",
+	NULL
+};
 #endif /* CONFIG_COMPAT */
 
 static int c_show(struct seq_file *m, void *v)
@@ -566,6 +583,10 @@ static int c_show(struct seq_file *m, void *v)
 			for (j = 0; compat_hwcap_str[j]; j++)
 				if (COMPAT_ELF_HWCAP & (1 << j))
 					seq_printf(m, " %s", compat_hwcap_str[j]);
+
+			for (j = 0; compat_hwcap2_str[j]; j++)
+				if (compat_elf_hwcap2 & (1 << j))
+					seq_printf(m, " %s", compat_hwcap2_str[j]);
 #endif /* CONFIG_COMPAT */
 		} else {
 			for (j = 0; hwcap_str[j]; j++)

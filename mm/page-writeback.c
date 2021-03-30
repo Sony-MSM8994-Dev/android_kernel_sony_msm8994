@@ -218,9 +218,18 @@ static unsigned long highmem_dirtyable_memory(unsigned long total)
 	unsigned long x = 0;
 
 	for_each_node_state(node, N_HIGH_MEMORY) {
-		struct zone *z = &NODE_DATA(node)->node_zones[ZONE_HIGHMEM];
+		unsigned long nr_pages;
+		struct zone *z =
+			&NODE_DATA(node)->node_zones[ZONE_HIGHMEM];
 
-		x += zone_dirtyable_memory(z);
+		nr_pages = zone_page_state(z, NR_FREE_PAGES) +
+		  zone_reclaimable_pages(z);
+		/*
+		 * make sure that the number of pages for this node
+		 * is never "negative".
+		 */
+		nr_pages -= min(nr_pages, z->dirty_balance_reserve);
+		x += nr_pages;
 	}
 	/*
 	 * Unreclaimable memory (kernel memory or anonymous memory
@@ -263,7 +272,7 @@ static unsigned long global_dirtyable_memory(void)
 	x += global_page_state(NR_ACTIVE_FILE);
 
 	if (!vm_highmem_is_dirtyable)
-		x -= highmem_dirtyable_memory(x);
+		x -= min(x, highmem_dirtyable_memory(x));
 
 	/* Subtract min_free_kbytes */
 	x -= min_t(unsigned long, x, min_free_kbytes >> (PAGE_SHIFT - 10));
@@ -604,7 +613,7 @@ static inline long long pos_ratio_polynom(unsigned long setpoint,
 	long x;
 
 	x = div_s64(((s64)setpoint - (s64)dirty) << RATELIMIT_CALC_SHIFT,
-		    limit - setpoint + 1);
+		      (limit - setpoint) | 1);
 	pos_ratio = x;
 	pos_ratio = pos_ratio * x >> RATELIMIT_CALC_SHIFT;
 	pos_ratio = pos_ratio * x >> RATELIMIT_CALC_SHIFT;
@@ -831,7 +840,7 @@ static unsigned long bdi_position_ratio(struct backing_dev_info *bdi,
 	 * scale global setpoint to bdi's:
 	 *	bdi_setpoint = setpoint * bdi_thresh / thresh
 	 */
-	x = div_u64((u64)bdi_thresh << 16, thresh + 1);
+	x = div_u64((u64)bdi_thresh << 16, thresh | 1);
 	bdi_setpoint = setpoint * (u64)x >> 16;
 	/*
 	 * Use span=(8*write_bw) in single bdi case as indicated by
@@ -846,7 +855,7 @@ static unsigned long bdi_position_ratio(struct backing_dev_info *bdi,
 
 	if (bdi_dirty < x_intercept - span / 4) {
 		pos_ratio = div_u64(pos_ratio * (x_intercept - bdi_dirty),
-				    x_intercept - bdi_setpoint + 1);
+				      (x_intercept - bdi_setpoint) | 1);
 	} else
 		pos_ratio /= 4;
 
@@ -1767,7 +1776,7 @@ void writeback_set_ratelimit(void)
 		ratelimit_pages = 16;
 }
 
-static int __cpuinit
+static int
 ratelimit_handler(struct notifier_block *self, unsigned long action,
 		  void *hcpu)
 {
@@ -1782,7 +1791,7 @@ ratelimit_handler(struct notifier_block *self, unsigned long action,
 	}
 }
 
-static struct notifier_block __cpuinitdata ratelimit_nb = {
+static struct notifier_block ratelimit_nb = {
 	.notifier_call	= ratelimit_handler,
 	.next		= NULL,
 };
@@ -1914,29 +1923,13 @@ retry:
 	while (!done && (index <= end)) {
 		int i;
 
-		nr_pages = pagevec_lookup_tag(&pvec, mapping, &index, tag,
-			      min(end - index, (pgoff_t)PAGEVEC_SIZE-1) + 1);
+		nr_pages = pagevec_lookup_range_tag(&pvec, mapping, &index, end,
+				tag);
 		if (nr_pages == 0)
 			break;
 
 		for (i = 0; i < nr_pages; i++) {
 			struct page *page = pvec.pages[i];
-
-			/*
-			 * At this point, the page may be truncated or
-			 * invalidated (changing page->mapping to NULL), or
-			 * even swizzled back from swapper_space to tmpfs file
-			 * mapping. However, page->index will not change
-			 * because we have a reference on the page.
-			 */
-			if (page->index > end) {
-				/*
-				 * can't be range_cyclic (1st pass) because
-				 * end == -1 in that case.
-				 */
-				done = 1;
-				break;
-			}
 
 			done_index = page->index;
 
@@ -2399,7 +2392,7 @@ int test_clear_page_writeback(struct page *page)
 	return ret;
 }
 
-int test_set_page_writeback(struct page *page)
+int __test_set_page_writeback(struct page *page, bool keep_write)
 {
 	struct address_space *mapping = page_mapping(page);
 	int ret;
@@ -2421,9 +2414,10 @@ int test_set_page_writeback(struct page *page)
 			radix_tree_tag_clear(&mapping->page_tree,
 						page_index(page),
 						PAGECACHE_TAG_DIRTY);
-		radix_tree_tag_clear(&mapping->page_tree,
-				     page_index(page),
-				     PAGECACHE_TAG_TOWRITE);
+		if (!keep_write)
+			radix_tree_tag_clear(&mapping->page_tree,
+						page_index(page),
+						PAGECACHE_TAG_TOWRITE);
 		spin_unlock_irqrestore(&mapping->tree_lock, flags);
 	} else {
 		ret = TestSetPageWriteback(page);
@@ -2433,7 +2427,7 @@ int test_set_page_writeback(struct page *page)
 	return ret;
 
 }
-EXPORT_SYMBOL(test_set_page_writeback);
+EXPORT_SYMBOL(__test_set_page_writeback);
 
 /*
  * Return true if any of the pages in the mapping are marked with the

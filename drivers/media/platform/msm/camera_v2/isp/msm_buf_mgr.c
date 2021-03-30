@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -155,13 +155,19 @@ static int msm_isp_prepare_isp_buf(struct msm_isp_buf_mgr *buf_mgr,
 	else
 		domain_num = buf_mgr->iommu_domain_num_secure;
 
+	if (qbuf_buf->num_planes > MAX_PLANES_PER_STREAM) {
+		pr_err("%s: Invalid num_planes %d\n",
+			__func__, qbuf_buf->num_planes);
+		return -EINVAL;
+	}
+
 	for (i = 0; i < qbuf_buf->num_planes; i++) {
 		mapped_info = &buf_info->mapped_info[i];
 		mapped_info->handle =
 		ion_import_dma_buf(buf_mgr->client,
 			qbuf_buf->planes[i].addr);
 		if (IS_ERR_OR_NULL(mapped_info->handle)) {
-			pr_err_ratelimited("%s: null/error ION handle %p\n",
+			pr_err_ratelimited("%s: null/error ION handle %pK\n",
 				__func__, mapped_info->handle);
 			goto ion_map_error;
 		}
@@ -217,6 +223,12 @@ static void msm_isp_unprepare_v4l2_buf(
 	else
 		domain_num = buf_mgr->iommu_domain_num_secure;
 
+	if (buf_info->num_planes > VIDEO_MAX_PLANES) {
+		pr_err("%s: Invalid num_planes %d\n",
+			__func__, buf_info->num_planes);
+		return;
+	}
+
 	for (i = 0; i < buf_info->num_planes; i++) {
 		mapped_info = &buf_info->mapped_info[i];
 		spin_lock_irqsave(&buf_mgr->bufq_list_lock, flags);
@@ -256,6 +268,12 @@ static int msm_isp_buf_prepare(struct msm_isp_buf_mgr *buf_mgr,
 		info->handle, info->buf_idx);
 	if (!buf_info) {
 		pr_err("Invalid buffer prepare\n");
+		return rc;
+	}
+
+	if (buf_info->num_planes > VIDEO_MAX_PLANES) {
+		pr_err("%s: Invalid num_planes %d \n",
+			__func__, buf_info->num_planes);
 		return rc;
 	}
 

@@ -264,9 +264,9 @@ static bool __of_find_n_match_cpu_property(struct device_node *cpun,
 
 	ac = of_n_addr_cells(cpun);
 	cell = of_get_property(cpun, prop_name, &prop_len);
-	if (!cell)
+	if (!cell || !ac)
 		return false;
-	prop_len /= sizeof(*cell);
+	prop_len /= sizeof(*cell) * ac;
 	for (tid = 0; tid < prop_len; tid++) {
 		hwid = of_read_number(cell, ac);
 		if (arch_match_cpu_phys_id(cpu, hwid)) {
@@ -302,10 +302,8 @@ struct device_node *of_get_cpu_node(int cpu, unsigned int *thread)
 	struct device_node *cpun, *cpus;
 
 	cpus = of_find_node_by_path("/cpus");
-	if (!cpus) {
-		pr_warn("Missing cpus node, bailing out\n");
+	if (!cpus)
 		return NULL;
-	}
 
 	for_each_child_of_node(cpus, cpun) {
 		if (of_node_cmp(cpun->type, "cpu"))
@@ -325,27 +323,72 @@ struct device_node *of_get_cpu_node(int cpu, unsigned int *thread)
 }
 EXPORT_SYMBOL(of_get_cpu_node);
 
-/** Checks if the given "compat" string matches one of the strings in
- * the device's "compatible" property
+/**
+ * __of_device_is_compatible() - Check if the node matches given constraints
+ * @device: pointer to node
+ * @compat: required compatible string, NULL or "" for any match
+ * @type: required device_type value, NULL or "" for any match
+ * @name: required node name, NULL or "" for any match
+ *
+ * Checks if the given @compat, @type and @name strings match the
+ * properties of the given @device. A constraints can be skipped by
+ * passing NULL or an empty string as the constraint.
+ *
+ * Returns 0 for no match, and a positive integer on match. The return
+ * value is a relative score with larger values indicating better
+ * matches. The score is weighted for the most specific compatible value
+ * to get the highest score. Matching type is next, followed by matching
+ * name. Practically speaking, this results in the following priority
+ * order for matches:
+ *
+ * 1. specific compatible && type && name
+ * 2. specific compatible && type
+ * 3. specific compatible && name
+ * 4. specific compatible
+ * 5. general compatible && type && name
+ * 6. general compatible && type
+ * 7. general compatible && name
+ * 8. general compatible
+ * 9. type && name
+ * 10. type
+ * 11. name
  */
 static int __of_device_is_compatible(const struct device_node *device,
-				     const char *compat)
+				     const char *compat, const char *type, const char *name)
 {
-	const char* cp;
-	int cplen, l;
+	struct property *prop;
+	const char *cp;
+	int index = 0, score = 0;
 
-	cp = __of_get_property(device, "compatible", &cplen);
-	if (cp == NULL)
-		return 0;
-	while (cplen > 0) {
-		if (of_compat_cmp(cp, compat, strlen(compat)) == 0)
-			return 1;
-		l = strlen(cp) + 1;
-		cp += l;
-		cplen -= l;
+	/* Compatible match has highest priority */
+	if (compat && compat[0]) {
+		prop = __of_find_property(device, "compatible", NULL);
+		for (cp = of_prop_next_string(prop, NULL); cp;
+		     cp = of_prop_next_string(prop, cp), index++) {
+			if (of_compat_cmp(cp, compat, strlen(compat)) == 0) {
+				score = INT_MAX/2 - (index << 2);
+				break;
+			}
+		}
+		if (!score)
+			return 0;
 	}
 
-	return 0;
+	/* Matching type is better than matching name */
+	if (type && type[0]) {
+		if (!device->type || of_node_cmp(type, device->type))
+			return 0;
+		score += 2;
+	}
+
+	/* Matching name is a bit better than not */
+	if (name && name[0]) {
+		if (!device->name || of_node_cmp(name, device->name))
+			return 0;
+		score++;
+	}
+
+	return score;
 }
 
 /** Checks if the given "compat" string matches one of the strings in
@@ -358,7 +401,7 @@ int of_device_is_compatible(const struct device_node *device,
 	int res;
 
 	raw_spin_lock_irqsave(&devtree_lock, flags);
-	res = __of_device_is_compatible(device, compat);
+	res = __of_device_is_compatible(device, compat, NULL, NULL);
 	raw_spin_unlock_irqrestore(&devtree_lock, flags);
 	return res;
 }
@@ -390,24 +433,27 @@ EXPORT_SYMBOL(of_machine_is_compatible);
  *
  *  @device: Node to check for availability, with locks already held
  *
- *  Returns 1 if the status property is absent or set to "okay" or "ok",
- *  0 otherwise
+ *  Returns true if the status property is absent or set to "okay" or "ok",
+ *  false otherwise
  */
-static int __of_device_is_available(const struct device_node *device)
+static bool __of_device_is_available(const struct device_node *device)
 {
 	const char *status;
 	int statlen;
 
+	if (!device)
+		return false;
+
 	status = __of_get_property(device, "status", &statlen);
 	if (status == NULL)
-		return 1;
+		return true;
 
 	if (statlen > 0) {
 		if (!strcmp(status, "okay") || !strcmp(status, "ok"))
-			return 1;
+			return true;
 	}
 
-	return 0;
+	return false;
 }
 
 /**
@@ -415,13 +461,13 @@ static int __of_device_is_available(const struct device_node *device)
  *
  *  @device: Node to check for availability
  *
- *  Returns 1 if the status property is absent or set to "okay" or "ok",
- *  0 otherwise
+ *  Returns true if the status property is absent or set to "okay" or "ok",
+ *  false otherwise
  */
-int of_device_is_available(const struct device_node *device)
+bool of_device_is_available(const struct device_node *device)
 {
 	unsigned long flags;
-	int res;
+	bool res;
 
 	raw_spin_lock_irqsave(&devtree_lock, flags);
 	res = __of_device_is_available(device);
@@ -494,6 +540,9 @@ struct device_node *of_get_next_child(const struct device_node *node,
 	struct device_node *next;
 	unsigned long flags;
 
+	if (!node)
+		return NULL;
+
 	raw_spin_lock_irqsave(&devtree_lock, flags);
 	next = prev ? prev->sibling : node->child;
 	for (; next; next = next->sibling)
@@ -518,6 +567,9 @@ struct device_node *of_get_next_available_child(const struct device_node *node,
 {
 	struct device_node *next;
 	unsigned long flags;
+
+	if (!node)
+		return NULL;
 
 	raw_spin_lock_irqsave(&devtree_lock, flags);
 	next = prev ? prev->sibling : node->child;
@@ -661,10 +713,7 @@ struct device_node *of_find_compatible_node(struct device_node *from,
 	raw_spin_lock_irqsave(&devtree_lock, flags);
 	np = from ? from->allnext : of_allnodes;
 	for (; np; np = np->allnext) {
-		if (type
-		    && !(np->type && (of_node_cmp(np->type, type) == 0)))
-			continue;
-		if (__of_device_is_compatible(np, compatible) &&
+		if (__of_device_is_compatible(np, compatible, type, NULL) &&
 		    of_node_get(np))
 			break;
 	}
@@ -714,25 +763,22 @@ static
 const struct of_device_id *__of_match_node(const struct of_device_id *matches,
 					   const struct device_node *node)
 {
+	const struct of_device_id *best_match = NULL;
+	int score, best_score = 0;
+
 	if (!matches)
 		return NULL;
 
-	while (matches->name[0] || matches->type[0] || matches->compatible[0]) {
-		int match = 1;
-		if (matches->name[0])
-			match &= node->name
-				&& !strcmp(matches->name, node->name);
-		if (matches->type[0])
-			match &= node->type
-				&& !strcmp(matches->type, node->type);
-		if (matches->compatible[0])
-			match &= __of_device_is_compatible(node,
-							   matches->compatible);
-		if (match)
-			return matches;
-		matches++;
+	for (; matches->name[0] || matches->type[0] || matches->compatible[0]; matches++) {
+		score = __of_device_is_compatible(node, matches->compatible,
+						  matches->type, matches->name);
+		if (score > best_score) {
+			best_match = matches;
+			best_score = score;
+		}
 	}
-	return NULL;
+
+	return best_match;
 }
 
 /**
@@ -834,6 +880,9 @@ struct device_node *of_find_node_by_phandle(phandle handle)
 	struct device_node *np;
 	unsigned long flags;
 
+	if (!handle)
+		return NULL;
+
 	raw_spin_lock_irqsave(&devtree_lock, flags);
 	for (np = of_allnodes; np; np = np->allnext)
 		if (np->phandle == handle)
@@ -843,6 +892,38 @@ struct device_node *of_find_node_by_phandle(phandle handle)
 	return np;
 }
 EXPORT_SYMBOL(of_find_node_by_phandle);
+
+/**
+ * of_property_count_elems_of_size - Count the number of elements in a property
+ *
+ * @np:		device node from which the property value is to be read.
+ * @propname:	name of the property to be searched.
+ * @elem_size:	size of the individual element
+ *
+ * Search for a property in a device node and count the number of elements of
+ * size elem_size in it. Returns number of elements on sucess, -EINVAL if the
+ * property does not exist or its length does not match a multiple of elem_size
+ * and -ENODATA if the property does not have a value.
+ */
+int of_property_count_elems_of_size(const struct device_node *np,
+				const char *propname, int elem_size)
+{
+	struct property *prop = of_find_property(np, propname, NULL);
+
+	if (!prop)
+		return -EINVAL;
+	if (!prop->value)
+		return -ENODATA;
+
+	if (prop->length % elem_size != 0) {
+		pr_err("size of %s in node %s is not a multiple of %d\n",
+		       propname, np->full_name, elem_size);
+		return -EINVAL;
+	}
+
+	return prop->length / elem_size;
+}
+EXPORT_SYMBOL_GPL(of_property_count_elems_of_size);
 
 /**
  * of_find_property_value_of_size
@@ -1095,7 +1176,7 @@ int of_property_match_string(struct device_node *np, const char *propname,
 EXPORT_SYMBOL_GPL(of_property_match_string);
 
 /**
- * of_property_read_string_util() - Utility helper for parsing string properties
+ * of_property_read_string_helper() - Utility helper for parsing string properties
  * @np:		device node from which the property value is to be read.
  * @propname:	name of the property to be searched.
  * @out_strs:	output array of string pointers.
@@ -1539,6 +1620,7 @@ int of_attach_node(struct device_node *np)
 	np->allnext = of_allnodes;
 	np->parent->child = np;
 	of_allnodes = np;
+	of_node_clear_flag(np, OF_DETACHED);
 	raw_spin_unlock_irqrestore(&devtree_lock, flags);
 
 	of_add_proc_dt_entry(np);
@@ -1691,8 +1773,8 @@ void of_alias_scan(void * (*dt_alloc)(u64 size, u64 align))
  * @np:		Pointer to the given device_node
  * @stem:	Alias stem of the given device_node
  *
- * The function travels the lookup table to get alias id for the given
- * device_node and alias stem.  It returns the alias id if find it.
+ * The function travels the lookup table to get the alias id for the given
+ * device_node and alias stem.  It returns the alias id if found.
  */
 int of_alias_get_id(struct device_node *np, const char *stem)
 {

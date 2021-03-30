@@ -251,8 +251,8 @@ static long aac_in_ioctl_shared(struct file *file, unsigned int cmd, void *arg)
 		if (min_bitrate > 24000)
 			min_bitrate = 24000;
 		max_bitrate = 6*(cfg->sample_rate)*(cfg->channels);
-		if (max_bitrate > 192000)
-			max_bitrate = 192000;
+		if (max_bitrate > 320000)
+			max_bitrate = 320000;
 		if ((cfg->bit_rate < min_bitrate) ||
 			(cfg->bit_rate > max_bitrate)) {
 			pr_err("%s: bitrate permissible: max=%d, min=%d\n",
@@ -669,6 +669,7 @@ static int aac_in_open(struct inode *inode, struct file *file)
 		goto fail;
 	}
 	audio->opened = 1;
+	audio->reset_event = false;
 	atomic_set(&audio->in_count, PCM_BUF_COUNT);
 	atomic_set(&audio->out_count, 0x00);
 	audio->enc_compat_ioctl = aac_in_compat_ioctl;

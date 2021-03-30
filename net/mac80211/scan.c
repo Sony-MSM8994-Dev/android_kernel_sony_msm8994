@@ -234,10 +234,11 @@ static bool ieee80211_prep_hw_scan(struct ieee80211_local *local)
 	return true;
 }
 
-static void __ieee80211_scan_completed(struct ieee80211_hw *hw, bool aborted,
-				       bool was_hw_scan)
+static void __ieee80211_scan_completed(struct ieee80211_hw *hw, bool aborted)
 {
 	struct ieee80211_local *local = hw_to_local(hw);
+	bool hw_scan = local->ops->hw_scan;
+	bool was_scanning = local->scanning;
 
 	lockdep_assert_held(&local->mtx);
 
@@ -253,7 +254,7 @@ static void __ieee80211_scan_completed(struct ieee80211_hw *hw, bool aborted,
 	if (WARN_ON(!local->scan_req))
 		return;
 
-	if (was_hw_scan && !aborted && ieee80211_prep_hw_scan(local)) {
+	if (hw_scan && !aborted && ieee80211_prep_hw_scan(local)) {
 		int rc;
 
 		rc = drv_hw_scan(local,
@@ -271,7 +272,7 @@ static void __ieee80211_scan_completed(struct ieee80211_hw *hw, bool aborted,
 	if (local->scan_req != local->int_scan_req)
 		cfg80211_scan_done(local->scan_req, aborted);
 	local->scan_req = NULL;
-	rcu_assign_pointer(local->scan_sdata, NULL);
+	RCU_INIT_POINTER(local->scan_sdata, NULL);
 
 	local->scanning = 0;
 	local->scan_channel = NULL;
@@ -279,7 +280,7 @@ static void __ieee80211_scan_completed(struct ieee80211_hw *hw, bool aborted,
 	/* Set power back to normal operating levels. */
 	ieee80211_hw_config(local, 0);
 
-	if (!was_hw_scan) {
+	if (!hw_scan) {
 		ieee80211_configure_filter(local);
 		drv_sw_scan_complete(local);
 		ieee80211_offchannel_return(local);
@@ -290,7 +291,8 @@ static void __ieee80211_scan_completed(struct ieee80211_hw *hw, bool aborted,
 	ieee80211_mlme_notify_scan_completed(local);
 	ieee80211_ibss_notify_scan_completed(local);
 	ieee80211_mesh_notify_scan_completed(local);
-	ieee80211_start_next_roc(local);
+	if (was_scanning)
+		ieee80211_start_next_roc(local);
 }
 
 void ieee80211_scan_completed(struct ieee80211_hw *hw, bool aborted)
@@ -523,7 +525,7 @@ static int __ieee80211_start_scan(struct ieee80211_sub_if_data *sdata,
 		ieee80211_recalc_idle(local);
 
 		local->scan_req = NULL;
-		rcu_assign_pointer(local->scan_sdata, NULL);
+		RCU_INIT_POINTER(local->scan_sdata, NULL);
 	}
 
 	return rc;
@@ -688,7 +690,7 @@ void ieee80211_scan_work(struct work_struct *work)
 		container_of(work, struct ieee80211_local, scan_work.work);
 	struct ieee80211_sub_if_data *sdata;
 	unsigned long next_delay = 0;
-	bool aborted, hw_scan;
+	bool aborted;
 
 	mutex_lock(&local->mtx);
 
@@ -714,7 +716,7 @@ void ieee80211_scan_work(struct work_struct *work)
 		int rc;
 
 		local->scan_req = NULL;
-		rcu_assign_pointer(local->scan_sdata, NULL);
+		RCU_INIT_POINTER(local->scan_sdata, NULL);
 
 		rc = __ieee80211_start_scan(sdata, req);
 		if (rc) {
@@ -775,8 +777,7 @@ void ieee80211_scan_work(struct work_struct *work)
 	goto out;
 
 out_complete:
-	hw_scan = test_bit(SCAN_HW_SCANNING, &local->scanning);
-	__ieee80211_scan_completed(&local->hw, aborted, hw_scan);
+	__ieee80211_scan_completed(&local->hw, aborted);
 out:
 	mutex_unlock(&local->mtx);
 }
@@ -912,7 +913,7 @@ void ieee80211_scan_cancel(struct ieee80211_local *local)
 	 */
 	cancel_delayed_work(&local->scan_work);
 	/* and clean up */
-	__ieee80211_scan_completed(&local->hw, true, false);
+	__ieee80211_scan_completed(&local->hw, true);
 out:
 	mutex_unlock(&local->mtx);
 }
@@ -1011,7 +1012,7 @@ void ieee80211_sched_scan_stopped_work(struct work_struct *work)
 		return;
 	}
 
-	rcu_assign_pointer(local->sched_scan_sdata, NULL);
+	RCU_INIT_POINTER(local->sched_scan_sdata, NULL);
 
 	mutex_unlock(&local->mtx);
 

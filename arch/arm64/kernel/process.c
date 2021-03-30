@@ -30,6 +30,7 @@
 #include <linux/user.h>
 #include <linux/delay.h>
 #include <linux/reboot.h>
+#include <linux/console.h>
 #include <linux/interrupt.h>
 #include <linux/kallsyms.h>
 #include <linux/init.h>
@@ -51,11 +52,40 @@
 #include <asm/mmu_context.h>
 #include <asm/processor.h>
 #include <asm/stacktrace.h>
+#include <asm/tlbflush.h>
 
 #ifdef CONFIG_CC_STACKPROTECTOR
 #include <linux/stackprotector.h>
 unsigned long __stack_chk_guard __read_mostly;
 EXPORT_SYMBOL(__stack_chk_guard);
+#endif
+
+#ifdef CONFIG_ARM64_FLUSH_CONSOLE_ON_RESTART
+void arm_machine_flush_console(void)
+{
+	printk("\n");
+	pr_emerg("Restarting %s\n", linux_banner);
+	if (console_trylock()) {
+		console_unlock();
+		return;
+	}
+
+	mdelay(50);
+
+	local_irq_disable();
+	if (!console_trylock())
+		pr_emerg("arm_restart: Console was locked! Busting\n");
+	else
+		pr_emerg("arm_restart: Console was locked!\n");
+	if (is_console_suspended())
+		resume_console();
+	else
+		console_unlock();
+}
+#else
+void arm_machine_flush_console(void)
+{
+}
 #endif
 
 static void setup_restart(void)
@@ -111,7 +141,8 @@ void arch_cpu_idle(void)
 	 * tricks
 	 */
 	if (cpuidle_idle_call()) {
-		cpu_do_idle();
+		if (!need_resched())
+			cpu_do_idle();
 		local_irq_enable();
 	}
 }
@@ -189,6 +220,10 @@ void machine_restart(char *cmd)
 	/* Disable interrupts first */
 	local_irq_disable();
 	smp_send_stop();
+
+	/* Flush the console to make sure all the relevant messages make it
+	 * out to the console drivers */
+	arm_machine_flush_console();
 
 	/* Now call the architecture specific reboot code. */
 	if (arm_pm_restart)
@@ -411,6 +446,12 @@ static void tls_thread_switch(struct task_struct *next)
 	"	msr	tpidrro_el0, %1"
 	: : "r" (tpidr), "r" (tpidrro));
 }
+static void tlb_flush_thread(struct task_struct *prev)
+{
+/* Flush the prev task&apos;s TLB entries */
+if (prev->mm)
+flush_tlb_mm(prev->mm);
+}
 
 /*
  * Thread switching.
@@ -424,6 +465,7 @@ struct task_struct *__switch_to(struct task_struct *prev,
 	tls_thread_switch(next);
 	hw_breakpoint_thread_switch(next);
 	contextidr_thread_switch(next);
+	tlb_flush_thread(prev);
 
 	/*
 	 * Complete any pending TLB or cache maintenance on this CPU in case
@@ -462,8 +504,6 @@ unsigned long get_wchan(struct task_struct *p)
 
 unsigned long arch_align_stack(unsigned long sp)
 {
-	if (!(current->personality & ADDR_NO_RANDOMIZE) && randomize_va_space)
-		sp -= get_random_int() & ~PAGE_MASK;
 	return sp & ~0xf;
 }
 

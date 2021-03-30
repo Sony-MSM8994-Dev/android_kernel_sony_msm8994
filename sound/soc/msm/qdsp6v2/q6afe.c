@@ -309,6 +309,7 @@ int afe_get_port_type(u16 port_id)
 	case SLIMBUS_2_RX:
 	case SLIMBUS_3_RX:
 	case SLIMBUS_4_RX:
+	case SLIMBUS_5_RX:
 	case SLIMBUS_6_RX:
 	case INT_BT_SCO_RX:
 	case INT_BT_A2DP_RX:
@@ -1206,6 +1207,18 @@ static int afe_aanc_mod_enable(void *apr, uint16_t tx_port, uint16_t enable)
 		pr_err("%s: port id: 0x%x ret %d\n", __func__, tx_port, ret);
 		return -EINVAL;
 	}
+	pr_debug("%s: AANC sample rate tx rate: %d rx rate %d\n",
+		__func__, this_afe.aanc_info.aanc_tx_port_sample_rate,
+	       this_afe.aanc_info.aanc_rx_port_sample_rate);
+	/*
+	 * If aanc tx sample rate or rx sample rate is zero, skip aanc
+	 * configuration as AFE resampler will fail for invalid sample
+	 * rates.
+	 */
+	if (!this_afe.aanc_info.aanc_tx_port_sample_rate ||
+	    !this_afe.aanc_info.aanc_rx_port_sample_rate) {
+		return -EINVAL;
+	}
 
 	cfg.hdr.hdr_field = APR_HDR_FIELD(APR_MSG_TYPE_SEQ_CMD,
 			APR_HDR_LEN(APR_HDR_SIZE), APR_PKT_VER);
@@ -1839,6 +1852,7 @@ int afe_port_start(u16 port_id, union afe_port_config *afe_config,
 	case SLIMBUS_3_TX:
 	case SLIMBUS_4_RX:
 	case SLIMBUS_4_TX:
+	case SLIMBUS_5_RX:
 	case SLIMBUS_5_TX:
 	case SLIMBUS_6_RX:
 	case SLIMBUS_6_TX:
@@ -1886,6 +1900,23 @@ int afe_port_start(u16 port_id, union afe_port_config *afe_config,
 	port_index = afe_get_port_index(port_id);
 	if ((port_index >= 0) && (port_index < AFE_MAX_PORTS)) {
 		this_afe.afe_sample_rates[port_index] = rate;
+		/*
+		 * If afe_port_start() for tx port called before
+		 * rx port, then aanc rx sample rate is zero. So,
+		 * AANC state machine in AFE will not get triggered.
+		 * Make sure to check whether aanc is active during
+		 * afe_port_start() for rx port and if aanc rx
+		 * sample rate is zero, call afe_aanc_start to configure
+		 * aanc with valid sample rates.
+		 */
+		if (this_afe.aanc_info.aanc_active &&
+		    !this_afe.aanc_info.aanc_rx_port_sample_rate) {
+			this_afe.aanc_info.aanc_rx_port_sample_rate =
+				this_afe.afe_sample_rates[port_index];
+			ret = afe_aanc_start(this_afe.aanc_info.aanc_tx_port,
+					this_afe.aanc_info.aanc_rx_port);
+			pr_debug("%s: afe_aanc_start ret %d\n", __func__, ret);
+		}
 	} else {
 		pr_err("%s: Invalid port index %d\n", __func__, port_index);
 		ret = -EINVAL;
@@ -1941,6 +1972,7 @@ int afe_get_port_index(u16 port_id)
 	case RT_PROXY_PORT_001_TX: return IDX_RT_PROXY_PORT_001_TX;
 	case SLIMBUS_4_RX: return IDX_SLIMBUS_4_RX;
 	case SLIMBUS_4_TX: return IDX_SLIMBUS_4_TX;
+	case SLIMBUS_5_RX: return IDX_SLIMBUS_5_RX;
 	case SLIMBUS_5_TX: return IDX_SLIMBUS_5_TX;
 	case SLIMBUS_6_RX: return IDX_SLIMBUS_6_RX;
 	case SLIMBUS_6_TX: return IDX_SLIMBUS_6_TX;
@@ -2056,6 +2088,7 @@ int afe_open(u16 port_id,
 	case SLIMBUS_3_TX:
 	case SLIMBUS_4_RX:
 	case SLIMBUS_4_TX:
+	case SLIMBUS_5_RX:
 	case SLIMBUS_6_RX:
 	case SLIMBUS_6_TX:
 		cfg_type = AFE_PARAM_ID_SLIMBUS_CONFIG;
@@ -3448,6 +3481,7 @@ int afe_validate_port(u16 port_id)
 	case RT_PROXY_PORT_001_TX:
 	case SLIMBUS_4_RX:
 	case SLIMBUS_4_TX:
+	case SLIMBUS_5_RX:
 	case SLIMBUS_6_RX:
 	case SLIMBUS_6_TX:
 	case AFE_PORT_ID_PRIMARY_MI2S_RX:
@@ -4021,6 +4055,9 @@ int afe_spk_prot_get_calib_data(struct afe_spkr_prot_get_vi_calib *calib_resp)
 		pr_err("%s: wait_event timeout\n", __func__);
 		ret = -EINVAL;
 		goto fail_cmd;
+	} else {
+		/* set ret to 0 as no timeout happened */
+		ret = 0;
 	}
 	if (atomic_read(&this_afe.status) != 0) {
 		pr_err("%s: config cmd failed\n", __func__);
@@ -4379,6 +4416,7 @@ static int afe_map_cal_data(int32_t cal_type,
 	}
 
 
+	mutex_lock(&this_afe.afe_cmd_lock);
 	atomic_set(&this_afe.mem_map_cal_index, cal_index);
 	ret = afe_cmd_memory_map(cal_block->cal_data.paddr,
 			cal_block->map_data.map_size);
@@ -4391,10 +4429,12 @@ static int afe_map_cal_data(int32_t cal_type,
 			__func__,
 			&cal_block->cal_data.paddr,
 			cal_block->map_data.map_size);
+		mutex_unlock(&this_afe.afe_cmd_lock);
 		goto done;
 	}
 	cal_block->map_data.q6map_handle = atomic_read(&this_afe.
 		mem_map_cal_handles[cal_index]);
+	mutex_unlock(&this_afe.afe_cmd_lock);
 done:
 	return ret;
 }

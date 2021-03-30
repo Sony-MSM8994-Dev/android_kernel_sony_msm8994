@@ -495,8 +495,10 @@ static int profile_enable_set(void *data, u64 val)
 	if (val && profile->log_buffer == NULL) {
 		/* allocate profile_log_buffer the first time enabled */
 		profile->log_buffer = vmalloc(ADRENO_PROFILE_LOG_BUF_SIZE);
-		if (profile->log_buffer == NULL)
+		if (profile->log_buffer == NULL) {
+			mutex_unlock(&device->mutex);
 			return -ENOMEM;
+		}
 		profile->log_tail = profile->log_buffer;
 		profile->log_head = profile->log_buffer;
 	}
@@ -939,7 +941,7 @@ static ssize_t profile_pipe_print(struct file *filep, char __user *ubuf,
 
 		mutex_unlock(&device->mutex);
 		set_current_state(TASK_INTERRUPTIBLE);
-		schedule_timeout(HZ / 10);
+		schedule_timeout(msecs_to_jiffies(100));
 		mutex_lock(&device->mutex);
 
 		if (signal_pending(current)) {

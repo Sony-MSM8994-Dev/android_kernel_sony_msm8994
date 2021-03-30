@@ -165,6 +165,12 @@ static inline void tracepoint_synchronize_unregister(void)
  * Make sure the alignment of the structure in the __tracepoints section will
  * not add unwanted padding between the beginning of the section and the
  * structure. Force alignment to the same alignment as the section start.
+ *
+ * When lockdep is enabled, we make sure to always do the RCU portions of
+ * the tracepoint code, regardless of whether tracing is on or we match the
+ * condition.  This lets us find RCU issues triggered with tracepoints even
+ * when this tracepoint is off.  This code has no purpose other than poking
+ * RCU a bit.
  */
 #define __DECLARE_TRACE(name, proto, args, cond, data_proto, data_args) \
 	extern struct tracepoint __tracepoint_##name;			\
@@ -175,6 +181,11 @@ static inline void tracepoint_synchronize_unregister(void)
 				TP_PROTO(data_proto),			\
 				TP_ARGS(data_args),			\
 				TP_CONDITION(cond),,);			\
+		if (IS_ENABLED(CONFIG_LOCKDEP) && (cond)) {		\
+			rcu_read_lock_sched_notrace();			\
+			rcu_dereference_sched(__tracepoint_##name.funcs);\
+			rcu_read_unlock_sched_notrace();		\
+		}							\
 	}								\
 	__DECLARE_TRACE_RCU(name, PARAMS(proto), PARAMS(args),		\
 		PARAMS(cond), PARAMS(data_proto), PARAMS(data_args))	\
@@ -193,6 +204,11 @@ static inline void tracepoint_synchronize_unregister(void)
 	static inline void						\
 	check_trace_callback_type_##name(void (*cb)(data_proto))	\
 	{								\
+	}								\
+	static inline bool						\
+	trace_##name##_enabled(void)					\
+	{								\
+		return static_key_false(&__tracepoint_##name.key);	\
 	}
 
 /*
@@ -238,6 +254,11 @@ static inline void tracepoint_synchronize_unregister(void)
 	}								\
 	static inline void check_trace_callback_type_##name(void (*cb)(data_proto)) \
 	{								\
+	}								\
+	static inline bool						\
+	trace_##name##_enabled(void)					\
+	{								\
+		return false;						\
 	}
 
 #define DEFINE_TRACE_FN(name, reg, unreg)
@@ -287,7 +308,7 @@ static inline void tracepoint_synchronize_unregister(void)
  * For use with the TRACE_EVENT macro:
  *
  * We define a tracepoint, its arguments, its printk format
- * and its 'fast binay record' layout.
+ * and its 'fast binary record' layout.
  *
  * Firstly, name your tracepoint via TRACE_EVENT(name : the
  * 'subsystem_event' notation is fine.

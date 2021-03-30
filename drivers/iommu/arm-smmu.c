@@ -388,8 +388,8 @@ struct arm_smmu_cfg {
 };
 #define INVALID_IRPTNDX			0xff
 
-#define ARM_SMMU_CB_ASID(cfg)		((cfg)->cbndx)
-#define ARM_SMMU_CB_VMID(cfg)		((cfg)->cbndx + 1)
+#define ARM_SMMU_CB_ASID(cfg)		((cfg)->cbndx + 1)
+#define ARM_SMMU_CB_VMID(cfg)		((cfg)->cbndx + 2)
 
 struct arm_smmu_domain {
 	struct arm_smmu_device		*smmu;
@@ -1604,6 +1604,7 @@ static struct iommu_ops arm_smmu_ops = {
 	.detach_dev	= arm_smmu_detach_dev,
 	.map		= arm_smmu_map,
 	.unmap		= arm_smmu_unmap,
+	.map_sg		= default_iommu_map_sg,
 	.iova_to_phys	= arm_smmu_iova_to_phys,
 	.domain_has_cap	= arm_smmu_domain_has_cap,
 	.add_device	= arm_smmu_add_device,
@@ -1723,7 +1724,7 @@ static int arm_smmu_device_cfg_probe(struct arm_smmu_device *smmu)
 	if (!(smmu->features &
 		(ARM_SMMU_FEAT_TRANS_S1 | ARM_SMMU_FEAT_TRANS_S2 |
 		 ARM_SMMU_FEAT_TRANS_NESTED))) {
-		dev_err(smmu->dev, "\tno translation support!\n");
+		dev_err(smmu->dev, "\tno translation support (id0=%x)!\n", id);
 		return -ENODEV;
 	}
 
@@ -1808,6 +1809,13 @@ static int arm_smmu_device_cfg_probe(struct arm_smmu_device *smmu)
 	/* The stage-2 output mask is also applied for bypass */
 	size = arm_smmu_id_size_to_bits((id >> ID2_OAS_SHIFT) & ID2_OAS_MASK);
 	smmu->s2_output_size = min_t(unsigned long, PHYS_MASK_SHIFT, size);
+
+	/*
+	 * What the page table walker can address actually depends on which
+	 * descriptor format is in use, but since a) we don't know that yet,
+	 * and b) it can vary per context bank, this will have to do...
+	 */
+	dma_set_mask_and_coherent(smmu->dev, DMA_BIT_MASK(size));
 
 	if (smmu->version == 1) {
 		smmu->input_size = 32;

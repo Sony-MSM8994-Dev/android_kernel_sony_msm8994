@@ -278,12 +278,27 @@ static int pci_call_probe(struct pci_driver *drv, struct pci_dev *dev,
 	int error, node;
 	struct drv_dev_and_id ddi = { drv, dev, id };
 
-	/* Execute driver initialization on node where the device's
-	   bus is attached to.  This way the driver likely allocates
-	   its local memory on the right node without any need to
-	   change it. */
+	/*
+	 * Execute driver initialization on node where the device is
+	 * attached.  This way the driver likely allocates its local memory
+	 * on the right node.
+	 */
 	node = dev_to_node(&dev->dev);
-	if (node >= 0) {
+
+	/*
+	 * On NUMA systems, we are likely to call a PF probe function using
+	 * work_on_cpu().  If that probe calls pci_enable_sriov() (which
+	 * adds the VF devices via pci_bus_add_device()), we may re-enter
+	 * this function to call the VF probe function.  Calling
+	 * work_on_cpu() again will cause a lockdep warning.  Since VFs are
+	 * always on the same node as the PF, we can work around this by
+	 * avoiding work_on_cpu() when we're already on the correct node.
+	 *
+	 * Preemption is enabled, so it's theoretically unsafe to use
+	 * numa_node_id(), but even if we run the probe function on the
+	 * wrong node, it should be functionally correct.
+	 */
+	if (node >= 0 && node != numa_node_id()) {
 		int cpu;
 
 		get_online_cpus();
@@ -295,6 +310,7 @@ static int pci_call_probe(struct pci_driver *drv, struct pci_dev *dev,
 		put_online_cpus();
 	} else
 		error = local_pci_probe(&ddi);
+
 	return error;
 }
 
@@ -586,23 +602,20 @@ static bool pci_has_legacy_pm_support(struct pci_dev *pci_dev)
 static int pci_pm_prepare(struct device *dev)
 {
 	struct device_driver *drv = dev->driver;
-	int error = 0;
 
 	/*
-	 * PCI devices suspended at run time need to be resumed at this
-	 * point, because in general it is necessary to reconfigure them for
-	 * system suspend.  Namely, if the device is supposed to wake up the
-	 * system from the sleep state, we may need to reconfigure it for this
-	 * purpose.  In turn, if the device is not supposed to wake up the
-	 * system from the sleep state, we'll have to prevent it from signaling
-	 * wake-up.
+	 * Devices having power.ignore_children set may still be necessary for
+	 * suspending their children in the next phase of device suspend.
 	 */
-	pm_runtime_resume(dev);
+	if (dev->power.ignore_children)
+		pm_runtime_resume(dev);
 
-	if (drv && drv->pm && drv->pm->prepare)
-		error = drv->pm->prepare(dev);
-
-	return error;
+	if (drv && drv->pm && drv->pm->prepare) {
+		int error = drv->pm->prepare(dev);
+		if (error)
+			return error;
+	}
+	return pci_dev_keep_suspended(to_pci_dev(dev));
 }
 
 static void pci_pm_complete(struct device *dev)
@@ -634,6 +647,16 @@ static int pci_pm_suspend(struct device *dev)
 		pci_pm_default_suspend(pci_dev);
 		goto Fixup;
 	}
+
+	/*
+	 * PCI devices suspended at run time need to be resumed at this point,
+	 * because in general it is necessary to reconfigure them for system
+	 * suspend.  Namely, if the device is supposed to wake up the system
+	 * from the sleep state, we may need to reconfigure it for this purpose.
+	 * In turn, if the device is not supposed to wake up the system from the
+	 * sleep state, we'll have to prevent it from signaling wake-up.
+	 */
+	pm_runtime_resume(dev);
 
 	pci_dev->state_saved = false;
 	if (pm->suspend) {
@@ -782,6 +805,14 @@ static int pci_pm_freeze(struct device *dev)
 		return 0;
 	}
 
+	/*
+	 * This used to be done in pci_pm_prepare() for all devices and some
+	 * drivers may depend on it, so do it here.  Ideally, runtime-suspended
+	 * devices should not be touched during freeze/thaw transitions,
+	 * however.
+	 */
+	pm_runtime_resume(dev);
+
 	pci_dev->state_saved = false;
 	if (pm->freeze) {
 		int error;
@@ -829,7 +860,13 @@ static int pci_pm_thaw_noirq(struct device *dev)
 	if (pci_has_legacy_pm_support(pci_dev))
 		return pci_legacy_resume_early(dev);
 
-	pci_update_current_state(pci_dev, PCI_D0);
+	/*
+	 * pci_restore_state() requires the device to be in D0 (because of MSI
+	 * restoration among other things), so force it into D0 in case the
+	 * driver's "freeze" callbacks put it into a low-power state directly.
+	 */
+	pci_set_power_state(pci_dev, PCI_D0);
+	pci_restore_state(pci_dev);
 
 	if (drv && drv->pm && drv->pm->thaw_noirq)
 		error = drv->pm->thaw_noirq(dev);
@@ -870,6 +907,9 @@ static int pci_pm_poweroff(struct device *dev)
 		pci_pm_default_suspend(pci_dev);
 		goto Fixup;
 	}
+
+	/* The reason to do that is the same as in pci_pm_suspend(). */
+	pm_runtime_resume(dev);
 
 	pci_dev->state_saved = false;
 	if (pm->poweroff) {

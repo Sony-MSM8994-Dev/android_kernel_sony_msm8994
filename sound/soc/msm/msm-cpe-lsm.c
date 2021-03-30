@@ -69,7 +69,8 @@ static struct snd_pcm_hardware msm_pcm_hardware_listen = {
 		 SNDRV_PCM_INFO_INTERLEAVED |
 		 SNDRV_PCM_INFO_PAUSE |
 		 SNDRV_PCM_INFO_RESUME),
-	.formats = (SNDRV_PCM_FMTBIT_S16_LE),
+	.formats = (SNDRV_PCM_FMTBIT_S16_LE |
+		    SNDRV_PCM_FMTBIT_S24_LE),
 	.rates = SNDRV_PCM_RATE_16000,
 	.rate_min = 16000,
 	.rate_max = 16000,
@@ -523,6 +524,7 @@ static int msm_cpe_lsm_open(struct snd_pcm_substream *substream)
 	}
 
 	init_waitqueue_head(&lsm_d->event_wait);
+	init_waitqueue_head(&lsm_d->lsm_session->lab.period_wait);
 	atomic_set(&lsm_d->event_avail, 0);
 	atomic_set(&lsm_d->event_stop, 0);
 	runtime->private_data = lsm_d;
@@ -1455,7 +1457,7 @@ static int msm_cpe_lsm_ioctl_compat(struct snd_pcm_substream *substream,
 					event_status->payload_size;
 				memcpy(udata_32->payload,
 				       event_status->payload,
-				       u_pld_size);
+				       event_status->payload_size);
 			}
 		}
 
@@ -1692,6 +1694,9 @@ static int msm_cpe_lsm_hwparams(struct snd_pcm_substream *substream,
 	lab_hw_params->sample_rate = params_rate(params);
 	if (params_format(params) == SNDRV_PCM_FORMAT_S16_LE)
 		lab_hw_params->sample_size = 16;
+	else if (params_format(params) ==
+		 SNDRV_PCM_FORMAT_S24_LE)
+		lab_hw_params->sample_size = 24;
 	else {
 		pr_err("%s: Invalid Format\n", __func__);
 		return -EINVAL;
@@ -1701,7 +1706,7 @@ static int msm_cpe_lsm_hwparams(struct snd_pcm_substream *substream,
 		 __func__, params_format(params), params_buffer_bytes(params),
 		 params_periods(params), params_channels(params),
 		 params_period_bytes(params), params_period_size(params));
-return 0;
+	return 0;
 }
 
 static snd_pcm_uframes_t msm_cpe_lsm_pointer(

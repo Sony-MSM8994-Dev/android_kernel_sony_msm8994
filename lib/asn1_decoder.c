@@ -142,7 +142,7 @@ error:
  * @decoder: The decoder definition (produced by asn1_compiler)
  * @context: The caller's context (to be passed to the action functions)
  * @data: The encoded data
- * @datasize: The size of the encoded data
+ * @datalen: The size of the encoded data
  *
  * Decode BER/DER/CER encoded ASN.1 data according to a bytecode pattern
  * produced by asn1_compiler.  Action functions are called on marked tags to
@@ -220,7 +220,7 @@ next_op:
 		hdr = 2;
 
 		/* Extract a tag from the data */
-		if (unlikely(dp >= datalen - 1))
+		if (unlikely(datalen - dp < 2))
 			goto data_overrun_error;
 		tag = data[dp++];
 		if (unlikely((tag & 0x1f) == ASN1_LONG_TAG))
@@ -266,7 +266,7 @@ next_op:
 				int n = len - 0x80;
 				if (unlikely(n > 2))
 					goto length_too_long;
-				if (unlikely(dp >= datalen - n))
+				if (unlikely(n > datalen - dp))
 					goto data_overrun_error;
 				hdr += n;
 				for (len = 0; n > 0; n--) {
@@ -427,6 +427,8 @@ next_op:
 			else
 				act = machine[pc + 1];
 			ret = actions[act](context, hdr, 0, data + tdp, len);
+			if (ret < 0)
+				return ret;
 		}
 		pc += asn1_op_lengths[op];
 		goto next_op;

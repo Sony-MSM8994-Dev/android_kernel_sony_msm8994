@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -181,8 +181,14 @@ static void msm_spm_config_q2s(struct msm_spm_device *dev, unsigned int mode)
 	}
 
 	val = spm_legacy_mode << 2 | qchannel_ignore << 1;
-	__raw_writel(val, dev->q2s_reg);
-	mb();
+
+	if (dev->reg_data.reg_shadow[MSM_SPM_REG_SAW_SPM_CTL] & 0x01) {
+		msm_spm_drv_set_spm_enable(&dev->reg_data, false);
+		spm_raw_write(val, dev->q2s_reg);
+		msm_spm_drv_set_spm_enable(&dev->reg_data, true);
+	} else {
+		spm_raw_write(val, dev->q2s_reg);
+	}
 }
 
 static int msm_spm_dev_set_low_power_mode(struct msm_spm_device *dev,
@@ -288,8 +294,7 @@ int msm_spm_turn_on_cpu_rail(struct device_node *vctl_node,
 		 * bit[1] = qchannel_ignore = 1
 		 * bit[2] = spm_legacy_mode = 0
 		 */
-		writel_relaxed(0x2, base);
-		mb();
+		spm_write_relaxed(0x2, base);
 		iounmap(base);
 	}
 
@@ -302,14 +307,12 @@ int msm_spm_turn_on_cpu_rail(struct device_node *vctl_node,
 
 	/* Set the CPU supply regulator voltage */
 	val = (val & 0xFF);
-	writel_relaxed(val, base + vctl_offset);
-	mb();
+	spm_write_relaxed(val, base + vctl_offset);
 	udelay(timeout);
 
 	/* Enable the CPU supply regulator*/
 	val = 0x30080;
-	writel_relaxed(val, base + vctl_offset);
-	mb();
+	spm_write_relaxed(val, base + vctl_offset);
 	udelay(timeout);
 
 	iounmap(base);
@@ -540,21 +543,21 @@ static int msm_spm_dev_probe(struct platform_device *pdev)
 	};
 
 	struct spm_of spm_of_data[] = {
-		{"qcom,saw2-cfg", MSM_SPM_REG_SAW2_CFG},
-		{"qcom,saw2-avs-ctl", MSM_SPM_REG_SAW2_AVS_CTL},
-		{"qcom,saw2-avs-hysteresis", MSM_SPM_REG_SAW2_AVS_HYSTERESIS},
-		{"qcom,saw2-avs-limit", MSM_SPM_REG_SAW2_AVS_LIMIT},
-		{"qcom,saw2-avs-dly", MSM_SPM_REG_SAW2_AVS_DLY},
-		{"qcom,saw2-spm-dly", MSM_SPM_REG_SAW2_SPM_DLY},
-		{"qcom,saw2-spm-ctl", MSM_SPM_REG_SAW2_SPM_CTL},
-		{"qcom,saw2-pmic-data0", MSM_SPM_REG_SAW2_PMIC_DATA_0},
-		{"qcom,saw2-pmic-data1", MSM_SPM_REG_SAW2_PMIC_DATA_1},
-		{"qcom,saw2-pmic-data2", MSM_SPM_REG_SAW2_PMIC_DATA_2},
-		{"qcom,saw2-pmic-data3", MSM_SPM_REG_SAW2_PMIC_DATA_3},
-		{"qcom,saw2-pmic-data4", MSM_SPM_REG_SAW2_PMIC_DATA_4},
-		{"qcom,saw2-pmic-data5", MSM_SPM_REG_SAW2_PMIC_DATA_5},
-		{"qcom,saw2-pmic-data6", MSM_SPM_REG_SAW2_PMIC_DATA_6},
-		{"qcom,saw2-pmic-data7", MSM_SPM_REG_SAW2_PMIC_DATA_7},
+		{"qcom,saw2-cfg", MSM_SPM_REG_SAW_CFG},
+		{"qcom,saw2-avs-ctl", MSM_SPM_REG_SAW_AVS_CTL},
+		{"qcom,saw2-avs-hysteresis", MSM_SPM_REG_SAW_AVS_HYSTERESIS},
+		{"qcom,saw2-avs-limit", MSM_SPM_REG_SAW_AVS_LIMIT},
+		{"qcom,saw2-avs-dly", MSM_SPM_REG_SAW_AVS_DLY},
+		{"qcom,saw2-spm-dly", MSM_SPM_REG_SAW_SPM_DLY},
+		{"qcom,saw2-spm-ctl", MSM_SPM_REG_SAW_SPM_CTL},
+		{"qcom,saw2-pmic-data0", MSM_SPM_REG_SAW_PMIC_DATA_0},
+		{"qcom,saw2-pmic-data1", MSM_SPM_REG_SAW_PMIC_DATA_1},
+		{"qcom,saw2-pmic-data2", MSM_SPM_REG_SAW_PMIC_DATA_2},
+		{"qcom,saw2-pmic-data3", MSM_SPM_REG_SAW_PMIC_DATA_3},
+		{"qcom,saw2-pmic-data4", MSM_SPM_REG_SAW_PMIC_DATA_4},
+		{"qcom,saw2-pmic-data5", MSM_SPM_REG_SAW_PMIC_DATA_5},
+		{"qcom,saw2-pmic-data6", MSM_SPM_REG_SAW_PMIC_DATA_6},
+		{"qcom,saw2-pmic-data7", MSM_SPM_REG_SAW_PMIC_DATA_7},
 	};
 
 	struct mode_of {
@@ -641,14 +644,6 @@ static int msm_spm_dev_probe(struct platform_device *pdev)
 	key = "qcom,use-qchannel-for-wfi";
 	dev->use_qchannel_for_wfi = of_property_read_bool(node, key);
 
-	/*
-	 * At system boot, cpus and or clusters can remain in reset. CCI SPM
-	 * will not be triggered unless SPM_LEGACY_MODE bit is set for the
-	 * cluster in reset. Initialize q2s registers and set the
-	 * SPM_LEGACY_MODE bit.
-	 */
-	msm_spm_config_q2s(dev, MSM_SPM_MODE_POWER_COLLAPSE);
-
 	for (i = 0; i < ARRAY_SIZE(spm_of_data); i++) {
 		ret = of_property_read_u32(node, spm_of_data[i].key, &val);
 		if (ret)
@@ -686,13 +681,21 @@ static int msm_spm_dev_probe(struct platform_device *pdev)
 	cpu = get_cpu_id(pdev->dev.of_node);
 
 	/* For CPUs that are online, the SPM has to be programmed for
-	 * clockgating mode to ensure that it can use SPM for entering these
-	 * low power modes.
+	 * clockgating mode to ensure that it can use SPM for entering
+	 * these low power modes.
 	 */
 	get_online_cpus();
 	if ((cpu >= 0) && (cpu < num_possible_cpus()) && (cpu_online(cpu)))
-		msm_spm_config_low_power_mode(dev, MSM_SPM_MODE_CLOCK_GATING,
-				false);
+		msm_spm_config_low_power_mode(dev,
+			MSM_SPM_MODE_CLOCK_GATING, false);
+	else
+		/*
+		* At system boot, cpus and or clusters can remain in reset.
+		* CCI SPM will not be triggered unless SPM_LEGACY_MODE bit
+		* is set for the cluster in reset. Initialize q2s registers
+		* and set the SPM_LEGACY_MODE bit.
+		*/
+		msm_spm_config_q2s(dev, MSM_SPM_MODE_POWER_COLLAPSE);
 	put_online_cpus();
 
 	return ret;
@@ -704,7 +707,8 @@ fail:
 			per_cpu(cpu_vctl_device, cpu) = ERR_PTR(ret);
 	}
 
-	pr_err("%s: CPU%d SPM device probe failed: %d\n", __func__, cpu, ret);
+	pr_err("%s: CPU%d SPM device probe failed: %d\n", __func__,
+		cpu, ret);
 
 	return ret;
 }

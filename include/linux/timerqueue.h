@@ -16,12 +16,12 @@ struct timerqueue_head {
 };
 
 
-extern void timerqueue_add(struct timerqueue_head *head,
-				struct timerqueue_node *node);
-extern void timerqueue_del(struct timerqueue_head *head,
-				struct timerqueue_node *node);
+extern bool timerqueue_add(struct timerqueue_head *head,
+			   struct timerqueue_node *node);
+extern bool timerqueue_del(struct timerqueue_head *head,
+			   struct timerqueue_node *node);
 extern struct timerqueue_node *timerqueue_iterate_next(
-						struct timerqueue_node *node);
+				struct timerqueue_node *node);
 
 /**
  * timerqueue_getnext - Returns the timer with the earliest expiration time

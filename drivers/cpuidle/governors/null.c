@@ -35,6 +35,9 @@ static struct cpuidle_governor null_governor = {
 	.owner =	THIS_MODULE,
 };
 
+/**
+ * init_null - initializes the governor
+ */
 static int __init init_null(void)
 {
 	return cpuidle_register_governor(&null_governor);

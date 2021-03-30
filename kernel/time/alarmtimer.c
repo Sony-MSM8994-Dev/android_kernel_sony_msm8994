@@ -34,6 +34,9 @@
 #include <linux/suspend.h>
 #include <linux/moduleparam.h>
 
+#ifdef CONFIG_MSM_PM
+#include "lpm-levels.h"
+#endif
 
 /**
  * struct alarm_base - Alarm timer bases
@@ -85,6 +88,7 @@ void power_on_alarm_init(void)
 
 	rtc = alarmtimer_get_rtcdev();
 
+	/* If we have no rtcdev, just return */
 	if (!rtc)
 		return;
 
@@ -395,6 +399,67 @@ static ktime_t alarm_next_expires_remaining(void)
  * set an rtc timer to fire that far into the future, which
  * will wake us from suspend.
  */
+#if defined(CONFIG_RTC_DRV_QPNP) && defined(CONFIG_MSM_PM)
+static int alarmtimer_suspend(struct device *dev)
+{
+	struct rtc_time tm;
+	ktime_t min, now;
+	unsigned long flags;
+	struct rtc_device *rtc;
+	int i;
+	int ret = 0;
+
+	spin_lock_irqsave(&freezer_delta_lock, flags);
+	min = freezer_delta;
+	freezer_delta = ktime_set(0, 0);
+	spin_unlock_irqrestore(&freezer_delta_lock, flags);
+
+	rtc = alarmtimer_get_rtcdev();
+	/* If we have no rtcdev, just return */
+	if (!rtc)
+		return 0;
+
+	/* Find the soonest timer to expire*/
+	for (i = 0; i < ALARM_NUMTYPE; i++) {
+		struct alarm_base *base = &alarm_bases[i];
+		struct timerqueue_node *next;
+		ktime_t delta;
+
+		spin_lock_irqsave(&base->lock, flags);
+		next = timerqueue_getnext(&base->timerqueue);
+		spin_unlock_irqrestore(&base->lock, flags);
+		if (!next)
+			continue;
+		delta = ktime_sub(next->expires, base->gettime());
+		if (!min.tv64 || (delta.tv64 < min.tv64))
+			min = delta;
+	}
+	if (min.tv64 == 0)
+		return 0;
+
+	if (ktime_to_ns(min) < 2 * NSEC_PER_SEC) {
+		__pm_wakeup_event(ws, 2 * MSEC_PER_SEC);
+		return -EBUSY;
+	}
+
+	/* Setup a timer to fire that far in the future */
+	rtc_timer_cancel(rtc, &rtctimer);
+	rtc_read_time(rtc, &tm);
+	now = rtc_tm_to_ktime(tm);
+	now = ktime_add(now, min);
+	if (poweron_alarm) {
+		uint64_t msec = 0;
+		msec = ktime_to_ms(min);
+		lpm_suspend_wake_time(msec);
+	} else {
+		/* Set alarm, if in the past reject suspend briefly to handle */
+		ret = rtc_timer_start(rtc, &rtctimer, now, ktime_set(0, 0));
+		if (ret < 0)
+			__pm_wakeup_event(ws, MSEC_PER_SEC);
+	}
+	return ret;
+}
+#else
 static int alarmtimer_suspend(struct device *dev)
 {
 	struct rtc_time tm;
@@ -439,6 +504,7 @@ static int alarmtimer_suspend(struct device *dev)
 		__pm_wakeup_event(ws, MSEC_PER_SEC);
 	return ret;
 }
+#endif
 static int alarmtimer_resume(struct device *dev)
 {
 	struct rtc_device *rtc;
@@ -525,8 +591,13 @@ int alarm_start(struct alarm *alarm, ktime_t start)
  */
 int alarm_start_relative(struct alarm *alarm, ktime_t start)
 {
-	struct alarm_base *base = &alarm_bases[alarm->type];
+	struct alarm_base *base;
 
+	if (alarm->type >= ALARM_NUMTYPE) {
+		pr_err("Array out of index\n");
+		return -EINVAL;
+	}
+	base = &alarm_bases[alarm->type];
 	start = ktime_add(start, base->gettime());
 	return alarm_start(alarm, start);
 }
@@ -552,10 +623,15 @@ void alarm_restart(struct alarm *alarm)
  */
 int alarm_try_to_cancel(struct alarm *alarm)
 {
-	struct alarm_base *base = &alarm_bases[alarm->type];
+	struct alarm_base *base;
 	unsigned long flags;
 	int ret;
 
+	if (alarm->type >= ALARM_NUMTYPE) {
+		pr_err("Array out of index\n");
+		return -EINVAL;
+	}
+	base = &alarm_bases[alarm->type];
 	spin_lock_irqsave(&base->lock, flags);
 	ret = hrtimer_try_to_cancel(&alarm->timer);
 	if (ret >= 0)
@@ -731,18 +807,22 @@ static int alarm_timer_create(struct k_itimer *new_timer)
  * @new_timer: k_itimer pointer
  * @cur_setting: itimerspec data to fill
  *
- * Copies the itimerspec data out from the k_itimer
+ * Copies out the current itimerspec data
  */
 static void alarm_timer_get(struct k_itimer *timr,
 				struct itimerspec *cur_setting)
 {
-	memset(cur_setting, 0, sizeof(struct itimerspec));
+	ktime_t relative_expiry_time =
+		alarm_expires_remaining(&(timr->it.alarm.alarmtimer));
 
-	cur_setting->it_interval =
-			ktime_to_timespec(timr->it.alarm.interval);
-	cur_setting->it_value =
-		ktime_to_timespec(timr->it.alarm.alarmtimer.node.expires);
-	return;
+	if (ktime_to_ns(relative_expiry_time) > 0) {
+		cur_setting->it_value = ktime_to_timespec(relative_expiry_time);
+	} else {
+		cur_setting->it_value.tv_sec = 0;
+		cur_setting->it_value.tv_nsec = 0;
+	}
+
+	cur_setting->it_interval = ktime_to_timespec(timr->it.alarm.interval);
 }
 
 /**
@@ -792,6 +872,15 @@ static int alarm_timer_set(struct k_itimer *timr, int flags,
 
 	/* start the timer */
 	timr->it.alarm.interval = timespec_to_ktime(new_setting->it_interval);
+
+	/*
+	 * Rate limit to the tick as a hot fix to prevent DOS. Will be
+	 * mopped up later.
+	 */
+	if (timr->it.alarm.interval.tv64 &&
+			ktime_to_ns(timr->it.alarm.interval) < TICK_NSEC)
+		timr->it.alarm.interval = ktime_set(0, TICK_NSEC);
+
 	exp = timespec_to_ktime(new_setting->it_value);
 	/* Convert (if necessary) to absolute time */
 	if (flags != TIMER_ABSTIME) {

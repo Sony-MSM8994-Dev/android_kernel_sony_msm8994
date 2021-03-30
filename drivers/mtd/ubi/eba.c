@@ -350,6 +350,82 @@ out_unlock:
 	return err;
 }
 
+#ifdef CONFIG_MTD_UBI_FASTMAP
+/**
+ * check_mapping - check and fixup a mapping
+ * @ubi: UBI device description object
+ * @vol: volume description object
+ * @lnum: logical eraseblock number
+ * @pnum: physical eraseblock number
+ *
+ * Checks whether a given mapping is valid. Fastmap cannot track LEB unmap
+ * operations, if such an operation is interrupted the mapping still looks
+ * good, but upon first read an ECC is reported to the upper layer.
+ * Normaly during the full-scan at attach time this is fixed, for Fastmap
+ * we have to deal with it while reading.
+ * If the PEB behind a LEB shows this symthom we change the mapping to
+ * %UBI_LEB_UNMAPPED and schedule the PEB for erasure.
+ *
+ * Returns 0 on success, negative error code in case of failure.
+ */
+static int check_mapping(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
+			 int *pnum)
+{
+	int err;
+	struct ubi_vid_hdr *vid_hdr;
+
+	if (!ubi->fast_attach)
+		return 0;
+
+	vid_hdr = ubi_zalloc_vid_hdr(ubi, GFP_NOFS);
+	if (!vid_hdr)
+		return -ENOMEM;
+
+	err = ubi_io_read_vid_hdr(ubi, *pnum, vid_hdr, 0);
+	if (err > 0 && err != UBI_IO_BITFLIPS) {
+		int torture = 0;
+
+		switch (err) {
+			case UBI_IO_FF:
+			case UBI_IO_FF_BITFLIPS:
+			case UBI_IO_BAD_HDR:
+			case UBI_IO_BAD_HDR_EBADMSG:
+				break;
+			default:
+				ubi_assert(0);
+		}
+
+		if (err == UBI_IO_BAD_HDR_EBADMSG || err == UBI_IO_FF_BITFLIPS)
+			torture = 1;
+
+		down_read(&ubi->fm_sem);
+		vol->eba_tbl[lnum] = UBI_LEB_UNMAPPED;
+		up_read(&ubi->fm_sem);
+		ubi_wl_put_peb(ubi, vol->vol_id, lnum, *pnum, torture);
+
+		*pnum = UBI_LEB_UNMAPPED;
+	} else if (err < 0) {
+		ubi_err("unable to read VID header back from PEB %i: %i",
+			*pnum, err);
+
+		goto out_free;
+	}
+
+	err = 0;
+
+out_free:
+	ubi_free_vid_hdr(ubi, vid_hdr);
+
+	return err;
+}
+#else
+static int check_mapping(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
+		  int *pnum)
+{
+	return 0;
+}
+#endif
+
 /**
  * ubi_eba_read_leb - read data.
  * @ubi: UBI device description object
@@ -381,7 +457,13 @@ int ubi_eba_read_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 		return err;
 
 	pnum = vol->eba_tbl[lnum];
-	if (pnum < 0) {
+	if (pnum >= 0) {
+		err = check_mapping(ubi, vol, lnum, &pnum);
+		if (err < 0)
+			goto out_unlock;
+	}
+
+	if (pnum == UBI_LEB_UNMAPPED) {
 		/*
 		 * The logical eraseblock is not mapped, fill the whole buffer
 		 * with 0xFF bytes. The exception is static volumes for which
@@ -511,6 +593,7 @@ retry:
 	new_pnum = ubi_wl_get_peb(ubi);
 	if (new_pnum < 0) {
 		ubi_free_vid_hdr(ubi, vid_hdr);
+		up_read(&ubi->fm_sem);
 		return new_pnum;
 	}
 
@@ -521,13 +604,16 @@ retry:
 	if (err && err != UBI_IO_BITFLIPS) {
 		if (err > 0)
 			err = -EIO;
+		up_read(&ubi->fm_sem);
 		goto out_put;
 	}
 
 	vid_hdr->sqnum = cpu_to_be64(ubi_next_sqnum(ubi));
 	err = ubi_io_write_vid_hdr(ubi, new_pnum, vid_hdr);
-	if (err)
+	if (err) {
+		up_read(&ubi->fm_sem);
 		goto write_error;
+	}
 
 	data_size = offset + len;
 	mutex_lock(&ubi->buf_mutex);
@@ -536,8 +622,10 @@ retry:
 	/* Read everything before the area where the write failure happened */
 	if (offset > 0) {
 		err = ubi_io_read_data(ubi, ubi->peb_buf, pnum, 0, offset);
-		if (err && err != UBI_IO_BITFLIPS)
+		if (err && err != UBI_IO_BITFLIPS) {
+			up_read(&ubi->fm_sem);
 			goto out_unlock;
+		}
 	}
 
 	memcpy(ubi->peb_buf + offset, buf, len);
@@ -545,13 +633,13 @@ retry:
 	err = ubi_io_write_data(ubi, ubi->peb_buf, new_pnum, 0, data_size);
 	if (err) {
 		mutex_unlock(&ubi->buf_mutex);
+		up_read(&ubi->fm_sem);
 		goto write_error;
 	}
 
 	mutex_unlock(&ubi->buf_mutex);
 	ubi_free_vid_hdr(ubi, vid_hdr);
 
-	down_read(&ubi->fm_sem);
 	vol->eba_tbl[lnum] = new_pnum;
 	up_read(&ubi->fm_sem);
 	ubi_wl_put_peb(ubi, vol_id, lnum, pnum, 1);
@@ -610,6 +698,14 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 
 	pnum = vol->eba_tbl[lnum];
 	if (pnum >= 0) {
+		err = check_mapping(ubi, vol, lnum, &pnum);
+		if (err < 0) {
+			leb_write_unlock(ubi, vol_id, lnum);
+			return err;
+		}
+	}
+
+	if (pnum >= 0) {
 		dbg_eba("write %d bytes at offset %d of LEB %d:%d, PEB %d",
 			len, offset, vol_id, lnum, pnum);
 
@@ -649,6 +745,7 @@ retry:
 	if (pnum < 0) {
 		ubi_free_vid_hdr(ubi, vid_hdr);
 		leb_write_unlock(ubi, vol_id, lnum);
+		up_read(&ubi->fm_sem);
 		return pnum;
 	}
 
@@ -659,6 +756,7 @@ retry:
 	if (err) {
 		ubi_warn(ubi->ubi_num, "failed to write VID header to LEB %d:%d, PEB %d",
 			 vol_id, lnum, pnum);
+		up_read(&ubi->fm_sem);
 		goto write_error;
 	}
 
@@ -667,11 +765,11 @@ retry:
 		if (err) {
 			ubi_warn(ubi->ubi_num, "failed to write %d bytes at offset %d of LEB %d:%d, PEB %d",
 				 len, offset, vol_id, lnum, pnum);
+			up_read(&ubi->fm_sem);
 			goto write_error;
 		}
 	}
 
-	down_read(&ubi->fm_sem);
 	vol->eba_tbl[lnum] = pnum;
 	up_read(&ubi->fm_sem);
 
@@ -770,6 +868,7 @@ retry:
 	if (pnum < 0) {
 		ubi_free_vid_hdr(ubi, vid_hdr);
 		leb_write_unlock(ubi, vol_id, lnum);
+		up_read(&ubi->fm_sem);
 		return pnum;
 	}
 
@@ -780,6 +879,7 @@ retry:
 	if (err) {
 		ubi_warn(ubi->ubi_num, "failed to write VID header to LEB %d:%d, PEB %d",
 			 vol_id, lnum, pnum);
+		up_read(&ubi->fm_sem);
 		goto write_error;
 	}
 
@@ -787,11 +887,11 @@ retry:
 	if (err) {
 		ubi_warn(ubi->ubi_num, "failed to write %d bytes of data to PEB %d",
 			 len, pnum);
+		up_read(&ubi->fm_sem);
 		goto write_error;
 	}
 
 	ubi_assert(vol->eba_tbl[lnum] < 0);
-	down_read(&ubi->fm_sem);
 	vol->eba_tbl[lnum] = pnum;
 	up_read(&ubi->fm_sem);
 
@@ -845,7 +945,7 @@ write_error:
 int ubi_eba_atomic_leb_change(struct ubi_device *ubi, struct ubi_volume *vol,
 			      int lnum, const void *buf, int len)
 {
-	int err, pnum, tries = 0, vol_id = vol->vol_id;
+	int err, pnum, old_pnum, tries = 0, vol_id = vol->vol_id;
 	struct ubi_vid_hdr *vid_hdr;
 	uint32_t crc;
 
@@ -888,6 +988,7 @@ retry:
 	pnum = ubi_wl_get_peb(ubi);
 	if (pnum < 0) {
 		err = pnum;
+		up_read(&ubi->fm_sem);
 		goto out_leb_unlock;
 	}
 
@@ -898,6 +999,7 @@ retry:
 	if (err) {
 		ubi_warn(ubi->ubi_num, "failed to write VID header to LEB %d:%d, PEB %d",
 			 vol_id, lnum, pnum);
+		up_read(&ubi->fm_sem);
 		goto write_error;
 	}
 
@@ -905,18 +1007,19 @@ retry:
 	if (err) {
 		ubi_warn(ubi->ubi_num, "failed to write %d bytes of data to PEB %d",
 			 len, pnum);
+		up_read(&ubi->fm_sem);
 		goto write_error;
 	}
 
-	if (vol->eba_tbl[lnum] >= 0) {
-		err = ubi_wl_put_peb(ubi, vol_id, lnum, vol->eba_tbl[lnum], 0);
+	old_pnum = vol->eba_tbl[lnum];
+	vol->eba_tbl[lnum] = pnum;
+	up_read(&ubi->fm_sem);
+
+	if (old_pnum >= 0) {
+		err = ubi_wl_put_peb(ubi, vol_id, lnum, old_pnum, 0);
 		if (err)
 			goto out_leb_unlock;
 	}
-
-	down_read(&ubi->fm_sem);
-	vol->eba_tbl[lnum] = pnum;
-	up_read(&ubi->fm_sem);
 
 out_leb_unlock:
 	leb_write_unlock(ubi, vol_id, lnum);

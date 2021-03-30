@@ -237,6 +237,8 @@ extern struct device_node *of_find_node_with_property(
 extern struct property *of_find_property(const struct device_node *np,
 					 const char *name,
 					 int *lenp);
+extern int of_property_count_elems_of_size(const struct device_node *np,
+				const char *propname, int elem_size);
 extern int of_property_read_u32_index(const struct device_node *np,
 				       const char *propname,
 				       u32 index, u32 *out_value);
@@ -262,7 +264,7 @@ extern int of_property_read_string_helper(struct device_node *np,
 					      const char **out_strs, size_t sz, int index);
 extern int of_device_is_compatible(const struct device_node *device,
 				   const char *);
-extern int of_device_is_available(const struct device_node *device);
+extern bool of_device_is_available(const struct device_node *device);
 extern const void *of_get_property(const struct device_node *node,
 				const char *name,
 				int *lenp);
@@ -324,12 +326,6 @@ extern int of_detach_node(struct device_node *);
  */
 const __be32 *of_prop_next_u32(struct property *prop, const __be32 *cur,
 			       u32 *pu);
-#define of_property_for_each_u32(np, propname, prop, p, u)	\
-	for (prop = of_find_property(np, propname, NULL),	\
-		p = of_prop_next_u32(prop, NULL, &u);		\
-		p;						\
-		p = of_prop_next_u32(prop, p, &u))
-
 /*
  * struct property *prop;
  * const char *s;
@@ -338,11 +334,6 @@ const __be32 *of_prop_next_u32(struct property *prop, const __be32 *cur,
  *         printk("String value: %s\n", s);
  */
 const char *of_prop_next_string(struct property *prop, const char *cur);
-#define of_property_for_each_string(np, propname, prop, s)	\
-	for (prop = of_find_property(np, propname, NULL),	\
-		s = of_prop_next_string(prop, NULL);		\
-		s;						\
-		s = of_prop_next_string(prop, s))
 
 #else /* CONFIG_OF */
 
@@ -372,7 +363,15 @@ static inline bool of_have_populated_dt(void)
 	return false;
 }
 
+/* Kill an unused variable warning on a device_node pointer */
+static inline void __of_use_dn(const struct device_node *np)
+{
+}
+
 #define for_each_child_of_node(parent, child) \
+	while (__of_use_dn(parent), __of_use_dn(child), 0)
+
+#define for_each_available_child_of_node(parent, child) \
 	while (0)
 
 static inline struct device_node *of_get_child_by_name(
@@ -393,9 +392,9 @@ static inline int of_device_is_compatible(const struct device_node *device,
 	return 0;
 }
 
-static inline int of_device_is_available(const struct device_node *device)
+static inline bool of_device_is_available(const struct device_node *device)
 {
-	return 0;
+	return false;
 }
 
 static inline struct property *of_find_property(const struct device_node *np,
@@ -411,6 +410,12 @@ static inline struct device_node *of_find_compatible_node(
 						const char *compat)
 {
 	return NULL;
+}
+
+static inline int of_property_count_elems_of_size(const struct device_node *np,
+			const char *propname, int elem_size)
+{
+	return -ENOSYS;
 }
 
 static inline int of_property_read_u32_index(const struct device_node *np,
@@ -511,12 +516,20 @@ static inline int of_machine_is_compatible(const char *compat)
 	return 0;
 }
 
+static inline const __be32 *of_prop_next_u32(struct property *prop,
+		const __be32 *cur, u32 *pu)
+{
+	return NULL;
+}
+
+static inline const char *of_prop_next_string(struct property *prop,
+		const char *cur)
+{
+	return NULL;
+}
+
 #define of_match_ptr(_ptr)	NULL
 #define of_match_node(_matches, _node)	NULL
-#define of_property_for_each_u32(np, propname, prop, p, u) \
-	while (0)
-#define of_property_for_each_string(np, propname, prop, s) \
-	while (0)
 #endif /* CONFIG_OF */
 
 #ifndef of_node_to_nid
@@ -593,6 +606,74 @@ static inline int of_property_read_string_index(struct device_node *np,
 }
 
 /**
+ * of_property_count_u8_elems - Count the number of u8 elements in a property
+ *
+ * @np:		device node from which the property value is to be read.
+ * @propname:	name of the property to be searched.
+ *
+ * Search for a property in a device node and count the number of u8 elements
+ * in it. Returns number of elements on sucess, -EINVAL if the property does
+ * not exist or its length does not match a multiple of u8 and -ENODATA if the
+ * property does not have a value.
+ */
+static inline int of_property_count_u8_elems(const struct device_node *np,
+				const char *propname)
+{
+	return of_property_count_elems_of_size(np, propname, sizeof(u8));
+}
+
+/**
+ * of_property_count_u16_elems - Count the number of u16 elements in a property
+ *
+ * @np:		device node from which the property value is to be read.
+ * @propname:	name of the property to be searched.
+ *
+ * Search for a property in a device node and count the number of u16 elements
+ * in it. Returns number of elements on sucess, -EINVAL if the property does
+ * not exist or its length does not match a multiple of u16 and -ENODATA if the
+ * property does not have a value.
+ */
+static inline int of_property_count_u16_elems(const struct device_node *np,
+				const char *propname)
+{
+	return of_property_count_elems_of_size(np, propname, sizeof(u16));
+}
+
+/**
+ * of_property_count_u32_elems - Count the number of u32 elements in a property
+ *
+ * @np:		device node from which the property value is to be read.
+ * @propname:	name of the property to be searched.
+ *
+ * Search for a property in a device node and count the number of u32 elements
+ * in it. Returns number of elements on sucess, -EINVAL if the property does
+ * not exist or its length does not match a multiple of u32 and -ENODATA if the
+ * property does not have a value.
+ */
+static inline int of_property_count_u32_elems(const struct device_node *np,
+				const char *propname)
+{
+	return of_property_count_elems_of_size(np, propname, sizeof(u32));
+}
+
+/**
+ * of_property_count_u64_elems - Count the number of u64 elements in a property
+ *
+ * @np:		device node from which the property value is to be read.
+ * @propname:	name of the property to be searched.
+ *
+ * Search for a property in a device node and count the number of u64 elements
+ * in it. Returns number of elements on sucess, -EINVAL if the property does
+ * not exist or its length does not match a multiple of u64 and -ENODATA if the
+ * property does not have a value.
+ */
+static inline int of_property_count_u64_elems(const struct device_node *np,
+				const char *propname)
+{
+	return of_property_count_elems_of_size(np, propname, sizeof(u64));
+}
+
+/**
  * of_property_read_bool - Findfrom a property
  * @np:		device node from which the property value is to be read.
  * @propname:	name of the property to be searched.
@@ -638,6 +719,18 @@ static inline int of_property_read_u32(const struct device_node *np,
 {
 	return of_property_read_u32_array(np, propname, out_value, 1);
 }
+
+#define of_property_for_each_u32(np, propname, prop, p, u)	\
+	for (prop = of_find_property(np, propname, NULL),	\
+		p = of_prop_next_u32(prop, NULL, &u);		\
+		p;						\
+		p = of_prop_next_u32(prop, p, &u))
+
+#define of_property_for_each_string(np, propname, prop, s)	\
+	for (prop = of_find_property(np, propname, NULL),	\
+		s = of_prop_next_string(prop, NULL);		\
+		s;						\
+		s = of_prop_next_string(prop, s))
 
 #if defined(CONFIG_PROC_FS) && defined(CONFIG_PROC_DEVICETREE)
 extern void proc_device_tree_add_node(struct device_node *, struct proc_dir_entry *);

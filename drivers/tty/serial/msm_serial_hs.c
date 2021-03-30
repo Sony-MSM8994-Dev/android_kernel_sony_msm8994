@@ -3,7 +3,7 @@
  * MSM 7k High speed uart driver
  *
  * Copyright (c) 2008 Google Inc.
- * Copyright (c) 2007-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2007-2016, The Linux Foundation. All rights reserved.
  * Modified: Nick Pelly <npelly@google.com>
  *
  * All source code in this file is licensed under the following license
@@ -49,6 +49,7 @@
 #include <linux/kernel.h>
 #include <linux/timer.h>
 #include <linux/clk.h>
+#include <linux/delay.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/dma-mapping.h>
@@ -274,7 +275,7 @@ static struct of_device_id msm_hs_match_table[] = {
 #define UARTDM_TX_BUF_SIZE UART_XMIT_SIZE
 #define UARTDM_RX_BUF_SIZE 512
 #define RETRY_TIMEOUT 5
-#define UARTDM_NR 256
+#define UARTDM_NR 64
 #define BAM_PIPE_MIN 0
 #define BAM_PIPE_MAX 11
 #define BUS_SCALING 1
@@ -898,6 +899,7 @@ static void msm_hs_set_bps_locked(struct uart_port *uport,
 	case 3500000:
 	case 3000000:
 	case 2500000:
+	case 2000000:
 	case 1500000:
 	case 1152000:
 	case 1000000:
@@ -1194,16 +1196,27 @@ static void msm_hs_set_termios(struct uart_port *uport,
 unsigned int msm_hs_tx_empty(struct uart_port *uport)
 {
 	unsigned int data;
+	unsigned int isr;
 	unsigned int ret = 0;
 	struct msm_hs_port *msm_uport = UARTDM_TO_MSM(uport);
 
 	msm_hs_resource_vote(msm_uport);
 	data = msm_hs_read(uport, UART_DM_SR);
+	isr = msm_hs_read(uport, UART_DM_ISR);
 	msm_hs_resource_unvote(msm_uport);
-	MSM_HS_DBG("%s(): SR Reg Read 0x%x", __func__, data);
+	MSM_HS_INFO("%s(): SR:0x%x ISR:0x%x ", __func__, data, isr);
 
-	if (data & UARTDM_SR_TXEMT_BMSK)
+	if (data & UARTDM_SR_TXEMT_BMSK) {
 		ret = TIOCSER_TEMT;
+	} else
+		/*
+		 * Add an extra sleep here because sometimes the framework's
+		 * delay (based on baud rate) isn't good enough.
+		 * Note that this won't happen during every port close, only
+		 * on select occassions when the userspace does back to back
+		 * write() and close().
+		 */
+		usleep_range(5000, 7000);
 
 	return ret;
 }
@@ -1380,13 +1393,13 @@ static void msm_hs_submit_tx_locked(struct uart_port *uport)
 	tx->tx_count = tx_count;
 
 	sps_pipe_handle = tx->cons.pipe_handle;
-	/* Queue transfer request to SPS */
-	ret = sps_transfer_one(sps_pipe_handle, src_addr, tx_count,
-				msm_uport, flags);
 
 	/* Set 1 second timeout */
 	mod_timer(&tx->tx_timeout_timer,
 		jiffies + msecs_to_jiffies(MSEC_PER_SEC));
+	/* Queue transfer request to SPS */
+	ret = sps_transfer_one(sps_pipe_handle, src_addr, tx_count,
+				msm_uport, flags);
 
 	MSM_HS_DBG("%s:Enqueue Tx Cmd, ret %d\n", __func__, ret);
 }
@@ -1540,6 +1553,16 @@ static void flip_insert_work(struct work_struct *work)
 	struct tty_struct *tty = msm_uport->uport.state->port.tty;
 
 	spin_lock_irqsave(&msm_uport->uport.lock, flags);
+	if (!tty || msm_uport->rx.flush == FLUSH_SHUTDOWN) {
+		dev_err(msm_uport->uport.dev,
+			"%s:Invalid driver state flush %d\n",
+				__func__, msm_uport->rx.flush);
+		MSM_HS_ERR("%s:Invalid driver state flush %d\n",
+				__func__, msm_uport->rx.flush);
+		spin_unlock_irqrestore(&msm_uport->uport.lock, flags);
+		return;
+	}
+
 	if (msm_uport->rx.buffer_pending == NONE_PENDING) {
 		MSM_HS_ERR("Error: No buffer pending in %s", __func__);
 		spin_unlock_irqrestore(&msm_uport->uport.lock, flags);
@@ -1570,8 +1593,9 @@ static void flip_insert_work(struct work_struct *work)
 				retval << 8 | (rx_count - retval) << 16;
 	}
 	if (msm_uport->rx.buffer_pending) {
-		schedule_delayed_work(&msm_uport->rx.flip_insert_work,
-				      msecs_to_jiffies(RETRY_TIMEOUT));
+		queue_delayed_work(system_power_efficient_wq,
+				&msm_uport->rx.flip_insert_work,
+				msecs_to_jiffies(RETRY_TIMEOUT));
 	} else if (msm_uport->rx.flush <= FLUSH_IGNORE) {
 			MSM_HS_WARN("Pending buffers cleared, restarting");
 			clear_bit(msm_uport->rx.rx_inx,
@@ -1611,6 +1635,16 @@ static void msm_serial_hs_rx_work(struct kthread_work *work)
 	pdata = pdev->dev.platform_data;
 
 	spin_lock_irqsave(&uport->lock, flags);
+
+	if (!tty || rx->flush == FLUSH_SHUTDOWN) {
+		dev_err(uport->dev, "%s:Invalid driver state flush %d\n",
+				__func__, rx->flush);
+		MSM_HS_ERR("%s:Invalid driver state flush %d\n",
+				__func__, rx->flush);
+		spin_unlock_irqrestore(&uport->lock, flags);
+		msm_hs_resource_unvote(msm_uport);
+		return;
+	}
 
 	/*
 	 * Process all pending descs or if nothing is
@@ -1743,8 +1777,9 @@ static void msm_serial_hs_rx_work(struct kthread_work *work)
 out:
 	if (msm_uport->rx.buffer_pending) {
 		MSM_HS_WARN("tty buffer exhausted. Stalling\n");
-		schedule_delayed_work(&msm_uport->rx.flip_insert_work
-				      , msecs_to_jiffies(RETRY_TIMEOUT));
+		queue_delayed_work(system_power_efficient_wq,
+				&msm_uport->rx.flip_insert_work,
+				msecs_to_jiffies(RETRY_TIMEOUT));
 	}
 	/* tty_flip_buffer_push() might call msm_hs_start(), so unlock */
 	spin_unlock_irqrestore(&uport->lock, flags);
@@ -2161,14 +2196,14 @@ void toggle_wakeup_interrupt(struct msm_hs_port *msm_uport)
 		return;
 
 	if (!(msm_uport->wakeup.enabled)) {
-		spin_lock_irqsave(&uport->lock, flags);
-		msm_uport->wakeup.ignore = 1;
 		MSM_HS_DBG("%s(): Enable Wakeup IRQ", __func__);
 		atomic_set(&msm_uport->wakeup_irq_disabled, 0);
-		enable_irq(msm_uport->wakeup.irq);
-		disable_irq(uport->irq);
+		spin_lock_irqsave(&uport->lock, flags);
+		msm_uport->wakeup.ignore = 1;
 		msm_uport->wakeup.enabled = true;
 		spin_unlock_irqrestore(&uport->lock, flags);
+		disable_irq(uport->irq);
+		enable_irq(msm_uport->wakeup.irq);
 	} else {
 		spin_lock_irqsave(&uport->lock, flags);
 		if (!atomic_read(&msm_uport->wakeup_irq_disabled)) {
@@ -2666,6 +2701,7 @@ static int uartdm_init_port(struct uart_port *uport)
 	struct msm_hs_port *msm_uport = UARTDM_TO_MSM(uport);
 	struct msm_hs_tx *tx = &msm_uport->tx;
 	struct msm_hs_rx *rx = &msm_uport->rx;
+	struct sched_param param = { .sched_priority = 1 };
 
 	init_waitqueue_head(&rx->wait);
 	init_waitqueue_head(&tx->wait);
@@ -2680,6 +2716,8 @@ static int uartdm_init_port(struct uart_port *uport)
 		MSM_HS_ERR("%s(): error creating task", __func__);
 		goto exit_lh_init;
 	}
+	sched_setscheduler(rx->task, SCHED_FIFO, &param);
+
 	init_kthread_work(&rx->kwork, msm_serial_hs_rx_work);
 
 	init_kthread_worker(&tx->kworker);
@@ -2689,6 +2727,7 @@ static int uartdm_init_port(struct uart_port *uport)
 		MSM_HS_ERR("%s(): error creating task", __func__);
 		goto exit_lh_init;
 	}
+	sched_setscheduler(tx->task, SCHED_FIFO, &param);
 
 	init_kthread_work(&tx->kwork, msm_serial_hs_tx_work);
 
@@ -3411,6 +3450,7 @@ static int msm_hs_probe(struct platform_device *pdev)
 	}
 
 	msm_serial_debugfs_init(msm_uport, pdev->id);
+	msm_hs_unconfig_uart_gpios(uport);
 
 	uport->line = pdev->id;
 	if (pdata->userid && pdata->userid <= UARTDM_NR)
@@ -3487,6 +3527,7 @@ static void msm_hs_shutdown(struct uart_port *uport)
 	struct msm_hs_port *msm_uport = UARTDM_TO_MSM(uport);
 	struct circ_buf *tx_buf = &uport->state->xmit;
 	int data;
+	unsigned long flags;
 
 	if (is_use_low_power_wakeup(msm_uport))
 		irq_set_irq_wake(msm_uport->wakeup.irq, 0);
@@ -3496,7 +3537,18 @@ static void msm_hs_shutdown(struct uart_port *uport)
 	else
 		disable_irq(uport->irq);
 
+	spin_lock_irqsave(&uport->lock, flags);
 	msm_uport->wakeup.enabled = false;
+	msm_uport->wakeup.ignore = 1;
+	spin_unlock_irqrestore(&uport->lock, flags);
+
+	/* Free the interrupt */
+	free_irq(uport->irq, msm_uport);
+	if (is_use_low_power_wakeup(msm_uport)) {
+		free_irq(msm_uport->wakeup.irq, msm_uport);
+		MSM_HS_DBG("%s(): wakeup irq freed", __func__);
+	}
+	msm_uport->wakeup.freed = true;
 
 	/* make sure tx lh finishes */
 	flush_kthread_worker(&msm_uport->tx.kworker);
@@ -3513,12 +3565,12 @@ static void msm_hs_shutdown(struct uart_port *uport)
 
 	if (msm_uport->rx.flush != FLUSH_SHUTDOWN) {
 		/* disable and disconnect rx */
-		msm_hs_disconnect_rx(uport);
 		ret = wait_event_timeout(msm_uport->rx.wait,
-				msm_uport->rx.flush == FLUSH_SHUTDOWN, 500);
+				!msm_uport->rx.pending_flag, 500);
 		if (!ret)
 			MSM_HS_WARN("%s(): rx disconnect not complete",
 				__func__);
+		msm_hs_disconnect_rx(uport);
 	}
 
 	cancel_work_sync(&msm_uport->wakeup.resume_work);
@@ -3564,14 +3616,6 @@ static void msm_hs_shutdown(struct uart_port *uport)
 		MSM_HS_WARN("%s: Client clock vote imbalance\n", __func__);
 		atomic_set(&msm_uport->client_req_state, 0);
 	}
-	/* Free the interrupt */
-	free_irq(uport->irq, msm_uport);
-	if (is_use_low_power_wakeup(msm_uport)) {
-		free_irq(msm_uport->wakeup.irq, msm_uport);
-		MSM_HS_DBG("%s(): wakeup irq freed", __func__);
-	}
-	msm_uport->wakeup.freed = true;
-
 	msm_hs_unconfig_uart_gpios(uport);
 }
 

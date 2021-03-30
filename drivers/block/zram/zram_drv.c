@@ -45,7 +45,11 @@
 /* Globals */
 static int zram_major;
 static struct zram *zram_devices;
+#ifdef CONFIG_ZRAM_LZ4_COMPRESS
+static const char *default_compressor = "lz4";
+#else
 static const char *default_compressor = "lzo";
+#endif
 #define BACKEND_PARAM_BUF_SIZE	32
 static char backend_param_buf[BACKEND_PARAM_BUF_SIZE];
 
@@ -547,14 +551,14 @@ static int zram_decompress_page(struct zram *zram, char *mem, u32 index)
 	size = zram_get_obj_size(meta, index);
 
 	if (!handle || zram_test_flag(meta, index, ZRAM_ZERO)) {
-		clear_page(mem);
 		bit_spin_unlock(ZRAM_ACCESS, &meta->table[index].value);
+		memset(mem, 0, PAGE_SIZE);
 		return 0;
 	}
 
 	cmem = zpool_map_handle(meta->mem_pool, handle, ZPOOL_MM_RO);
 	if (size == PAGE_SIZE)
-		copy_page(mem, cmem);
+		memcpy(mem, cmem, PAGE_SIZE);
 	else
 		ret = zcomp_decompress(zram->comp, cmem, size, mem);
 	zpool_unmap_handle(meta->mem_pool, handle);
@@ -728,19 +732,19 @@ static int zram_bvec_write(struct zram *zram, struct bio_vec *bvec, u32 index,
 	}
 
 	alloced_pages = zpool_get_total_size(meta->mem_pool) >> PAGE_SHIFT;
+	update_used_max(zram, alloced_pages);
+
 	if (zram->limit_pages && alloced_pages > zram->limit_pages) {
 		zpool_free(meta->mem_pool, handle);
 		ret = -ENOMEM;
 		goto out;
 	}
 
-	update_used_max(zram, alloced_pages);
-
 	cmem = zpool_map_handle(meta->mem_pool, handle, ZPOOL_MM_WO);
 
 	if ((clen == PAGE_SIZE) && !is_partial_io(bvec)) {
 		src = kmap_atomic(page);
-		copy_page(cmem, src);
+		memcpy(cmem, src, PAGE_SIZE);
 		kunmap_atomic(src);
 	} else {
 		memcpy(cmem, src, clen);
@@ -867,7 +871,7 @@ static void zram_reset_device(struct zram *zram)
 	/* Reset stats */
 	memset(&zram->stats, 0, sizeof(zram->stats));
 	zram->disksize = 0;
-	zram->max_comp_streams = 1;
+	zram->max_comp_streams = 4;
 
 	set_capacity(zram->disk, 0);
 	part_stat_set_all(&zram->disk->part0, 0);
@@ -1256,7 +1260,7 @@ static int create_device(struct zram *zram, int device_id)
 	}
 	strlcpy(zram->compressor, default_compressor, sizeof(zram->compressor));
 	zram->meta = NULL;
-	zram->max_comp_streams = 1;
+	zram->max_comp_streams = 4;
 	return 0;
 
 out_free_disk:

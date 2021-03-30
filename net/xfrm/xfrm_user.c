@@ -125,22 +125,17 @@ static inline int verify_replay(struct xfrm_usersa_info *p,
 	struct nlattr *rt = attrs[XFRMA_REPLAY_ESN_VAL];
 	struct xfrm_replay_state_esn *rs;
 
-	if (p->flags & XFRM_STATE_ESN) {
-		if (!rt)
-			return -EINVAL;
-
-		rs = nla_data(rt);
-
-		if (rs->bmp_len > XFRMA_REPLAY_ESN_MAX / sizeof(rs->bmp[0]) / 8)
-			return -EINVAL;
-
-		if (nla_len(rt) < xfrm_replay_state_esn_len(rs) &&
-		    nla_len(rt) != sizeof(*rs))
-			return -EINVAL;
-	}
-
 	if (!rt)
-		return 0;
+		return (p->flags & XFRM_STATE_ESN) ? -EINVAL : 0;
+
+	rs = nla_data(rt);
+
+	if (rs->bmp_len > XFRMA_REPLAY_ESN_MAX / sizeof(rs->bmp[0]) / 8)
+		return -EINVAL;
+
+	if (nla_len(rt) < xfrm_replay_state_esn_len(rs) &&
+	    nla_len(rt) != sizeof(*rs))
+		return -EINVAL;
 
 	if (p->id.proto != IPPROTO_ESP)
 		return -EINVAL;
@@ -395,9 +390,6 @@ static inline int xfrm_replay_verify_len(struct xfrm_replay_state_esn *replay_es
 	if (nla_len(rp) < ulen ||
 	    xfrm_replay_state_esn_len(replay_esn) != ulen ||
 	    replay_esn->bmp_len != up->bmp_len)
-		return -EINVAL;
-
-	if (up->replay_window > up->bmp_len * sizeof(__u32) * 8)
 		return -EINVAL;
 
 	if (up->replay_window > up->bmp_len * sizeof(__u32) * 8)
@@ -1288,10 +1280,13 @@ static void copy_templates(struct xfrm_policy *xp, struct xfrm_user_tmpl *ut,
 
 static int validate_tmpl(int nr, struct xfrm_user_tmpl *ut, u16 family)
 {
+	u16 prev_family;
 	int i;
 
 	if (nr > XFRM_MAX_DEPTH)
 		return -EINVAL;
+
+	prev_family = family;
 
 	for (i = 0; i < nr; i++) {
 		/* We never validated the ut->family value, so many
@@ -1304,6 +1299,12 @@ static int validate_tmpl(int nr, struct xfrm_user_tmpl *ut, u16 family)
 		if (!ut[i].family)
 			ut[i].family = family;
 
+		if ((ut[i].mode == XFRM_MODE_TRANSPORT) &&
+		    (ut[i].family != prev_family))
+			return -EINVAL;
+
+		prev_family = ut[i].family;
+
 		switch (ut[i].family) {
 		case AF_INET:
 			break;
@@ -1314,6 +1315,21 @@ static int validate_tmpl(int nr, struct xfrm_user_tmpl *ut, u16 family)
 		default:
 			return -EINVAL;
 		}
+
+		switch (ut[i].id.proto) {
+		case IPPROTO_AH:
+		case IPPROTO_ESP:
+		case IPPROTO_COMP:
+#if IS_ENABLED(CONFIG_IPV6)
+		case IPPROTO_ROUTING:
+		case IPPROTO_DSTOPTS:
+#endif
+		case IPSEC_PROTO_ANY:
+			break;
+		default:
+			return -EINVAL;
+		}
+
 	}
 
 	return 0;
@@ -1585,6 +1601,16 @@ static int xfrm_dump_policy_start(struct netlink_callback *cb)
 	return 0;
 }
 
+static int xfrm_dump_policy_start(struct netlink_callback *cb)
+{
+	struct xfrm_policy_walk *walk = (struct xfrm_policy_walk *)cb->args;
+
+	BUILD_BUG_ON(sizeof(*walk) > sizeof(cb->args));
+
+	xfrm_policy_walk_init(walk, XFRM_POLICY_TYPE_ANY);
+	return 0;
+}
+
 static int xfrm_dump_policy(struct sk_buff *skb, struct netlink_callback *cb)
 {
 	struct net *net = sock_net(skb->sk);
@@ -1608,6 +1634,10 @@ static struct sk_buff *xfrm_policy_netlink(struct sk_buff *in_skb,
 	struct xfrm_dump_info info;
 	struct sk_buff *skb;
 	int err;
+
+	err = verify_policy_dir(dir);
+	if (err)
+		return ERR_PTR(err);
 
 	skb = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
 	if (!skb)
@@ -2155,6 +2185,10 @@ static int xfrm_do_migrate(struct sk_buff *skb, struct nlmsghdr *nlh,
 	int err;
 	int n = 0;
 
+	err = verify_policy_dir(pi->dir);
+	if (err)
+		return err;
+
 	if (attrs[XFRMA_MIGRATE] == NULL)
 		return -EINVAL;
 
@@ -2269,6 +2303,11 @@ static int xfrm_send_migrate(const struct xfrm_selector *sel, u8 dir, u8 type,
 {
 	struct net *net = &init_net;
 	struct sk_buff *skb;
+	int err;
+
+	err = verify_policy_dir(dir);
+	if (err)
+		return err;
 
 	skb = nlmsg_new(xfrm_migrate_msgsize(num_migrate, !!k), GFP_ATOMIC);
 	if (skb == NULL)
@@ -2341,7 +2380,7 @@ static const struct nla_policy xfrma_policy[XFRMA_MAX+1] = {
 	[XFRMA_TFCPAD]		= { .type = NLA_U32 },
 	[XFRMA_REPLAY_ESN_VAL]	= { .len = sizeof(struct xfrm_replay_state_esn) },
 	[XFRMA_SA_EXTRA_FLAGS]	= { .type = NLA_U32 },
-	[XFRMA_OUTPUT_MARK]	= { .type = NLA_U32 },
+	[XFRMA_OUTPUT_MARK]	= { .len = NLA_U32 },
 };
 
 static const struct xfrm_link {
@@ -2903,6 +2942,11 @@ out_free_skb:
 
 static int xfrm_send_policy_notify(struct xfrm_policy *xp, int dir, const struct km_event *c)
 {
+	int err;
+
+	err = verify_policy_dir(dir);
+	if (err)
+		return err;
 
 	switch (c->event) {
 	case XFRM_MSG_NEWPOLICY:

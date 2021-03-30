@@ -328,7 +328,7 @@ MODULE_DEVICE_TABLE(usb, usbpn_ids);
 
 static struct usb_driver usbpn_driver;
 
-int usbpn_probe(struct usb_interface *intf, const struct usb_device_id *id)
+static int usbpn_probe(struct usb_interface *intf, const struct usb_device_id *id)
 {
 	static const char ifname[] = "usbpn%d";
 	const struct usb_cdc_union_desc *union_header = NULL;
@@ -343,9 +343,9 @@ int usbpn_probe(struct usb_interface *intf, const struct usb_device_id *id)
 
 	data = intf->altsetting->extra;
 	len = intf->altsetting->extralen;
-	while (len >= 3) {
+	while (len > 0) {
 		u8 dlen = data[0];
-		if (dlen < 3)
+		if ((len < dlen) || (dlen < 3 ))
 			return -EINVAL;
 
 		/* bDescriptorType */

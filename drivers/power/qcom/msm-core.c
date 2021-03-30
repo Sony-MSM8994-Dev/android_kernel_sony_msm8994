@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -43,7 +43,6 @@
 #define TEMP_MAX_POINT 95
 #define CPU_HOTPLUG_LIMIT 80
 #define CPU_BIT_MASK(cpu) BIT(cpu)
-#define DEFAULT_TEMP 40
 #define DEFAULT_LOW_HYST_TEMP 10
 #define DEFAULT_HIGH_HYST_TEMP 5
 #define CLUSTER_OFFSET_FOR_MPIDR 8
@@ -218,7 +217,7 @@ static void repopulate_stats(int cpu)
 
 void trigger_cpu_pwr_stats_calc(void)
 {
-	int cpu;
+	int cpu, rc;
 	static long prev_temp[NR_CPUS];
 	struct cpu_activity_info *cpu_node;
 
@@ -232,8 +231,14 @@ void trigger_cpu_pwr_stats_calc(void)
 		if (cpu_node->sensor_id < 0)
 			continue;
 
-		if (cpu_node->temp == prev_temp[cpu])
-			sensor_get_temp(cpu_node->sensor_id, &cpu_node->temp);
+		if (cpu_node->temp == prev_temp[cpu]) {
+			rc = sensor_get_temp(cpu_node->sensor_id, &cpu_node->temp);
+			if (rc) {
+				pr_err("msm-core: The sensor reported invalid data!");
+				cpu_node->temp = DEFAULT_TEMP;
+			}
+		}
+
 		prev_temp[cpu] = cpu_node->temp;
 
 		/*
@@ -297,7 +302,7 @@ static __ref int do_sampling(void *data)
 	static int prev_temp[NR_CPUS];
 
 	while (!kthread_should_stop()) {
-		wait_for_completion(&sampling_completion);
+		wait_for_completion_interruptible(&sampling_completion);
 		cancel_delayed_work(&sampling_work);
 
 		mutex_lock(&kthread_update_mutex);
@@ -319,7 +324,8 @@ static __ref int do_sampling(void *data)
 		if (!poll_ms)
 			goto unlock;
 
-		schedule_delayed_work(&sampling_work,
+		queue_delayed_work(system_power_efficient_wq,
+			&sampling_work,
 			msecs_to_jiffies(poll_ms));
 unlock:
 		mutex_unlock(&kthread_update_mutex);
@@ -355,13 +361,18 @@ static int update_userspace_power(struct sched_params __user *argp)
 {
 	int i;
 	int ret;
-	int cpu;
+	int cpu = -1;
 	struct cpu_activity_info *node;
 	struct cpu_static_info *sp, *clear_sp;
-	int mpidr = (argp->cluster << 8);
-	int cpumask = argp->cpumask;
+	int cpumask, cluster, mpidr;
+	bool pdata_valid[NR_CPUS] = {0};
 
-	pr_debug("cpumask %d, cluster: %d\n", argp->cpumask, argp->cluster);
+	get_user(cpumask, &argp->cpumask);
+	get_user(cluster, &argp->cluster);
+	mpidr = cluster << 8;
+
+	pr_debug("%s: cpumask %d, cluster: %d\n", __func__, cpumask,
+					cluster);
 	for (i = 0; i < MAX_CORES_PER_CLUSTER; i++, cpumask >>= 1) {
 		if (!(cpumask & 0x01))
 			continue;
@@ -373,7 +384,7 @@ static int update_userspace_power(struct sched_params __user *argp)
 		}
 	}
 
-	if (cpu >= num_possible_cpus())
+	if ((cpu < 0) || (cpu >= num_possible_cpus()))
 		return -EINVAL;
 
 	node = &activity[cpu];
@@ -384,9 +395,10 @@ static int update_userspace_power(struct sched_params __user *argp)
 	if (!sp)
 		return -ENOMEM;
 
-
+	mutex_lock(&policy_update_mutex);
 	sp->power = allocate_2d_array_uint32_t(node->sp->num_of_freqs);
 	if (IS_ERR_OR_NULL(sp->power)) {
+		mutex_unlock(&policy_update_mutex);
 		ret = PTR_ERR(sp->power);
 		kfree(sp);
 		return ret;
@@ -405,12 +417,12 @@ static int update_userspace_power(struct sched_params __user *argp)
 	/* Copy the same power values for all the cpus in the cpumask
 	 * argp->cpumask within the cluster (argp->cluster)
 	 */
+	get_user(cpumask, &argp->cpumask);
 	spin_lock(&update_lock);
-	cpumask = argp->cpumask;
 	for (i = 0; i < MAX_CORES_PER_CLUSTER; i++, cpumask >>= 1) {
 		if (!(cpumask & 0x01))
 			continue;
-		mpidr = (argp->cluster << CLUSTER_OFFSET_FOR_MPIDR);
+		mpidr = (cluster << CLUSTER_OFFSET_FOR_MPIDR);
 		mpidr |= i;
 		for_each_possible_cpu(cpu) {
 			if (!(cpu_logical_map(cpu) == mpidr))
@@ -427,16 +439,25 @@ static int update_userspace_power(struct sched_params __user *argp)
 			cpu_stats[cpu].ptable = per_cpu(ptable, cpu);
 			repopulate_stats(cpu);
 
-			blocking_notifier_call_chain(
-				&msm_core_stats_notifier_list, cpu, NULL);
+			pdata_valid[cpu] = true;
 		}
 	}
 	spin_unlock(&update_lock);
+	mutex_unlock(&policy_update_mutex);
+
+	for_each_possible_cpu(cpu) {
+		if (!pdata_valid[cpu])
+			continue;
+
+		blocking_notifier_call_chain(
+			&msm_core_stats_notifier_list, cpu, NULL);
+	}
 
 	activate_power_table = true;
 	return 0;
 
 failed:
+	mutex_unlock(&policy_update_mutex);
 	for (i = 0; i < TEMP_DATA_POINTS; i++)
 		kfree(sp->power[i]);
 	kfree(sp->power);
@@ -480,7 +501,7 @@ static long msm_core_ioctl(struct file *file, unsigned int cmd,
 
 		mutex_lock(&policy_update_mutex);
 		node = &activity[cpu];
-		if (!node->sp->table) {
+		if (!node->sp->table || !node->sp->voltage) {
 			ret = -EINVAL;
 			goto unlock;
 		}
@@ -992,6 +1013,7 @@ static int msm_core_dev_probe(struct platform_device *pdev)
 	char *key = NULL;
 	struct device_node *node;
 	int cpu;
+	struct uio_info *info;
 
 	if (!pdev)
 		return -ENODEV;
@@ -1023,18 +1045,19 @@ static int msm_core_dev_probe(struct platform_device *pdev)
 
 	ret = msm_core_freq_init();
 	if (ret)
-		return ret;
+		goto failed;
 
 	ret = misc_register(&msm_core_device);
 	if (ret) {
 		pr_err("%s: Error registering device %d\n", __func__, ret);
-		return ret;
+		goto failed;
 	}
 
 	ret = msm_core_params_init(pdev);
 	if (ret)
 		goto failed;
 
+	INIT_DEFERRABLE_WORK(&sampling_work, samplequeue_handle);
 	ret = msm_core_task_init(&pdev->dev);
 	if (ret)
 		goto failed;
@@ -1042,12 +1065,14 @@ static int msm_core_dev_probe(struct platform_device *pdev)
 	for_each_possible_cpu(cpu)
 		set_threshold(&activity[cpu]);
 
-	INIT_DEFERRABLE_WORK(&sampling_work, samplequeue_handle);
-	schedule_delayed_work(&sampling_work, msecs_to_jiffies(0));
+	queue_delayed_work(system_power_efficient_wq,
+			&sampling_work, msecs_to_jiffies(0));
 	cpufreq_register_notifier(&cpu_policy, CPUFREQ_POLICY_NOTIFIER);
 	pm_notifier(system_suspend_handler, 0);
 	return 0;
 failed:
+	info = dev_get_drvdata(&pdev->dev);
+	uio_unregister_device(info);
 	free_dyn_memory();
 	return ret;
 }

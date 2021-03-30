@@ -247,7 +247,7 @@ static const struct analog_demod_ops tuner_analog_ops = {
 /**
  * set_type - Sets the tuner type for a given device
  *
- * @c:			i2c_client descriptoy
+ * @c:			i2c_client descriptor
  * @type:		type of the tuner (e. g. tuner number)
  * @new_mode_mask:	Indicates if tuner supports TV and/or Radio
  * @new_config:		an optional parameter used by a few tuners to adjust
@@ -1260,7 +1260,9 @@ static int tuner_suspend(struct device *dev)
 
 	tuner_dbg("suspend\n");
 
-	if (!t->standby && analog_ops->standby)
+	if (t->fe.ops.tuner_ops.suspend)
+		t->fe.ops.tuner_ops.suspend(&t->fe);
+	else if (!t->standby && analog_ops->standby)
 		analog_ops->standby(&t->fe);
 
 	return 0;
@@ -1273,7 +1275,9 @@ static int tuner_resume(struct device *dev)
 
 	tuner_dbg("resume\n");
 
-	if (!t->standby)
+	if (t->fe.ops.tuner_ops.resume)
+		t->fe.ops.tuner_ops.resume(&t->fe);
+	else if (!t->standby)
 		if (set_mode(t, t->mode) == 0)
 			set_freq(t, 0);
 

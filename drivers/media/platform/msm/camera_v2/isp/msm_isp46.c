@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2015, 2017-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -42,7 +42,7 @@
 #define VFE46_STATS_BURST_LEN 3
 #define VFE46_UB_SIZE_VFE0 2048
 #define VFE46_UB_SIZE_VFE1 1536
-#define VFE46_UB_STATS_SIZE 144
+#define VFE46_UB_STATS_SIZE 176
 #define MSM_ISP46_TOTAL_IMAGE_UB_VFE0 (VFE46_UB_SIZE_VFE0 - VFE46_UB_STATS_SIZE)
 #define MSM_ISP46_TOTAL_IMAGE_UB_VFE1 (VFE46_UB_SIZE_VFE1 - VFE46_UB_STATS_SIZE)
 #define VFE46_WM_BASE(idx) (0xA0 + 0x24 * idx)
@@ -882,10 +882,12 @@ static int msm_vfe46_start_fetch_engine(struct vfe_device *vfe_dev,
 	vfe_dev->fetch_engine_info.session_id = fe_cfg->session_id;
 	vfe_dev->fetch_engine_info.stream_id = fe_cfg->stream_id;
 
+	mutex_lock(&vfe_dev->buf_mgr->lock);
 	rc = vfe_dev->buf_mgr->ops->get_buf_by_index(
 		vfe_dev->buf_mgr, bufq_handle, fe_cfg->buf_idx, &buf);
 	if (rc < 0) {
 		pr_err("%s: No fetch buffer\n", __func__);
+		mutex_unlock(&vfe_dev->buf_mgr->lock);
 		return -EINVAL;
 	}
 	vfe_dev->fetch_engine_info.buf_idx = fe_cfg->buf_idx;
@@ -898,6 +900,7 @@ static int msm_vfe46_start_fetch_engine(struct vfe_device *vfe_dev,
 
 	ISP_DBG("%s:VFE%d Fetch Engine ready\n", __func__, vfe_dev->pdev->id);
 	buf->state = MSM_ISP_BUFFER_STATE_DISPATCHED;
+	mutex_unlock(&vfe_dev->buf_mgr->lock);
 
 	return 0;
 }
@@ -1757,7 +1760,7 @@ static void msm_vfe46_stats_cfg_ub(struct vfe_device *vfe_dev)
 	uint32_t ub_size[VFE46_NUM_STATS_TYPE] = {
 		16, /* MSM_ISP_STATS_BF_SCALE */
 		16, /* MSM_ISP_STATS_HDR_BE */
-		16, /* MSM_ISP_STATS_BG */
+		48, /* MSM_ISP_STATS_BG */
 		16, /* MSM_ISP_STATS_BF */
 		16, /* MSM_ISP_STATS_HDR_BHIST */
 		16, /* MSM_ISP_STATS_RS */

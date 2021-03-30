@@ -68,6 +68,8 @@ enum command_types {
  * @channels:		A list of all the channels that currently exist on this
  *			edge.
  * @intentless:		Flag indicating this edge is intentless.
+ * @irq_disabled:	Flag indicating whether interrupt is enabled or
+ *			disabled.
  * @ssr_sync:		Synchronizes SSR with any ongoing activity that might
  *			conflict.
  * @in_ssr:		Prevents new activity that might conflict with an active
@@ -76,6 +78,7 @@ enum command_types {
  *			SSR.
  * @smd_ch:		Private SMD channel for channel migration.
  * @smd_lock:		Serializes write access to @smd_ch.
+ * @in_ssr_lock:	Lock to protect the @in_ssr.
  * @smd_ctl_ch_open:	Indicates that @smd_ch is fully open.
  * @work:		Work item for processing migration data.
  *
@@ -88,11 +91,13 @@ struct edge_info {
 	uint32_t smd_edge;
 	struct list_head channels;
 	bool intentless;
+	bool irq_disabled;
 	struct srcu_struct ssr_sync;
 	bool in_ssr;
 	struct delayed_work ssr_work;
 	smd_channel_t *smd_ch;
 	struct mutex smd_lock;
+	struct mutex in_ssr_lock;
 	bool smd_ctl_ch_open;
 	struct work_struct work;
 };
@@ -120,6 +125,7 @@ struct edge_info {
  * @local_legacy:	The local side of the channel is in legacy mode.
  * @remote_legacy:	The remote side of the channel is in legacy mode.
  * @rx_data_lock:	Used to serialize RX data processing.
+ * @streaming_ch:	Indicates the underlying SMD channel is streaming type.
  */
 struct channel {
 	struct list_head node;
@@ -142,6 +148,7 @@ struct channel {
 	bool local_legacy;
 	bool remote_legacy;
 	spinlock_t rx_data_lock;
+	bool streaming_ch;
 };
 
 /**
@@ -237,6 +244,13 @@ static void process_ctl_event(struct work_struct *work)
 	bool found;
 
 	einfo = container_of(work, struct edge_info, work);
+
+	mutex_lock(&einfo->in_ssr_lock);
+	if (einfo->in_ssr) {
+		einfo->in_ssr = false;
+		einfo->xprt_if.glink_core_if_ptr->link_up(&einfo->xprt_if);
+	}
+	mutex_unlock(&einfo->in_ssr_lock);
 
 	while (smd_read_avail(einfo->smd_ch)) {
 		found = false;
@@ -436,8 +450,13 @@ static void ssr_work_func(struct work_struct *work)
 
 	w = container_of(work, struct delayed_work, work);
 	einfo = container_of(w, struct edge_info, ssr_work);
-	einfo->in_ssr = false;
-	einfo->xprt_if.glink_core_if_ptr->link_up(&einfo->xprt_if);
+
+	mutex_lock(&einfo->in_ssr_lock);
+	if (einfo->in_ssr) {
+		einfo->in_ssr = false;
+		einfo->xprt_if.glink_core_if_ptr->link_up(&einfo->xprt_if);
+	}
+	mutex_unlock(&einfo->in_ssr_lock);
 }
 
 /**
@@ -471,10 +490,28 @@ static void process_open_event(struct work_struct *work)
 	struct channel_work *ch_work;
 	struct channel *ch;
 	struct edge_info *einfo;
+	int ret;
 
 	ch_work = container_of(work, struct channel_work, work);
 	ch = ch_work->ch;
 	einfo = ch->edge;
+	/*
+	 * The SMD client is supposed to already know its channel type, but we
+	 * are just a translation layer, so we need to dynamically detect the
+	 * channel type.
+	 */
+	ret = smd_write_segment_avail(ch->smd_ch);
+	if (ret == -ENODEV)
+		ch->streaming_ch = true;
+	if (ch->remote_legacy || !ch->rcid) {
+		ch->remote_legacy = true;
+		ch->rcid = ch->lcid + LEGACY_RCID_CHANNEL_OFFSET;
+		einfo->xprt_if.glink_core_if_ptr->rx_cmd_ch_remote_open(
+							&einfo->xprt_if,
+							ch->rcid,
+							ch->name,
+							SMD_TRANS_XPRT_ID);
+	}
 	kfree(ch_work);
 }
 
@@ -548,14 +585,14 @@ static void process_reopen_event(struct work_struct *work)
 	ch = ch_work->ch;
 	einfo = ch->edge;
 	kfree(ch_work);
-	if (ch->remote_legacy) {
+	if (ch->remote_legacy)
 		einfo->xprt_if.glink_core_if_ptr->rx_cmd_ch_remote_close(
 								&einfo->xprt_if,
 								ch->rcid);
+	if (ch->local_legacy)
 		einfo->xprt_if.glink_core_if_ptr->rx_cmd_ch_close_ack(
 								&einfo->xprt_if,
 								ch->lcid);
-	}
 }
 
 /**
@@ -579,7 +616,10 @@ static void process_data_event(struct work_struct *work)
 
 	spin_lock_irqsave(&ch->rx_data_lock, rx_data_flags);
 	while (!ch->is_closing && smd_read_avail(ch->smd_ch)) {
-		pkt_remaining = smd_cur_packet_size(ch->smd_ch);
+		if (!ch->streaming_ch)
+			pkt_remaining = smd_cur_packet_size(ch->smd_ch);
+		else
+			pkt_remaining = smd_read_avail(ch->smd_ch);
 		GLINK_DBG("%s <SMDXPRT> Reading packet chunk %u '%s' %u:%u\n",
 				__func__, pkt_remaining, ch->name, ch->lcid,
 				ch->rcid);
@@ -725,10 +765,18 @@ static void smd_data_ch_close(struct channel *ch)
 	SMDXPRT_INFO("%s Closing SMD channel lcid %u\n", __func__, ch->lcid);
 
 	ch->is_closing = true;
+	ch->wait_for_probe = false;
 	flush_workqueue(ch->wq);
 
-	smd_close(ch->smd_ch);
-	ch->smd_ch = NULL;
+	if (ch->smd_ch) {
+		smd_close(ch->smd_ch);
+		ch->smd_ch = NULL;
+	} else if (ch->local_legacy) {
+		ch->edge->xprt_if.glink_core_if_ptr->rx_cmd_ch_close_ack(
+							&ch->edge->xprt_if,
+							ch->lcid);
+	}
+
 	ch->local_legacy = false;
 
 	spin_lock_irqsave(&ch->intents_lock, flags);
@@ -765,15 +813,6 @@ static void data_ch_probe_body(struct channel *ch)
 		return;
 	}
 	smd_disable_read_intr(ch->smd_ch);
-	if (ch->remote_legacy || !ch->rcid) {
-		ch->remote_legacy = true;
-		ch->rcid = ch->lcid + LEGACY_RCID_CHANNEL_OFFSET;
-		einfo->xprt_if.glink_core_if_ptr->rx_cmd_ch_remote_open(
-							&einfo->xprt_if,
-							ch->rcid,
-							ch->name,
-							SMD_TRANS_XPRT_ID);
-	}
 }
 
 static int channel_probe(struct platform_device *pdev)
@@ -1096,10 +1135,11 @@ static int tx_cmd_ch_close(struct glink_transport_if *if_ptr, uint32_t lcid)
 		return -ENODEV;
 	}
 
-	if (!ch->remote_legacy) {
+	if (!ch->local_legacy) {
 		SMDXPRT_INFO("%s TX CLOSE lcid %u\n", __func__, lcid);
 		cmd.cmd = CMD_CLOSE;
 		cmd.id = lcid;
+		cmd.reserved = 0;
 		mutex_lock(&einfo->smd_lock);
 		while (smd_write_avail(einfo->smd_ch) < sizeof(cmd))
 			msleep(20);
@@ -1207,6 +1247,7 @@ static void tx_cmd_ch_remote_close_ack(struct glink_transport_if *if_ptr,
 		SMDXPRT_INFO("%s TX CLOSE ACK rcid %u\n", __func__, rcid);
 		cmd.cmd = CMD_CLOSE_ACK;
 		cmd.id = rcid;
+		cmd.reserved = 0;
 		mutex_lock(&einfo->smd_lock);
 		while (smd_write_avail(einfo->smd_ch) < sizeof(cmd))
 			msleep(20);
@@ -1214,6 +1255,7 @@ static void tx_cmd_ch_remote_close_ack(struct glink_transport_if *if_ptr,
 		mutex_unlock(&einfo->smd_lock);
 	}
 	ch->remote_legacy = false;
+	ch->rcid = 0;
 }
 
 /**
@@ -1240,6 +1282,7 @@ static int ssr(struct glink_transport_if *if_ptr)
 		if (!ch->smd_ch)
 			continue;
 		ch->is_closing = true;
+		ch->wait_for_probe = false;
 		flush_workqueue(ch->wq);
 		smd_close(ch->smd_ch);
 		ch->smd_ch = NULL;
@@ -1267,7 +1310,8 @@ static int ssr(struct glink_transport_if *if_ptr)
 	}
 
 	einfo->xprt_if.glink_core_if_ptr->link_down(&einfo->xprt_if);
-	schedule_delayed_work(&einfo->ssr_work, 5 * HZ);
+	queue_delayed_work(system_power_efficient_wq,
+			&einfo->ssr_work, msecs_to_jiffies(5000));
 	return 0;
 }
 
@@ -1447,36 +1491,55 @@ static int tx(struct glink_transport_if *if_ptr, uint32_t lcid,
 		srcu_read_unlock(&einfo->ssr_sync, rcu_id);
 		return -EINVAL;
 	}
-	if (pctx->size == pctx->size_remaining) {
+
+	if (!ch->streaming_ch) {
+		if (pctx->size == pctx->size_remaining) {
+			rc = smd_write_avail(ch->smd_ch);
+			if (!rc) {
+				srcu_read_unlock(&einfo->ssr_sync, rcu_id);
+				return 0;
+			}
+			rc = smd_write_start(ch->smd_ch, pctx->size);
+			if (rc) {
+				srcu_read_unlock(&einfo->ssr_sync, rcu_id);
+				return 0;
+			}
+		}
+
+		rc = smd_write_segment_avail(ch->smd_ch);
+		if (!rc) {
+			srcu_read_unlock(&einfo->ssr_sync, rcu_id);
+			return 0;
+		}
+		if (rc > tx_size)
+			rc = tx_size;
+		rc = smd_write_segment(ch->smd_ch, data_start, rc);
+		if (rc < 0) {
+			SMDXPRT_ERR("%s: write segment failed %d\n", __func__,
+									rc);
+			srcu_read_unlock(&einfo->ssr_sync, rcu_id);
+			return 0;
+		}
+	} else {
 		rc = smd_write_avail(ch->smd_ch);
 		if (!rc) {
 			srcu_read_unlock(&einfo->ssr_sync, rcu_id);
 			return 0;
 		}
-		rc = smd_write_start(ch->smd_ch, pctx->size);
-		if (rc) {
+		if (rc > tx_size)
+			rc = tx_size;
+		rc = smd_write(ch->smd_ch, data_start, rc);
+		if (rc < 0) {
+			SMDXPRT_ERR("%s: write failed %d\n", __func__, rc);
 			srcu_read_unlock(&einfo->ssr_sync, rcu_id);
 			return 0;
 		}
 	}
 
-	rc = smd_write_segment_avail(ch->smd_ch);
-	if (!rc) {
-		srcu_read_unlock(&einfo->ssr_sync, rcu_id);
-		return 0;
-	}
-	if (rc > tx_size)
-		rc = tx_size;
-	rc = smd_write_segment(ch->smd_ch, data_start, rc);
-	if (rc < 0) {
-		SMDXPRT_ERR("%s: write segment failed %d\n", __func__, rc);
-		srcu_read_unlock(&einfo->ssr_sync, rcu_id);
-		return 0;
-	}
-
 	pctx->size_remaining -= rc;
 	if (!pctx->size_remaining) {
-		smd_write_end(ch->smd_ch);
+		if (!ch->streaming_ch)
+			smd_write_end(ch->smd_ch);
 		tx_done = kmalloc(sizeof(*tx_done), GFP_ATOMIC);
 		tx_done->ch = ch;
 		tx_done->iid = pctx->riid;
@@ -1622,13 +1685,19 @@ static int mask_rx_irq(struct glink_transport_if *if_ptr, uint32_t lcid,
 {
 	struct edge_info *einfo;
 	struct channel *ch;
+	int ret = 0;
 
 	einfo = container_of(if_ptr, struct edge_info, xprt_if);
 	list_for_each_entry(ch, &einfo->channels, node) {
 		if (lcid == ch->lcid)
 			break;
 	}
-	return smd_mask_receive_interrupt(ch->smd_ch, mask, pstruct);
+	ret = smd_mask_receive_interrupt(ch->smd_ch, mask, pstruct);
+
+	if (ret == 0)
+		einfo->irq_disabled = mask;
+
+	return ret;
 }
 
 /**
@@ -1683,7 +1752,7 @@ static void init_xprt_cfg(struct edge_info *einfo)
 	einfo->xprt_cfg.versions = versions;
 	einfo->xprt_cfg.versions_entries = ARRAY_SIZE(versions);
 	einfo->xprt_cfg.max_cid = SZ_64;
-	einfo->xprt_cfg.max_iid = SZ_1;
+	einfo->xprt_cfg.max_iid = SZ_128;
 }
 
 static struct platform_driver migration_driver = {
@@ -1707,6 +1776,7 @@ static int __init glink_smd_xprt_init(void)
 		INIT_LIST_HEAD(&einfo->channels);
 		init_srcu_struct(&einfo->ssr_sync);
 		mutex_init(&einfo->smd_lock);
+		mutex_init(&einfo->in_ssr_lock);
 		INIT_DELAYED_WORK(&einfo->ssr_work, ssr_work_func);
 		INIT_WORK(&einfo->work, process_ctl_event);
 		rc = glink_core_register_transport(&einfo->xprt_if,

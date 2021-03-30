@@ -131,6 +131,7 @@ struct f_mbim {
 
 	atomic_t		error;
 	unsigned int		cpkt_drop_cnt;
+	bool			remote_wakeup_enabled;
 };
 
 struct mbim_ntb_input_size {
@@ -160,8 +161,8 @@ static inline struct f_mbim *func_to_mbim(struct usb_function *f)
 #define MBIM_NTB_OUT_SIZE		(0x1000)
 #define MBIM_NDP_IN_DIVISOR		(0x4)
 
-#define NTB_DEFAULT_IN_SIZE_IPA	(0x2000)
-#define MBIM_NTB_OUT_SIZE_IPA		(0x2000)
+#define NTB_DEFAULT_IN_SIZE_IPA	(0x4000)
+#define MBIM_NTB_OUT_SIZE_IPA		(0x4000)
 
 #define MBIM_FORMATS_SUPPORTED	USB_CDC_NCM_NTB16_SUPPORTED
 static int mbim_ntb_out_size_sys2bam;
@@ -831,6 +832,7 @@ fmbim_cmd_complete(struct usb_ep *ep, struct usb_request *req)
 	struct f_mbim		*dev = req->context;
 	struct ctrl_pkt		*cpkt = NULL;
 	int			len = req->actual;
+	static bool		first_command_sent;
 
 	if (!dev) {
 		pr_err("mbim dev is null\n");
@@ -841,6 +843,18 @@ fmbim_cmd_complete(struct usb_ep *ep, struct usb_request *req)
 		pr_err("mbim command error %d\n", req->status);
 		return;
 	}
+
+	/*
+	 * Wait for user to process prev MBIM_OPEN cmd before handling new one.
+	 * However don't drop first command during bootup as file may not be
+	 * opened by now. Queue the command in this case.
+	 */
+	if (!atomic_read(&dev->open_excl) && first_command_sent) {
+		pr_err("mbim not opened yet, dropping cmd pkt = %d\n", len);
+		return;
+	}
+	if (!first_command_sent)
+		first_command_sent = true;
 
 	pr_debug("dev:%pK port#%d\n", dev, dev->port_num);
 
@@ -1257,6 +1271,7 @@ static void mbim_disable(struct usb_function *f)
 
 	pr_info("SET DEVICE OFFLINE\n");
 	atomic_set(&mbim->online, 0);
+	mbim->remote_wakeup_enabled = 0;
 
 	 /* Disable Control Path */
 	if (mbim->not_port.notify->driver_data) {
@@ -1291,7 +1306,6 @@ static void mbim_disable(struct usb_function *f)
 
 static void mbim_suspend(struct usb_function *f)
 {
-	bool remote_wakeup_allowed;
 	struct f_mbim	*mbim = func_to_mbim(f);
 
 	pr_info("mbim suspended\n");
@@ -1307,9 +1321,9 @@ static void mbim_suspend(struct usb_function *f)
 		return;
 
 	if (mbim->cdev->gadget->speed == USB_SPEED_SUPER)
-		remote_wakeup_allowed = f->func_wakeup_allowed;
+		mbim->remote_wakeup_enabled = f->func_wakeup_allowed;
 	else
-		remote_wakeup_allowed = mbim->cdev->gadget->remote_wakeup;
+		mbim->remote_wakeup_enabled = mbim->cdev->gadget->remote_wakeup;
 
 	/* MBIM data interface is up only when alt setting is set to 1. */
 	if (!mbim->data_interface_up) {
@@ -1317,16 +1331,15 @@ static void mbim_suspend(struct usb_function *f)
 		return;
 	}
 
-	if (!remote_wakeup_allowed)
+	if (!mbim->remote_wakeup_enabled)
 		atomic_set(&mbim->online, 0);
 
 	bam_data_suspend(&mbim->bam_port, mbim->port_num, USB_FUNC_MBIM,
-			remote_wakeup_allowed);
+			 mbim->remote_wakeup_enabled);
 }
 
 static void mbim_resume(struct usb_function *f)
 {
-	bool remote_wakeup_allowed;
 	struct f_mbim	*mbim = func_to_mbim(f);
 
 	pr_info("mbim resumed\n");
@@ -1339,10 +1352,10 @@ static void mbim_resume(struct usb_function *f)
 		f->func_is_suspended)
 		return;
 
-	if (mbim->cdev->gadget->speed == USB_SPEED_SUPER)
-		remote_wakeup_allowed = f->func_wakeup_allowed;
-	else
-		remote_wakeup_allowed = mbim->cdev->gadget->remote_wakeup;
+	/* resume control path by queuing notify req */
+	spin_lock(&mbim->lock);
+	mbim_do_notify(mbim);
+	spin_unlock(&mbim->lock);
 
 	/* MBIM data interface is up only when alt setting is set to 1. */
 	if (!mbim->data_interface_up) {
@@ -1350,11 +1363,11 @@ static void mbim_resume(struct usb_function *f)
 		return;
 	}
 
-	if (!remote_wakeup_allowed)
+	if (!mbim->remote_wakeup_enabled)
 		atomic_set(&mbim->online, 1);
 
 	bam_data_resume(&mbim->bam_port, mbim->port_num, USB_FUNC_MBIM,
-			remote_wakeup_allowed);
+			mbim->remote_wakeup_enabled);
 }
 
 static int mbim_func_suspend(struct usb_function *f, unsigned char options)
@@ -1389,7 +1402,6 @@ static int mbim_func_suspend(struct usb_function *f, unsigned char options)
 	} else {
 		if (f->func_is_suspended) {
 			f->func_is_suspended = false;
-			mbim_do_notify(mbim);
 			mbim_resume(f);
 		}
 		f->func_wakeup_allowed = func_wakeup_allowed;
@@ -1867,12 +1879,15 @@ mbim_write(struct file *fp, const char __user *buf, size_t count, loff_t *pos)
 			   req, GFP_ATOMIC);
 	if (ret == -ENOTSUPP || (ret < 0 && ret != -EAGAIN)) {
 		spin_lock_irqsave(&dev->lock, flags);
-		list_del(&cpkt->list);
-		spin_unlock_irqrestore(&dev->lock, flags);
+		/* check if device disconnected while we dropped lock */
+		if (atomic_read(&dev->online)) {
+			list_del(&cpkt->list);
+			atomic_dec(&dev->not_port.notify_count);
+			mbim_free_ctrl_pkt(cpkt);
+		}
 		dev->cpkt_drop_cnt++;
-		atomic_dec(&dev->not_port.notify_count);
+		spin_unlock_irqrestore(&dev->lock, flags);
 		pr_err("drop ctrl pkt of len %d error %d\n", cpkt->len, ret);
-		mbim_free_ctrl_pkt(cpkt);
 	} else {
 		ret = 0;
 	}
@@ -1962,7 +1977,8 @@ static long mbim_ioctl(struct file *fp, unsigned cmd, unsigned long arg)
 	case MBIM_EP_LOOKUP:
 		if (!atomic_read(&mbim->online)) {
 			pr_warn("usb cable is not connected\n");
-			return -ENOTCONN;
+			ret = -ENOTCONN;
+			break;
 		}
 
 		port = &mbim->bam_port;

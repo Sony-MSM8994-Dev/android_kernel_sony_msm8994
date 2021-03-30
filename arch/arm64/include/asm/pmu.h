@@ -21,12 +21,6 @@
 
 #ifdef CONFIG_HW_PERF_EVENTS
 
-enum arm_pmu_state {
-	ARM_PMU_STATE_OFF       = 0,
-	ARM_PMU_STATE_GOING_DOWN,
-	ARM_PMU_STATE_RUNNING,
-};
-
 /* The events for a given PMU register set. */
 struct pmu_hw_events {
 	/*
@@ -40,8 +34,6 @@ struct pmu_hw_events {
 	 */
 	unsigned long           *used_mask;
 
-	u32			*from_idle;
-
 	/*
 	 * Hardware lock to serialize accesses to PMU registers. Needed for the
 	 * read/modify/write sequences.
@@ -51,6 +43,8 @@ struct pmu_hw_events {
 
 struct arm_pmu {
 	struct pmu		pmu;
+	bool			percpu_irq_requested;
+	int			percpu_irq;
 	cpumask_t		active_irqs;
 	const char		*name;
 	irqreturn_t		(*handle_irq)(int irq_num, void *dev);
@@ -70,14 +64,13 @@ struct arm_pmu {
 	void			(*free_irq)(struct arm_pmu *);
 	int			(*map_event)(struct perf_event *event);
 	int			num_events;
-	int			pmu_state;
 	atomic_t		active_events;
 	struct mutex		reserve_mutex;
 	u64			max_period;
 	struct platform_device	*plat_device;
 	struct pmu_hw_events	*(*get_hw_events)(void);
-	void			(*save_pm_registers)(void *hcpu);
-	void			(*restore_pm_registers)(void *hcpu);
+	struct notifier_block   hotplug_nb;
+	struct notifier_block   cpu_pm_nb;
 };
 
 #define to_arm_pmu(p) (container_of(p, struct arm_pmu, pmu))

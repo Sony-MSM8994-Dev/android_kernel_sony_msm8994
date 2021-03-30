@@ -484,6 +484,7 @@ static int ehci_init(struct usb_hcd *hcd)
 	ehci->periodic_size = DEFAULT_I_TDPS;
 	INIT_LIST_HEAD(&ehci->async_unlink);
 	INIT_LIST_HEAD(&ehci->async_idle);
+	INIT_LIST_HEAD(&ehci->intr_unlink_wait);
 	INIT_LIST_HEAD(&ehci->intr_unlink);
 	INIT_LIST_HEAD(&ehci->intr_qh_list);
 	INIT_LIST_HEAD(&ehci->cached_itd_list);
@@ -803,12 +804,12 @@ static irqreturn_t ehci_irq (struct usb_hcd *hcd)
 					ehci->reset_done[i] == 0))
 				continue;
 
-			/* start 20 msec resume signaling from this port,
-			 * and make khubd collect PORT_STAT_C_SUSPEND to
-			 * stop that signaling.  Use 5 ms extra for safety,
-			 * like usb_port_resume() does.
+			/* start USB_RESUME_TIMEOUT msec resume signaling from
+			 * this port, and make hub_wq collect
+			 * PORT_STAT_C_SUSPEND to stop that signaling.
 			 */
-			ehci->reset_done[i] = jiffies + msecs_to_jiffies(25);
+			ehci->reset_done[i] = jiffies +
+				msecs_to_jiffies(USB_RESUME_TIMEOUT);
 			set_bit(i, &ehci->resuming_ports);
 			ehci_dbg (ehci, "port %d remote wakeup\n", i + 1);
 			usb_hcd_start_port_resume(&hcd->self, i);
@@ -1047,7 +1048,6 @@ ehci_endpoint_reset(struct usb_hcd *hcd, struct usb_host_endpoint *ep)
 	 * the toggle bit in the QH.
 	 */
 	if (qh) {
-		usb_settoggle(qh->dev, epnum, is_out, 0);
 		if (!list_empty(&qh->qtd_list)) {
 			WARN_ONCE(1, "clear_halt for a busy endpoint\n");
 		} else {
@@ -1055,6 +1055,7 @@ ehci_endpoint_reset(struct usb_hcd *hcd, struct usb_host_endpoint *ep)
 			 * while the QH is active.  Unlink it now;
 			 * re-linking will call qh_refresh().
 			 */
+			usb_settoggle(qh->dev, epnum, is_out, 0);
 			qh->exception = 1;
 			if (eptype == USB_ENDPOINT_XFER_BULK)
 				start_unlink_async(ehci, qh);
@@ -1099,6 +1100,14 @@ int ehci_suspend(struct usb_hcd *hcd, bool do_wakeup)
 
 	clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
 	spin_unlock_irq(&ehci->lock);
+
+	synchronize_irq(hcd->irq);
+
+	/* Check for race with a wakeup request */
+	if (do_wakeup && HCD_WAKEUP_PENDING(hcd)) {
+		ehci_resume(hcd, false);
+		return -EBUSY;
+	}
 
 	return 0;
 }

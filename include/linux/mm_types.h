@@ -306,6 +306,18 @@ struct vm_area_struct {
 #endif
 };
 
+/*
+ * The per task VMA cache array:
+ */
+#define VMACACHE_BITS 2
+#define VMACACHE_SIZE (1U << VMACACHE_BITS)
+#define VMACACHE_MASK (VMACACHE_SIZE - 1)
+
+struct vmacache {
+	u32 seqnum;
+	struct vm_area_struct *vmas[VMACACHE_SIZE];
+};
+
 struct core_thread {
 	struct task_struct *task;
 	struct core_thread *next;
@@ -338,9 +350,9 @@ struct mm_rss_stat {
 };
 
 struct mm_struct {
-	struct vm_area_struct * mmap;		/* list of VMAs */
+	struct vm_area_struct *mmap;		/* list of VMAs */
 	struct rb_root mm_rb;
-	struct vm_area_struct * mmap_cache;	/* last find_vma result */
+	u32 vmacache_seqnum;                   /* per-thread vmacache */
 #ifdef CONFIG_MMU
 	unsigned long (*get_unmapped_area) (struct file *filp,
 				unsigned long addr, unsigned long len,
@@ -455,7 +467,7 @@ struct mm_struct {
 	 * can move process memory needs to flush the TLB when moving a
 	 * PROT_NONE or PROT_NUMA mapped page.
 	 */
-	bool tlb_flush_pending;
+	atomic_t tlb_flush_pending;
 #endif
 	struct uprobes_state uprobes_state;
 };
@@ -487,33 +499,46 @@ static inline cpumask_t *mm_cpumask(struct mm_struct *mm)
 static inline bool mm_tlb_flush_pending(struct mm_struct *mm)
 {
 	barrier();
-	return mm->tlb_flush_pending;
+	return atomic_read(&mm->tlb_flush_pending) > 0;
 }
-static inline void set_tlb_flush_pending(struct mm_struct *mm)
+
+static inline void init_tlb_flush_pending(struct mm_struct *mm)
 {
-	mm->tlb_flush_pending = true;
+	atomic_set(&mm->tlb_flush_pending, 0);
+}
+
+static inline void inc_tlb_flush_pending(struct mm_struct *mm)
+{
+	atomic_inc(&mm->tlb_flush_pending);
 
 	/*
-	 * Guarantee that the tlb_flush_pending store does not leak into the
+	 * Guarantee that the tlb_flush_pending increase does not leak into the
 	 * critical section updating the page tables
 	 */
 	smp_mb__before_spinlock();
 }
+
 /* Clearing is done after a TLB flush, which also provides a barrier. */
-static inline void clear_tlb_flush_pending(struct mm_struct *mm)
+static inline void dec_tlb_flush_pending(struct mm_struct *mm)
 {
 	barrier();
-	mm->tlb_flush_pending = false;
+	atomic_dec(&mm->tlb_flush_pending);
 }
 #else
 static inline bool mm_tlb_flush_pending(struct mm_struct *mm)
 {
 	return false;
 }
-static inline void set_tlb_flush_pending(struct mm_struct *mm)
+
+static inline void init_tlb_flush_pending(struct mm_struct *mm)
 {
 }
-static inline void clear_tlb_flush_pending(struct mm_struct *mm)
+
+static inline void inc_tlb_flush_pending(struct mm_struct *mm)
+{
+}
+
+static inline void dec_tlb_flush_pending(struct mm_struct *mm)
 {
 }
 #endif

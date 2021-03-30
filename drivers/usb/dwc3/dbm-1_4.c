@@ -436,4 +436,3 @@ module_platform_driver(msm_dbm_driver);
 
 MODULE_DESCRIPTION("MSM USB DBM 1.4 driver");
 MODULE_LICENSE("GPL v2");
-

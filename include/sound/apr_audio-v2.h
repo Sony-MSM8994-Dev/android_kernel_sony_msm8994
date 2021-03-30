@@ -3206,6 +3206,22 @@ struct asm_flac_fmt_blk_v2 {
 
 } __packed;
 
+#define ASM_MEDIA_FMT_G711_ALAW_FS 0x00010BF7
+#define ASM_MEDIA_FMT_G711_MLAW_FS 0x00010C2E
+
+struct asm_g711_enc_cfg_v2 {
+	struct apr_hdr hdr;
+	struct asm_stream_cmd_set_encdec_param encdec;
+	struct asm_enc_cfg_blk_param_v2 encblk;
+
+	u32          sample_rate;
+/*
+ * Number of samples per second.
+ * Supported values: 8000, 16000 Hz
+ */
+
+} __packed;
+
 #define ASM_MEDIA_FMT_AMRNB_FS                  0x00010BEB
 
 /* Enumeration for 4.75 kbps AMR-NB Encoding mode. */
@@ -5290,6 +5306,8 @@ struct asm_stream_cmd_open_read_compressed {
 								0x0001070F
 #define ADM_CMD_COPP_OPENOPOLOGY_ID_SPEAKER_MCH_PEAK_VOL \
 								0x0001031B
+#define ADM_CMD_COPP_OPENOPOLOGY_ID_SPEAKER_RX_MCH_IIR_COPP_MBDRC_V3 \
+								0x11000004
 #define ADM_CMD_COPP_OPENOPOLOGY_ID_SPEAKER_STEREO_AUDIO_COPP_SOMC_HP \
 								0x11000006
 #define ADM_CMD_COPP_OPENOPOLOGY_ID_MIC_MONO_AUDIO_COPP  0x00010315
@@ -5300,6 +5318,7 @@ struct asm_stream_cmd_open_read_compressed {
 #define AUDPROC_MODULE_ID_AIG   0x00010716
 #define AUDPROC_PARAM_ID_AIG_ENABLE		0x00010717
 #define AUDPROC_PARAM_ID_AIG_CONFIG		0x00010718
+#define APPTYPE_GENERAL_PLAYBACK		0x00011130
 
 struct Audio_AigParam {
 	uint16_t	mode;

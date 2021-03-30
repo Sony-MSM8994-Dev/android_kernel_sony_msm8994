@@ -17,9 +17,9 @@
 /*
  * See Documentation/block/deadline-iosched.txt
  */
-static const int read_expire = HZ / 2;  /* max time before a read is submitted. */
-static const int write_expire = 5 * HZ; /* ditto for writes, these limits are SOFT! */
-static const int writes_starved = 2;    /* max times reads can starve a write */
+static const int read_expire = HZ / 4;  /* max time before a read is submitted. */
+static const int write_expire = 2 * HZ; /* ditto for writes, these limits are SOFT! */
+static const int writes_starved = 1;    /* max times reads can starve a write */
 static const int fifo_batch = 16;       /* # of sequential requests treated as one
 				     by the above parameters. For throughput. */
 
@@ -138,7 +138,7 @@ deadline_merge(struct request_queue *q, struct request **req, struct bio *bio)
 		if (__rq) {
 			BUG_ON(sector != blk_rq_pos(__rq));
 
-			if (elv_rq_merge_ok(__rq, bio)) {
+			if (elv_bio_merge_ok(__rq, bio)) {
 				ret = ELEVATOR_FRONT_MERGE;
 				goto out;
 			}

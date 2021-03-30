@@ -1294,7 +1294,7 @@ EXPORT_SYMBOL_GPL(usb_hcd_unlink_urb_from_ep);
  *   DMA framework is dma_declare_coherent_memory()
  *
  * - So we use that, even though the primary requirement
- *   is that the memory be "local" (hence addressible
+ *   is that the memory be "local" (hence addressable
  *   by that device), not "coherent".
  *
  */
@@ -2185,6 +2185,7 @@ void usb_hcd_resume_root_hub (struct usb_hcd *hcd)
 
 	spin_lock_irqsave (&hcd_root_hub_lock, flags);
 	if (hcd->rh_registered) {
+		pm_wakeup_event(&hcd->self.root_hub->dev, 0);
 		set_bit(HCD_FLAG_WAKEUP_PENDING, &hcd->flags);
 		queue_work(pm_wq, &hcd->wakeup_work);
 	}
@@ -2302,6 +2303,8 @@ void usb_hc_died (struct usb_hcd *hcd)
 	}
 	if (usb_hcd_is_primary_hcd(hcd) && hcd->shared_hcd) {
 		hcd = hcd->shared_hcd;
+		clear_bit(HCD_FLAG_RH_RUNNING, &hcd->flags);
+		set_bit(HCD_FLAG_DEAD, &hcd->flags);
 		if (hcd->rh_registered) {
 			clear_bit(HCD_FLAG_POLL_RH, &hcd->flags);
 

@@ -309,12 +309,17 @@ static int uinput_open(struct inode *inode, struct file *file)
 static int uinput_validate_absbits(struct input_dev *dev)
 {
 	unsigned int cnt;
-	int retval = 0;
+	int nslot;
 
-	for (cnt = 0; cnt < ABS_CNT; cnt++) {
+	if (!test_bit(EV_ABS, dev->evbit))
+		return 0;
+
+	/*
+	 * Check if absmin/absmax/absfuzz/absflat are sane.
+	 */
+
+	for_each_set_bit(cnt, dev->absbit, ABS_CNT) {
 		int min, max;
-		if (!test_bit(cnt, dev->absbit))
-			continue;
 
 		min = input_abs_get_min(dev, cnt);
 		max = input_abs_get_max(dev, cnt);
@@ -325,8 +330,7 @@ static int uinput_validate_absbits(struct input_dev *dev)
 				UINPUT_NAME, cnt,
 				input_abs_get_min(dev, cnt),
 				input_abs_get_max(dev, cnt));
-			retval = -EINVAL;
-			break;
+			return -EINVAL;
 		}
 
 		if (input_abs_get_flat(dev, cnt) >
@@ -338,11 +342,18 @@ static int uinput_validate_absbits(struct input_dev *dev)
 				input_abs_get_flat(dev, cnt),
 				input_abs_get_min(dev, cnt),
 				input_abs_get_max(dev, cnt));
-			retval = -EINVAL;
-			break;
+			return -EINVAL;
 		}
 	}
-	return retval;
+
+	if (test_bit(ABS_MT_SLOT, dev->absbit)) {
+		nslot = input_abs_get_max(dev, ABS_MT_SLOT) + 1;
+		input_mt_init_slots(dev, nslot, 0);
+	} else if (test_bit(ABS_MT_POSITION_X, dev->absbit)) {
+		input_set_events_per_packet(dev, 60);
+	}
+
+	return 0;
 }
 
 static int uinput_allocate_device(struct uinput_device *udev)
@@ -408,19 +419,9 @@ static int uinput_setup_device(struct uinput_device *udev,
 		input_abs_set_flat(dev, i, user_dev->absflat[i]);
 	}
 
-	/* check if absmin/absmax/absfuzz/absflat are filled as
-	 * told in Documentation/input/input-programming.txt */
-	if (test_bit(EV_ABS, dev->evbit)) {
-		retval = uinput_validate_absbits(dev);
-		if (retval < 0)
-			goto exit;
-		if (test_bit(ABS_MT_SLOT, dev->absbit)) {
-			int nslot = input_abs_get_max(dev, ABS_MT_SLOT) + 1;
-			input_mt_init_slots(dev, nslot, 0);
-		} else if (test_bit(ABS_MT_POSITION_X, dev->absbit)) {
-			input_set_events_per_packet(dev, 60);
-		}
-	}
+	retval = uinput_validate_absbits(dev);
+	if (retval < 0)
+		goto exit;
 
 	udev->state = UIST_SETUP_COMPLETE;
 	retval = count;
@@ -430,20 +431,30 @@ static int uinput_setup_device(struct uinput_device *udev,
 	return retval;
 }
 
-static ssize_t uinput_inject_event(struct uinput_device *udev,
-				   const char __user *buffer, size_t count)
+static ssize_t uinput_inject_events(struct uinput_device *udev,
+				    const char __user *buffer, size_t count)
 {
 	struct input_event ev;
+	size_t bytes = 0;
 
-	if (count < input_event_size())
+	if (count != 0 && count < input_event_size())
 		return -EINVAL;
 
-	if (input_event_from_user(buffer, &ev))
-		return -EFAULT;
+	while (bytes + input_event_size() <= count) {
+		/*
+		 * Note that even if some events were fetched successfully
+		 * we are still going to return EFAULT instead of partial
+		 * count to let userspace know that it got it's buffers
+		 * all wrong.
+		 */
+		if (input_event_from_user(buffer + bytes, &ev))
+			return -EFAULT;
 
-	input_event(udev->dev, ev.type, ev.code, ev.value);
+		input_event(udev->dev, ev.type, ev.code, ev.value);
+		bytes += input_event_size();
+	}
 
-	return input_event_size();
+	return bytes;
 }
 
 static ssize_t uinput_write(struct file *file, const char __user *buffer,
@@ -460,7 +471,7 @@ static ssize_t uinput_write(struct file *file, const char __user *buffer,
 		return retval;
 
 	retval = udev->state == UIST_CREATED ?
-			uinput_inject_event(udev, buffer, count) :
+			uinput_inject_events(udev, buffer, count) :
 			uinput_setup_device(udev, buffer, count);
 
 	mutex_unlock(&udev->mutex);
@@ -683,51 +694,51 @@ static long uinput_ioctl_handler(struct file *file, unsigned int cmd,
 	switch (cmd) {
 		case UI_DEV_CREATE:
 			retval = uinput_create_device(udev);
-			break;
+			goto out;
 
 		case UI_DEV_DESTROY:
 			uinput_destroy_device(udev);
-			break;
+			goto out;
 
 		case UI_SET_EVBIT:
 			retval = uinput_set_bit(arg, evbit, EV_MAX);
-			break;
+			goto out;
 
 		case UI_SET_KEYBIT:
 			retval = uinput_set_bit(arg, keybit, KEY_MAX);
-			break;
+			goto out;
 
 		case UI_SET_RELBIT:
 			retval = uinput_set_bit(arg, relbit, REL_MAX);
-			break;
+			goto out;
 
 		case UI_SET_ABSBIT:
 			retval = uinput_set_bit(arg, absbit, ABS_MAX);
-			break;
+			goto out;
 
 		case UI_SET_MSCBIT:
 			retval = uinput_set_bit(arg, mscbit, MSC_MAX);
-			break;
+			goto out;
 
 		case UI_SET_LEDBIT:
 			retval = uinput_set_bit(arg, ledbit, LED_MAX);
-			break;
+			goto out;
 
 		case UI_SET_SNDBIT:
 			retval = uinput_set_bit(arg, sndbit, SND_MAX);
-			break;
+			goto out;
 
 		case UI_SET_FFBIT:
 			retval = uinput_set_bit(arg, ffbit, FF_MAX);
-			break;
+			goto out;
 
 		case UI_SET_SWBIT:
 			retval = uinput_set_bit(arg, swbit, SW_MAX);
-			break;
+			goto out;
 
 		case UI_SET_PROPBIT:
 			retval = uinput_set_bit(arg, propbit, INPUT_PROP_MAX);
-			break;
+			goto out;
 
 		case UI_SET_PHYS:
 			if (udev->state == UIST_CREATED) {
@@ -743,18 +754,18 @@ static long uinput_ioctl_handler(struct file *file, unsigned int cmd,
 
 			kfree(udev->dev->phys);
 			udev->dev->phys = phys;
-			break;
+			goto out;
 
 		case UI_BEGIN_FF_UPLOAD:
 			retval = uinput_ff_upload_from_user(p, &ff_up);
 			if (retval)
-				break;
+				goto out;
 
 			req = uinput_request_find(udev, ff_up.request_id);
 			if (!req || req->code != UI_FF_UPLOAD ||
 			    !req->u.upload.effect) {
 				retval = -EINVAL;
-				break;
+				goto out;
 			}
 
 			ff_up.retval = 0;
@@ -765,65 +776,63 @@ static long uinput_ioctl_handler(struct file *file, unsigned int cmd,
 				memset(&ff_up.old, 0, sizeof(struct ff_effect));
 
 			retval = uinput_ff_upload_to_user(p, &ff_up);
-			break;
+			goto out;
 
 		case UI_BEGIN_FF_ERASE:
 			if (copy_from_user(&ff_erase, p, sizeof(ff_erase))) {
 				retval = -EFAULT;
-				break;
+				goto out;
 			}
 
 			req = uinput_request_find(udev, ff_erase.request_id);
 			if (!req || req->code != UI_FF_ERASE) {
 				retval = -EINVAL;
-				break;
+				goto out;
 			}
 
 			ff_erase.retval = 0;
 			ff_erase.effect_id = req->u.effect_id;
 			if (copy_to_user(p, &ff_erase, sizeof(ff_erase))) {
 				retval = -EFAULT;
-				break;
+				goto out;
 			}
 
-			break;
+			goto out;
 
 		case UI_END_FF_UPLOAD:
 			retval = uinput_ff_upload_from_user(p, &ff_up);
 			if (retval)
-				break;
+				goto out;
 
 			req = uinput_request_find(udev, ff_up.request_id);
 			if (!req || req->code != UI_FF_UPLOAD ||
 			    !req->u.upload.effect) {
 				retval = -EINVAL;
-				break;
+				goto out;
 			}
 
 			req->retval = ff_up.retval;
 			uinput_request_done(udev, req);
-			break;
+			goto out;
 
 		case UI_END_FF_ERASE:
 			if (copy_from_user(&ff_erase, p, sizeof(ff_erase))) {
 				retval = -EFAULT;
-				break;
+				goto out;
 			}
 
 			req = uinput_request_find(udev, ff_erase.request_id);
 			if (!req || req->code != UI_FF_ERASE) {
 				retval = -EINVAL;
-				break;
+				goto out;
 			}
 
 			req->retval = ff_erase.retval;
 			uinput_request_done(udev, req);
-			break;
-
-		default:
-			retval = -EINVAL;
+			goto out;
 	}
 
+	retval = -EINVAL;
  out:
 	mutex_unlock(&udev->mutex);
 	return retval;

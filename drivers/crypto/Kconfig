@@ -471,7 +471,6 @@ config CRYPTO_DEV_ATMEL_SHA
 config CRYPTO_DEV_SOMC_FIPS_KSCL
 	tristate "Sony Mobile FIPS AES-XTS/AES-CBC Driver"
 	default n
-	select WTL_ENCRYPTION_FILTER
 	help
 	  Support for the SOMC FIPS AES-XTS/AES-CBC Driver.
 	  To compile this driver as a module, choose M here.

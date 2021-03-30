@@ -1,6 +1,6 @@
 /* drivers/soc/qcom/smp2p_test.c
  *
- * Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2015, 2017 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,6 +16,7 @@
 #include <linux/jiffies.h>
 #include <linux/delay.h>
 #include <linux/completion.h>
+#include <linux/mutex.h>
 #include <soc/qcom/subsystem_restart.h>
 #include "smp2p_private.h"
 #include "smp2p_test_common.h"
@@ -85,7 +86,8 @@ static void smp2p_ut_local_basic(struct seq_file *s)
 		/* verify port was opened */
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&cb_data.cb_completion, HZ / 2), >, 0);
+					&cb_data.cb_completion,
+					msecs_to_jiffies(500)), >, 0);
 		UT_ASSERT_INT(cb_data.cb_count, ==, 1);
 		UT_ASSERT_INT(cb_data.event_open, ==, 1);
 		UT_ASSERT_INT(rmp->rx_interrupt_count, ==, 2);
@@ -173,8 +175,8 @@ static void smp2p_ut_local_late_open(struct seq_file *s)
 		/* verify port was opened */
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&cb_data.cb_completion, HZ / 2),
-			>, 0);
+					&cb_data.cb_completion,
+					msecs_to_jiffies(500)), >, 0);
 		UT_ASSERT_INT(cb_data.cb_count, ==, 1);
 		UT_ASSERT_INT(cb_data.event_open, ==, 1);
 		UT_ASSERT_INT(rmp->rx_interrupt_count, ==, 2);
@@ -265,8 +267,8 @@ static void smp2p_ut_local_early_open(struct seq_file *s)
 
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&cb_data.cb_completion, HZ / 8),
-			==, 0);
+					&cb_data.cb_completion,
+					msecs_to_jiffies(125)), ==, 0);
 		UT_ASSERT_INT(cb_data.cb_count, ==, 0);
 		UT_ASSERT_INT(cb_data.event_open, ==, 0);
 		UT_ASSERT_INT(rmp->rx_interrupt_count, ==, 1);
@@ -294,8 +296,8 @@ static void smp2p_ut_local_early_open(struct seq_file *s)
 
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&cb_data.cb_completion, HZ / 2),
-			>, 0);
+					&cb_data.cb_completion,
+					msecs_to_jiffies(500)), >, 0);
 		UT_ASSERT_INT(cb_data.cb_count, ==, 1);
 		UT_ASSERT_INT(cb_data.event_open, ==, 1);
 		UT_ASSERT_INT(rmp->rx_interrupt_count, ==, 2);
@@ -384,8 +386,8 @@ static void smp2p_ut_mock_loopback(struct seq_file *s)
 		local = msm_smp2p_init_rmt_lpb_proc(SMP2P_REMOTE_MOCK_PROC);
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&rmp->cb_completion, HZ / 2),
-			>, 0);
+					&rmp->cb_completion,
+					msecs_to_jiffies(500)), >, 0);
 		UT_ASSERT_INT(rmp->rx_interrupt_count, ==, 2);
 
 		/* Send Echo Command */
@@ -398,8 +400,8 @@ static void smp2p_ut_mock_loopback(struct seq_file *s)
 		rmp->tx_interrupt();
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&rmp->cb_completion, HZ / 2),
-			>, 0);
+					&rmp->cb_completion,
+					msecs_to_jiffies(500)), >, 0);
 
 		/* Verify Echo Response */
 		UT_ASSERT_INT(rmp->rx_interrupt_count, ==, 1);
@@ -421,8 +423,8 @@ static void smp2p_ut_mock_loopback(struct seq_file *s)
 		rmp->tx_interrupt();
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&rmp->cb_completion, HZ / 2),
-			>, 0);
+					&rmp->cb_completion,
+					msecs_to_jiffies(500)), >, 0);
 
 		/* Verify PINGPONG Response */
 		UT_ASSERT_INT(rmp->rx_interrupt_count, ==, 1);
@@ -443,8 +445,8 @@ static void smp2p_ut_mock_loopback(struct seq_file *s)
 		rmp->tx_interrupt();
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&rmp->cb_completion, HZ / 2),
-			>, 0);
+					&rmp->cb_completion,
+					msecs_to_jiffies(500)), >, 0);
 
 		/* Verify CLEARALL response */
 		UT_ASSERT_INT(rmp->rx_interrupt_count, ==, 1);
@@ -494,8 +496,8 @@ static void smp2p_ut_remote_inout_core(struct seq_file *s, int remote_pid)
 		UT_ASSERT_INT(ret, ==, 0);
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&cb_out.cb_completion, HZ / 2),
-			>, 0);
+					&cb_out.cb_completion,
+					msecs_to_jiffies(500)), >, 0);
 		UT_ASSERT_INT(cb_out.cb_count, ==, 1);
 		UT_ASSERT_INT(cb_out.event_open, ==, 1);
 
@@ -505,8 +507,8 @@ static void smp2p_ut_remote_inout_core(struct seq_file *s, int remote_pid)
 		UT_ASSERT_INT(ret, ==, 0);
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&cb_in.cb_completion, HZ / 2),
-			>, 0);
+					&cb_in.cb_completion,
+					msecs_to_jiffies(500)), >, 0);
 		UT_ASSERT_INT(cb_in.cb_count, ==, 1);
 		UT_ASSERT_INT(cb_in.event_open, ==, 1);
 
@@ -523,8 +525,8 @@ static void smp2p_ut_remote_inout_core(struct seq_file *s, int remote_pid)
 		/* Verify inbound reply */
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&cb_in.cb_completion, HZ / 2),
-			>, 0);
+					&cb_in.cb_completion,
+					msecs_to_jiffies(500)), >, 0);
 		UT_ASSERT_INT(cb_in.cb_count, ==, 1);
 		UT_ASSERT_INT(cb_in.event_entry_update, ==, 1);
 		UT_ASSERT_INT(SMP2P_GET_RMT_DATA(
@@ -549,8 +551,8 @@ static void smp2p_ut_remote_inout_core(struct seq_file *s, int remote_pid)
 		/* Verify inbound reply */
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&cb_in.cb_completion, HZ / 2),
-			>, 0);
+					&cb_in.cb_completion,
+					msecs_to_jiffies(500)), >, 0);
 		UT_ASSERT_INT(cb_in.cb_count, ==, 1);
 		UT_ASSERT_INT(cb_in.event_entry_update, ==, 1);
 		UT_ASSERT_INT(SMP2P_GET_RMT_DATA(
@@ -573,8 +575,8 @@ static void smp2p_ut_remote_inout_core(struct seq_file *s, int remote_pid)
 		/* Verify inbound reply */
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&cb_in.cb_completion, HZ / 2),
-			>, 0);
+					&cb_in.cb_completion,
+					msecs_to_jiffies(500)), >, 0);
 		UT_ASSERT_INT(cb_in.cb_count, ==, 1);
 		UT_ASSERT_INT(cb_in.event_entry_update, ==, 1);
 		UT_ASSERT_INT(SMP2P_GET_RMT_DATA(
@@ -598,8 +600,8 @@ static void smp2p_ut_remote_inout_core(struct seq_file *s, int remote_pid)
 
 		UT_ASSERT_INT(
 			(int)wait_for_completion_timeout(
-					&cb_in.cb_completion, HZ / 2),
-			==, 0);
+					&cb_in.cb_completion,
+					msecs_to_jiffies(500)), ==, 0);
 		UT_ASSERT_INT(cb_in.cb_count, ==, 0);
 		UT_ASSERT_INT(cb_in.event_entry_update, ==, 0);
 		ret = msm_smp2p_in_read(remote_pid, "smp2p", &test_response);
@@ -812,8 +814,8 @@ static void smp2p_ut_local_in_max_entries(struct seq_file *s)
 			UT_ASSERT_INT(ret, ==, 0);
 			UT_ASSERT_INT(
 				(int)wait_for_completion_timeout(
-					&(cb_in[j].cb_completion), HZ / 2),
-				>, 0);
+					&(cb_in[j].cb_completion),
+					msecs_to_jiffies(500)), >, 0);
 			UT_ASSERT_INT(cb_in[j].cb_count, ==, 1);
 			UT_ASSERT_INT(cb_in[j].event_entry_update, ==, 0);
 		}
@@ -907,8 +909,8 @@ static void smp2p_ut_local_in_multiple(struct seq_file *s)
 		UT_ASSERT_INT(ret, ==, 0);
 		UT_ASSERT_INT(
 				(int)wait_for_completion_timeout(
-				&(cb_in_1.cb_completion), HZ / 2),
-				>, 0);
+				&(cb_in_1.cb_completion),
+				msecs_to_jiffies(500)), >, 0);
 		UT_ASSERT_INT(cb_in_1.cb_count, ==, 1);
 		UT_ASSERT_INT(cb_in_1.event_entry_update, ==, 0);
 
@@ -918,8 +920,8 @@ static void smp2p_ut_local_in_multiple(struct seq_file *s)
 		UT_ASSERT_INT(ret, ==, 0);
 		UT_ASSERT_INT(
 				(int)wait_for_completion_timeout(
-				&(cb_in_2.cb_completion), HZ / 2),
-				>, 0);
+				&(cb_in_2.cb_completion),
+				msecs_to_jiffies(500)), >, 0);
 		UT_ASSERT_INT(cb_in_2.cb_count, ==, 1);
 		UT_ASSERT_INT(cb_in_2.event_entry_update, ==, 0);
 
@@ -1060,6 +1062,26 @@ static void smp2p_ut_local_ssr_ack(struct seq_file *s)
 }
 
 /**
+ * get_ssr_name_for_proc - Retrieve an SSR name from the provided list
+ *
+ * @names:	List of possible processor names
+ * @name_len:	The length of @names
+ * @index:	Index into @names
+ *
+ * Return: Pointer to the next processor name, NULL in error conditions
+ */
+static char *get_ssr_name_for_proc(char *names[], size_t name_len, int index)
+{
+	if (index >= name_len) {
+		pr_err("%s: SSR failed; check subsys name table\n",
+				__func__);
+		return NULL;
+	}
+
+	return names[index];
+}
+
+/**
  * smp2p_ut_local_ssr_ack - Verify SSR Done/ACK Feature
  *
  * @s: pointer to output file
@@ -1076,8 +1098,17 @@ static void smp2p_ut_remotesubsys_ssr_ack(struct seq_file *s, uint32_t rpid,
 		struct smp2p_smem *rhdr;
 		struct smp2p_smem *lhdr;
 		int negotiation_state;
-		bool ssr_ack_enabled;
+		int name_index;
+		int ret;
 		uint32_t ssr_done_start;
+		bool ssr_ack_enabled = false;
+		bool ssr_success = false;
+		char *name = NULL;
+
+		static char *mpss_names[] = {"modem", "mpss"};
+		static char *lpass_names[] = {"adsp", "lpass"};
+		static char *sensor_names[] = {"slpi", "dsps"};
+		static char *wcnss_names[] = {"wcnss"};
 
 		lhdr = smp2p_get_out_item(rpid, &negotiation_state);
 		UT_ASSERT_PTR(NULL, !=, lhdr);
@@ -1098,8 +1129,53 @@ static void smp2p_ut_remotesubsys_ssr_ack(struct seq_file *s, uint32_t rpid,
 				SMP2P_GET_RESTART_ACK(lhdr->flags));
 
 		/* trigger restart */
-		seq_printf(s, "Restarting '%s'\n", int_cfg->name);
-		subsystem_restart(int_cfg->name);
+		name_index = 0;
+		while (!ssr_success) {
+
+			switch (rpid) {
+			case SMP2P_MODEM_PROC:
+				name = get_ssr_name_for_proc(mpss_names,
+						ARRAY_SIZE(mpss_names),
+						name_index);
+				break;
+			case SMP2P_AUDIO_PROC:
+				name = get_ssr_name_for_proc(lpass_names,
+						ARRAY_SIZE(lpass_names),
+						name_index);
+				break;
+			case SMP2P_SENSOR_PROC:
+				name = get_ssr_name_for_proc(sensor_names,
+						ARRAY_SIZE(sensor_names),
+						name_index);
+				break;
+			case SMP2P_WIRELESS_PROC:
+				name = get_ssr_name_for_proc(wcnss_names,
+						ARRAY_SIZE(wcnss_names),
+						name_index);
+				break;
+			default:
+				pr_err("%s: Invalid proc ID %d given for ssr\n",
+						__func__, rpid);
+			}
+
+			if (!name) {
+				seq_puts(s, "\tSSR failed; check subsys name table\n");
+				failed = true;
+				break;
+			}
+
+			seq_printf(s, "Restarting '%s'\n", name);
+			ret = subsystem_restart(name);
+			if (ret == -ENODEV) {
+				seq_puts(s, "\tSSR call failed\n");
+				++name_index;
+				continue;
+			}
+			ssr_success = true;
+		}
+		if (failed)
+			break;
+
 		msleep(10*1000);
 
 		/* verify ack signaling */
@@ -1164,12 +1240,15 @@ static void smp2p_ut_remote_ssr_ack(struct seq_file *s)
 }
 
 static struct dentry *dent;
+static DEFINE_MUTEX(show_lock);
 
 static int debugfs_show(struct seq_file *s, void *data)
 {
 	void (*show)(struct seq_file *) = s->private;
 
+	mutex_lock(&show_lock);
 	show(s);
+	mutex_unlock(&show_lock);
 
 	return 0;
 }

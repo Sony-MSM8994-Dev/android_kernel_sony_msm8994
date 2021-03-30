@@ -26,8 +26,8 @@
 #define NBR_OF_ELEMENTS 3
 
 struct rdtags_tag_const {
-	const char const key[16];
-	const char const value[64];
+	const char key[16];
+	const char value[64];
 };
 
 struct rdtags_build_tags {

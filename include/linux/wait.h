@@ -12,9 +12,12 @@ typedef struct __wait_queue wait_queue_t;
 typedef int (*wait_queue_func_t)(wait_queue_t *wait, unsigned mode, int flags, void *key);
 int default_wake_function(wait_queue_t *wait, unsigned mode, int flags, void *key);
 
+/* __wait_queue::flags */
+#define WQ_FLAG_EXCLUSIVE	0x01
+#define WQ_FLAG_WOKEN		0x02
+
 struct __wait_queue {
 	unsigned int flags;
-#define WQ_FLAG_EXCLUSIVE	0x01
 	void *private;
 	wait_queue_func_t func;
 	struct list_head task_list;
@@ -970,6 +973,8 @@ void prepare_to_wait_exclusive(wait_queue_head_t *q, wait_queue_t *wait, int sta
 void finish_wait(wait_queue_head_t *q, wait_queue_t *wait);
 void abort_exclusive_wait(wait_queue_head_t *q, wait_queue_t *wait,
 			unsigned int mode, void *key);
+long wait_woken(wait_queue_t *wait, unsigned mode, long timeout);
+int woken_wake_function(wait_queue_t *wait, unsigned mode, int sync, void *key);
 int autoremove_wake_function(wait_queue_t *wait, unsigned mode, int sync, void *key);
 int wake_bit_function(wait_queue_t *wait, unsigned mode, int sync, void *key);
 
@@ -1046,5 +1051,33 @@ static inline int wait_on_bit_lock(void *word, int bit,
 		return 0;
 	return out_of_line_wait_on_bit_lock(word, bit, action, mode);
 }
-	
+
+/* 3.18 backport */
+extern int bit_wait_io(void *);
+
+/**
+ * wait_on_bit_io - wait for a bit to be cleared
+ * @word: the word being waited on, a kernel virtual address
+ * @bit: the bit of the word being waited on
+ * @mode: the task state to sleep in
+ *
+ * Use the standard hashed waitqueue table to wait for a bit
+ * to be cleared.  This is similar to wait_on_bit(), but calls
+ * io_schedule() instead of schedule() for the actual waiting.
+ *
+ * Returned value will be zero if the bit was cleared, or non-zero
+ * if the process received a signal and the mode permitted wakeup
+ * on that signal.
+ */
+static inline int
+wait_on_bit_io(void *word, int bit, unsigned mode)
+{
+	might_sleep();
+	if (!test_bit(bit, word))
+		return 0;
+	return out_of_line_wait_on_bit(word, bit,
+				       bit_wait_io,
+				       mode);
+}
+
 #endif

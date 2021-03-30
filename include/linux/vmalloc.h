@@ -77,6 +77,8 @@ extern void *__vmalloc(unsigned long size, gfp_t gfp_mask, pgprot_t prot);
 extern void *__vmalloc_node_range(unsigned long size, unsigned long align,
 			unsigned long start, unsigned long end, gfp_t gfp_mask,
 			pgprot_t prot, int node, const void *caller);
+extern void *__vmalloc_node_flags(unsigned long size, int node, gfp_t flags);
+
 extern void vfree(const void *addr);
 
 extern void *vmap(struct page **pages, unsigned int count,
@@ -182,11 +184,6 @@ pcpu_free_vm_areas(struct vm_struct **vms, int nr_vms)
 # endif
 #endif
 
-struct vmalloc_info {
-	unsigned long   used;
-	unsigned long   largest_chunk;
-};
-
 #ifdef CONFIG_MMU
 #ifdef CONFIG_ENABLE_VMALLOC_SAVING
 extern unsigned long total_vmalloc_size;
@@ -194,15 +191,8 @@ extern unsigned long total_vmalloc_size;
 #else
 #define VMALLOC_TOTAL (VMALLOC_END - VMALLOC_START)
 #endif
-extern void get_vmalloc_info(struct vmalloc_info *vmi);
 #else
-
 #define VMALLOC_TOTAL 0UL
-#define get_vmalloc_info(vmi)			\
-do {						\
-	(vmi)->used = 0;			\
-	(vmi)->largest_chunk = 0;		\
-} while (0)
 #endif
 
 #endif /* _LINUX_VMALLOC_H */
