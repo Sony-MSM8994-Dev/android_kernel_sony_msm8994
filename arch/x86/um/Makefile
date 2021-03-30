@@ -43,4 +43,4 @@ $(obj)/user-offsets.s: c_flags = -Wp,-MD,$(depfile) $(USER_CFLAGS) \
 UNPROFILE_OBJS := stub_segv.o
 CFLAGS_stub_segv.o := $(CFLAGS_NO_HARDENING)
 
-include arch/um/scripts/Makefile.rules
+#include arch/um/scripts/Makefile.rules

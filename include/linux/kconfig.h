@@ -43,7 +43,4 @@
  */
 #define IS_MODULE(option) config_enabled(option##_MODULE)
 
-/* Make sure we always have all types and struct attributes defined. */
-#include <linux/compiler_types.h>
-
 #endif /* __LINUX_KCONFIG_H */

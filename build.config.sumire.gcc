@@ -1,5 +1,5 @@
-export KBUILD_BUILD_USER=GreyLeshy
-export KBUILD_BUILD_HOST=BuildHost
+#export KBUILD_BUILD_USER=GreyLeshy
+#export KBUILD_BUILD_HOST=BuildHost
 
 export USE_CCACHE=1
 export CACHE_DIR=~/.ccache
@@ -7,7 +7,7 @@ export CACHE_DIR=~/.ccache
 export ARCH=arm64
 
 ### GCC 7.5 / Linaro Toolchain
-export PATH=~/android/toolchain/gcc-linaro-7.5-2019.12_aarch64-linux-gnu/bin/:$PATH
+export PATH=~/dev/sdk/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu/bin:$PATH
 export CROSS_COMPILE=aarch64-linux-gnu-
 
 export KBUILD_DIFFCONFIG=sumire_diffconfig
@@ -19,7 +19,7 @@ make -j$NUM_CPUS O=./out
 
 
 echo "checking for compiled kernel..."
-if [ -f out/arch/arm64/boot/Image.gz-dtb ]
+if [ -f out/arch/arm64/boot/Image.gz-dtbz ]
 then
 	echo "Done"
 
