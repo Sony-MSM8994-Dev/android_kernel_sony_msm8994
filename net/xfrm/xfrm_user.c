@@ -400,9 +400,6 @@ static inline int xfrm_replay_verify_len(struct xfrm_replay_state_esn *replay_es
 	if (up->replay_window > up->bmp_len * sizeof(__u32) * 8)
 		return -EINVAL;
 
-	if (up->replay_window > up->bmp_len * sizeof(__u32) * 8)
-		return -EINVAL;
-
 	return 0;
 }
 
@@ -862,11 +859,6 @@ static int copy_to_user_state_extra(struct xfrm_state *x,
 	}
 	if (x->security)
 		ret = copy_sec_ctx(x->security, skb);
-	if (x->props.output_mark) {
-		ret = nla_put_u32(skb, XFRMA_OUTPUT_MARK, x->props.output_mark);
-		if (ret)
-			goto out;
-	}
 out:
 	return ret;
 }

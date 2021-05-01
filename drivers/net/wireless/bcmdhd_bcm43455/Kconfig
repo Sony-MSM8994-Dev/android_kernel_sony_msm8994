@@ -44,14 +44,14 @@ endchoice
 config BCMDHD_FW_PATH
 	depends on BCMDHD
 	string "Firmware path"
-	default "/system/etc/firmware/fw_bcmdhd.bin"
+	default "/system/etc/firmware/wlan/bcmdhd/fw_bcmdhd.bin"
 	---help---
 	  Path to the firmware file.
 
 config BCMDHD_NVRAM_PATH
 	depends on BCMDHD
 	string "NVRAM path"
-	default "/system/etc/wifi/bcmdhd.cal"
+	default "/system/etc/firmware/wlan/bcmdhd/bcmdhd.cal"
 	---help---
 	  Path to the calibration file.
 
