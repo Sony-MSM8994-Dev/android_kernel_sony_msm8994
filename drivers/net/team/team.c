@@ -253,6 +253,17 @@ static void __team_option_inst_mark_removed_port(struct team *team,
 	}
 }
 
+static bool __team_option_inst_tmp_find(const struct list_head *opts,
+					const struct team_option_inst *needle)
+{
+	struct team_option_inst *opt_inst;
+
+	list_for_each_entry(opt_inst, opts, tmp_list)
+		if (opt_inst == needle)
+			return true;
+	return false;
+}
+
 static int __team_options_register(struct team *team,
 				   const struct team_option *option,
 				   size_t option_count)
@@ -863,7 +874,7 @@ static void team_port_disable(struct team *team,
 static void __team_compute_features(struct team *team)
 {
 	struct team_port *port;
-	u32 vlan_features = TEAM_VLAN_FEATURES;
+	netdev_features_t vlan_features = TEAM_VLAN_FEATURES;
 	unsigned short max_hard_header_len = ETH_HLEN;
 	unsigned int flags, dst_release_flag = IFF_XMIT_DST_RELEASE;
 
@@ -2158,7 +2169,7 @@ send_done:
 	if (!nlh) {
 		err = __send_and_alloc_skb(&skb, team, portid, send_func);
 		if (err)
-			goto errout;
+			return err;
 		goto send_done;
 	}
 
@@ -2322,6 +2333,14 @@ static int team_nl_cmd_options_set(struct sk_buff *skb, struct genl_info *info)
 			if (err)
 				goto team_put;
 			opt_inst->changed = true;
+
+			/* dumb/evil user-space can send us duplicate opt,
+			 * keep only the last one
+			 */
+			if (__team_option_inst_tmp_find(&opt_inst_list,
+							opt_inst))
+				continue;
+
 			list_add(&opt_inst->tmp_list, &opt_inst_list);
 		}
 		if (!opt_found) {
@@ -2438,7 +2457,7 @@ send_done:
 	if (!nlh) {
 		err = __send_and_alloc_skb(&skb, team, portid, send_func);
 		if (err)
-			goto errout;
+			return err;
 		goto send_done;
 	}
 
@@ -2668,8 +2687,10 @@ static int team_device_event(struct notifier_block *unused,
 	case NETDEV_UP:
 		if (netif_carrier_ok(dev))
 			team_port_change_check(port, true);
+		break;
 	case NETDEV_DOWN:
 		team_port_change_check(port, false);
+		break;
 	case NETDEV_CHANGE:
 		if (netif_running(port->dev))
 			team_port_change_check(port,

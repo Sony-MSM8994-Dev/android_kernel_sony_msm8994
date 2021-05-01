@@ -271,6 +271,7 @@ static u8 cdc_ncm_setup(struct cdc_ncm_ctx *ctx)
 			/* if value changed, update device */
 			if (ctx->max_datagram_size !=
 					le16_to_cpu(max_datagram_size)) {
+				max_datagram_size = cpu_to_le16(ctx->max_datagram_size);
 				err = usbnet_write_cmd(dev,
 						USB_CDC_SET_MAX_DATAGRAM_SIZE,
 						USB_TYPE_CLASS | USB_DIR_OUT
@@ -610,9 +611,7 @@ static int cdc_ncm_bind(struct usbnet *dev, struct usb_interface *intf)
 	if (cdc_ncm_comm_intf_is_mbim(intf->cur_altsetting))
 		return -ENODEV;
 
-	/* NCM data altsetting is always 1 */
-	return cdc_ncm_bind_common(dev, intf, 1);
-
+	return cdc_ncm_bind_common(dev, intf, CDC_NCM_DATA_ALTSETTING_NCM);
 }
 
 static void cdc_ncm_align_tail(struct sk_buff *skb, size_t modulus, size_t remainder, size_t max)
@@ -1159,7 +1158,7 @@ static void cdc_ncm_disconnect(struct usb_interface *intf)
 static const struct driver_info cdc_ncm_info = {
 	.description = "CDC NCM",
 	.flags = FLAG_POINTTOPOINT | FLAG_NO_SETINT | FLAG_MULTI_PACKET
-			| FLAG_LINK_INTR,
+                        | FLAG_LINK_INTR,
 	.bind = cdc_ncm_bind,
 	.unbind = cdc_ncm_unbind,
 	.check_connect = cdc_ncm_check_connect,
