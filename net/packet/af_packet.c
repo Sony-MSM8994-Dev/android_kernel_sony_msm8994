@@ -1393,6 +1393,7 @@ static struct packet_fanout *fanout_release(struct sock *sk)
 			dev_remove_pack(&f->prot_hook);
 			kfree(f);
 		}
+	}
 	mutex_unlock(&fanout_mutex);
 
 	return f;
