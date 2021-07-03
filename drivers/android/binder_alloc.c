@@ -235,6 +235,10 @@ static int binder_update_page_range(struct binder_alloc *alloc, int allocate,
 				alloc->pid, page_addr);
 			goto err_alloc_page_failed;
 		}
+
+		if (WARN_ON(!vma))
+			goto err_page_ptr_cleared;
+
 		ret = map_kernel_range_noflush((unsigned long)page_addr,
 					PAGE_SIZE, PAGE_KERNEL, page);
 		flush_cache_vmap((unsigned long)page_addr,
