@@ -1,4 +1,4 @@
-/* binder_alloc_selftest.c
+ /* binder_alloc_selftest.c
  *
  * Android IPC Subsystem
  *
