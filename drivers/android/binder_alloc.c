@@ -188,7 +188,7 @@ static int binder_update_page_range(struct binder_alloc *alloc, int allocate,
 	void *page_addr;
 	unsigned long user_page_addr;
 	struct page **page;
-	struct mm_struct *mm;
+	struct mm_struct *mm = NULL;
 
 	binder_alloc_debug(BINDER_DEBUG_BUFFER_ALLOC,
 		     "%d: %s pages %pK-%pK\n", alloc->pid,
