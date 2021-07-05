@@ -5205,69 +5205,6 @@ static long binder_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			ret = -EFAULT;
 			goto err;
 		}
-		if (!info.enable) {
-			binder_inner_proc_lock(target_proc);
-			target_proc->sync_recv = false;
-			target_proc->async_recv = false;
-			target_proc->is_frozen = false;
-			binder_inner_proc_unlock(target_proc);
-			binder_proc_dec_tmpref(target_proc);
-			break;
-		}
-		/*
-		 * Freezing the target. Prevent new transactions by
-		 * setting frozen state. If timeout specified, wait
-		 * for transactions to drain.
-		 */
-		binder_inner_proc_lock(target_proc);
-		target_proc->sync_recv = false;
-		target_proc->async_recv = false;
-		target_proc->is_frozen = true;
-		binder_inner_proc_unlock(target_proc);
-		if (info.timeout_ms > 0)
-			ret = wait_event_interruptible_timeout(
-				target_proc->freeze_wait,
-				(!target_proc->outstanding_txns),
-				msecs_to_jiffies(info.timeout_ms));
-		if (!ret && target_proc->outstanding_txns) {
-			ret = -EAGAIN;
-		}
-		if (ret < 0) {
-			binder_inner_proc_lock(target_proc);
-			target_proc->is_frozen = false;
-			binder_inner_proc_unlock(target_proc);
-		}
-		binder_proc_dec_tmpref(target_proc);
-=======
-			if (target_proc->pid == info.pid) {
-				binder_inner_proc_lock(target_proc);
-				target_proc->tmp_ref++;
-				binder_inner_proc_unlock(target_proc);
-
-				mutex_unlock(&binder_procs_lock);
-				ret = binder_ioctl_freeze(&info, target_proc);
-				mutex_lock(&binder_procs_lock);
-
-				binder_proc_dec_tmpref(target_proc);
-
-				if (ret < 0)
-					break;
-			}
-		}
-		mutex_unlock(&binder_procs_lock);
-
->>>>>>> 8d39b8ff1577 (binder: freeze multiple contexts)
-		if (ret < 0)
-			goto err;
-		break;
-	}
-	case BINDER_GET_FROZEN_INFO: {
-		struct binder_frozen_status_info info;
-
-		if (copy_from_user(&info, ubuf, sizeof(info))) {
-			ret = -EFAULT;
-			goto err;
-		}
 
 		ret = binder_ioctl_get_freezer_info(&info);
 		if (ret < 0)
