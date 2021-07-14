@@ -932,7 +932,8 @@ static inline int file_check_writeable(struct file *filp)
  *
  * Lockd stuffs a "host" pointer into this.
  */
-typedef struct files_struct *fl_owner_t;
+//typedef struct files_struct *fl_owner_t;
+typedef void *fl_owner_t;
 
 struct file_lock_operations {
 	void (*fl_copy_lock)(struct file_lock *, struct file_lock *);
