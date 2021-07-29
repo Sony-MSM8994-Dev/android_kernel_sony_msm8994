@@ -114,6 +114,7 @@ static inline void refcount_dec(refcount_t *r)
 {
 	atomic_dec(&r->refs);
 }
+# endif /* !CONFIG_ARCH_HAS_REFCOUNT */
 #endif /* CONFIG_REFCOUNT_FULL */
 
 extern __must_check bool refcount_dec_if_one(refcount_t *r);
