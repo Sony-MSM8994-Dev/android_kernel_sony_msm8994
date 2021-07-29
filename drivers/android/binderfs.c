@@ -731,7 +731,6 @@ static int binderfs_fill_super(struct super_block *sb, void *data, int silent)
 		return init_binder_logs(sb);
 
 	return 0;
->>>>>>> 0e13e452dafc (binder: Add stats, state and transactions files)
 }
 
 static struct dentry *binderfs_mount(struct file_system_type *fs_type,
