@@ -1212,8 +1212,8 @@ static void binder_transaction_priority(struct task_struct *task,
 					struct binder_priority node_prio,
 					bool inherit_rt)
 {
-	bool inherit_fifo = t->buffer->target_node->proc->context->inherit_fifo_prio;
-	struct binder_priority desired_prio;
+	//bool inherit_fifo = t->buffer->target_node->proc->context->inherit_fifo_prio;
+	struct binder_priority desired_prio = t->priority;
 
 	if (t->set_priority_called)
 		return;
@@ -1222,7 +1222,7 @@ static void binder_transaction_priority(struct task_struct *task,
 	t->saved_priority.sched_policy = task->policy;
 	t->saved_priority.prio = task->normal_prio;
 
-	if (!inherit_rt && is_rt_policy(desired_prio.sched_policy) && !inherit_fifo) {
+	if (!inherit_rt && is_rt_policy(desired_prio.sched_policy)) {
 		desired_prio.prio = NICE_TO_PRIO(0);
 		desired_prio.sched_policy = SCHED_NORMAL;
 	} else {
@@ -4775,7 +4775,7 @@ static int binder_ioctl_write_read(struct file *filp,
 out:
 	return ret;
 }
-
+/*
 static int binder_ioctl_set_inherit_fifo_prio(struct file *filp)
 {
 	int ret = 0;
@@ -4802,7 +4802,7 @@ static int binder_ioctl_set_inherit_fifo_prio(struct file *filp)
 	mutex_unlock(&context->context_mgr_node_lock);
 	return ret;
 }
-
+*/
 static int binder_ioctl_set_ctx_mgr(struct file *filp,
 				    struct flat_binder_object *fbo)
 {
@@ -5042,11 +5042,11 @@ static long binder_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (ret)
 			goto err;
 		break;
-	case BINDER_SET_INHERIT_FIFO_PRIO:
+	/*case BINDER_SET_INHERIT_FIFO_PRIO:
 		ret = binder_ioctl_set_inherit_fifo_prio(filp);
 		if (ret)
 			goto err;
-		break;
+		break;*/
 
 	case BINDER_THREAD_EXIT:
 		binder_debug(BINDER_DEBUG_THREADS, "%d:%d exit\n",
@@ -5306,7 +5306,7 @@ static int binder_open(struct inode *nodp, struct file *filp)
 		proc->default_priority.prio = NICE_TO_PRIO(0);
 	}
 
-	proc->default_priority = task_nice(current);
+	//proc->default_priority = task_nice(current);
 	/* binderfs stashes devices in i_private */
 	if (is_binderfs_device(nodp)) {
 		binder_dev = nodp->i_private;
@@ -5362,7 +5362,7 @@ static int binder_open(struct inode *nodp, struct file *filp)
 		 * contexts of a given PID.
 		 */
 		binderfs_entry = binderfs_create_file(binder_binderfs_dir_entry_proc,
-			strbuf, &proc_fops, (void *)(unsigned long)proc->pid);
+			strbuf, &binder_proc_fops, (void *)(unsigned long)proc->pid);
 		if (!IS_ERR(binderfs_entry)) {
 			proc->binderfs_entry = binderfs_entry;
 		} else {
@@ -5495,6 +5495,8 @@ static void binder_deferred_release(struct binder_proc *proc)
 {
 	struct binder_context *context = proc->context;
 	struct rb_node *n;
+	struct binder_device *device;
+
 	int threads, nodes, incoming_refs, outgoing_refs, active_transactions;
 
 	BUG_ON(proc->files);
@@ -5983,7 +5985,7 @@ static void print_binder_proc_stats(struct seq_file *m,
 
 	seq_printf(m, "proc %d\n", proc->pid);
 	seq_printf(m, "context %s\n", proc->context->name);
-	seq_printf(m, "context FIFO: %d\n", proc->context->inherit_fifo_prio);
+	//seq_printf(m, "context FIFO: %d\n", proc->context->inherit_fifo_prio);
 	count = 0;
 	ready_threads = 0;
 	binder_inner_proc_lock(proc);
