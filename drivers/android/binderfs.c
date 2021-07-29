@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 
-#include <linux/compiler_types.h>
+#include <linux/compiler.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
 #include <linux/fsnotify.h>
@@ -29,7 +29,7 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/user_namespace.h>
-#include <linux/xarray.h>
+//#include <linux/xarray.h>
 #include <uapi/asm-generic/errno-base.h>
 #include <uapi/linux/android/binder.h>
 #include <uapi/linux/android/binderfs.h>
