@@ -5541,7 +5541,6 @@ static void binder_deferred_release(struct binder_proc *proc)
 {
 	struct binder_context *context = proc->context;
 	struct rb_node *n;
-	struct binder_device *device;
 
 	int threads, nodes, incoming_refs, outgoing_refs, active_transactions;
 
