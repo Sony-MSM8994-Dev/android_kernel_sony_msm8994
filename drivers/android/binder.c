@@ -3256,12 +3256,8 @@ static void binder_transaction(struct binder_proc *proc,
 				      ALIGN(tr->data_size, sizeof(void *)));
 	offp = off_start;
 
-	if (binder_alloc_copy_user_to_buffer(
-				&target_proc->alloc,
-				t->buffer, 0,
-				(const void __user *)
-					(uintptr_t)tr->data.ptr.buffer,
-				tr->data_size)) {
+	if (copy_from_user(t->buffer->data, (const void __user *)(uintptr_t)
+			   tr->data.ptr.buffer, tr->data_size)) {
 		binder_user_error("%d:%d got transaction with invalid data ptr\n",
 				proc->pid, thread->pid);
 		return_error = BR_FAILED_REPLY;
@@ -3269,13 +3265,8 @@ static void binder_transaction(struct binder_proc *proc,
 		return_error_line = __LINE__;
 		goto err_copy_data_failed;
 	}
-	if (binder_alloc_copy_user_to_buffer(
-				&target_proc->alloc,
-				t->buffer,
-				ALIGN(tr->data_size, sizeof(void *)),
-				(const void __user *)
-					(uintptr_t)tr->data.ptr.offsets,
-				tr->offsets_size)) {
+	if (copy_from_user(offp, (const void __user *)(uintptr_t)
+			   tr->data.ptr.offsets, tr->offsets_size)) {
 		binder_user_error("%d:%d got transaction with invalid offsets ptr\n",
 				proc->pid, thread->pid);
 		return_error = BR_FAILED_REPLY;
@@ -3406,8 +3397,6 @@ static void binder_transaction(struct binder_proc *proc,
 			struct binder_buffer_object *bp =
 				to_binder_buffer_object(hdr);
 			size_t buf_left = sg_buf_end - sg_bufp;
-			binder_size_t sg_buf_offset = (uintptr_t)sg_bufp -
-				(uintptr_t)t->buffer->data;
 
 			if (bp->length > buf_left) {
 				binder_user_error("%d:%d got transaction with too large buffer\n",
@@ -3417,13 +3406,9 @@ static void binder_transaction(struct binder_proc *proc,
 				return_error_line = __LINE__;
 				goto err_bad_offset;
 			}
-			if (binder_alloc_copy_user_to_buffer(
-						&target_proc->alloc,
-						t->buffer,
-						sg_buf_offset,
-						(const void __user *)
-							(uintptr_t)bp->buffer,
-						bp->length)) {
+			if (copy_from_user(sg_bufp,
+					   (const void __user *)(uintptr_t)
+					   bp->buffer, bp->length)) {
 				binder_user_error("%d:%d got transaction with invalid offsets ptr\n",
 						  proc->pid, thread->pid);
 				return_error_param = -EFAULT;

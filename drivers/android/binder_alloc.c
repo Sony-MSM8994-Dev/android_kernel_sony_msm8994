@@ -28,9 +28,8 @@
 #include <linux/vmalloc.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
-#include <linux/sizes.h>
-#include <linux/uaccess.h>
 #include <linux/highmem.h>
+#include <linux/sizes.h>
 #include "binder_alloc.h"
 #include "binder_trace.h"
 
