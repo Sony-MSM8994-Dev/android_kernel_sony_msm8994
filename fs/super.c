@@ -34,7 +34,6 @@
 #include <linux/cleancache.h>
 #include <linux/fsnotify.h>
 #include <linux/lockdep.h>
-#include <linux/list_lru.h>
 #include "internal.h"
 
 
@@ -171,12 +170,8 @@ static struct super_block *alloc_super(struct file_system_type *type, int flags)
 		INIT_HLIST_NODE(&s->s_instances);
 		INIT_HLIST_BL_HEAD(&s->s_anon);
 		INIT_LIST_HEAD(&s->s_inodes);
-
-		if (list_lru_init(&s->s_dentry_lru))
-			goto err_out;
-		if (list_lru_init(&s->s_inode_lru))
-			goto err_out_dentry_lru;
-
+		INIT_LIST_HEAD(&s->s_dentry_lru);
+		INIT_LIST_HEAD(&s->s_inode_lru);
 		spin_lock_init(&s->s_inode_lru_lock);
 		INIT_LIST_HEAD(&s->s_mounts);
 		init_rwsem(&s->s_umount);
@@ -215,9 +210,6 @@ static struct super_block *alloc_super(struct file_system_type *type, int flags)
 	}
 out:
 	return s;
-
-err_out_dentry_lru:
-	list_lru_destroy(&s->s_dentry_lru);
 err_out:
 	security_sb_free(s);
 	destroy_sb_writers(s);
