@@ -28,6 +28,7 @@
 #include <linux/vmalloc.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
+#include <linux/ratelimit.h>
 #include <linux/highmem.h>
 #include <linux/sizes.h>
 #include "binder_alloc.h"
@@ -43,12 +44,12 @@ enum {
 static uint32_t binder_alloc_debug_mask;
 
 module_param_named(debug_mask, binder_alloc_debug_mask,
-		   uint, S_IWUSR | S_IRUGO);
+		   uint, 0644);
 
 #define binder_alloc_debug(mask, x...) \
 	do { \
 		if (binder_alloc_debug_mask & mask) \
-			pr_info(x); \
+			pr_info_ratelimited(x); \
 	} while (0)
 
 static struct binder_buffer *binder_buffer_next(struct binder_buffer *buffer)
