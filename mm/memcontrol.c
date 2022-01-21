@@ -49,7 +49,6 @@
 #include <linux/fs.h>
 #include <linux/seq_file.h>
 #include <linux/vmalloc.h>
-#include <linux/vmpressure.h>
 #include <linux/mm_inline.h>
 #include <linux/page_cgroup.h>
 #include <linux/cpu.h>
@@ -264,9 +263,6 @@ struct mem_cgroup {
 	 */
 	struct res_counter res;
 
-	/* vmpressure notifications */
-	struct vmpressure vmpressure;
-
 	union {
 		/*
 		 * the counter to account for mem+swap usage.
@@ -366,7 +362,6 @@ struct mem_cgroup {
 	atomic_t	numainfo_events;
 	atomic_t	numainfo_updating;
 #endif
-
 	/*
 	 * Per cgroup active and inactive list, similar to the
 	 * per zone LRU lists.
@@ -516,24 +511,6 @@ static inline
 struct mem_cgroup *mem_cgroup_from_css(struct cgroup_subsys_state *s)
 {
 	return container_of(s, struct mem_cgroup, css);
-}
-
-/* Some nice accessors for the vmpressure. */
-struct vmpressure *memcg_to_vmpressure(struct mem_cgroup *memcg)
-{
-	if (!memcg)
-		memcg = root_mem_cgroup;
-	return &memcg->vmpressure;
-}
-
-struct cgroup_subsys_state *vmpressure_to_css(struct vmpressure *vmpr)
-{
-	return &container_of(vmpr, struct mem_cgroup, vmpressure)->css;
-}
-
-struct vmpressure *css_to_vmpressure(struct cgroup_subsys_state *css)
-{
-	return &mem_cgroup_from_css(css)->vmpressure;
 }
 
 static inline bool mem_cgroup_is_root(struct mem_cgroup *memcg)
@@ -6001,11 +5978,6 @@ static struct cftype mem_cgroup_files[] = {
 		.unregister_event = mem_cgroup_oom_unregister_event,
 		.private = MEMFILE_PRIVATE(_OOM_TYPE, OOM_CONTROL),
 	},
-	{
-		.name = "pressure_level",
-		.register_event = vmpressure_register_event,
-		.unregister_event = vmpressure_unregister_event,
-	},
 #ifdef CONFIG_NUMA
 	{
 		.name = "numa_stat",
@@ -6287,7 +6259,6 @@ mem_cgroup_css_alloc(struct cgroup *cont)
 	memcg->move_charge_at_immigrate = 0;
 	mutex_init(&memcg->thresholds_lock);
 	spin_lock_init(&memcg->move_lock);
-	vmpressure_init(&memcg->vmpressure);
 
 	return &memcg->css;
 
