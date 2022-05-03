@@ -952,7 +952,6 @@ enum lru_status binder_alloc_free_page(struct list_head *item,
 			goto err_down_write_mmap_sem_failed;
 	}
 
-	list_lru_isolate(lru, item);
 	spin_unlock(lock);
 
 	if (vma) {
