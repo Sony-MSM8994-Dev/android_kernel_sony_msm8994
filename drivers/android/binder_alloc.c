@@ -907,7 +907,6 @@ void binder_alloc_vma_close(struct binder_alloc *alloc)
  * up pages when the system is under memory pressure.
  */
 enum lru_status binder_alloc_free_page(struct list_head *item,
-				       struct list_lru_one *lru,
 				       spinlock_t *lock,
 				       void *cb_arg)
 {
@@ -937,7 +936,7 @@ enum lru_status binder_alloc_free_page(struct list_head *item,
 
 		zap_page_range(alloc->vma,
 			       page_addr + alloc->user_buffer_offset,
-			       PAGE_SIZE);
+			       PAGE_SIZE, NULL);
 
 		up_write(&mm->mmap_sem);
 		mmput(mm);
@@ -946,8 +945,6 @@ enum lru_status binder_alloc_free_page(struct list_head *item,
 	unmap_kernel_range(page_addr, PAGE_SIZE);
 	__free_page(page->page_ptr);
 	page->page_ptr = NULL;
-
-	list_lru_isolate(lru, item);
 
 	mutex_unlock(&alloc->mutex);
 	return LRU_REMOVED;
