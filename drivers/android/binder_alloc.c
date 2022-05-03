@@ -217,9 +217,9 @@ static int binder_update_page_range(struct binder_alloc *alloc, int allocate,
 		}
 	}
 
-	if (!vma && need_mm && mmget_not_zero(alloc->vma_vm_mm))
+	/* Same as mmget_not_zero() in later kernel versions */
+	if (need_mm && atomic_inc_not_zero(&alloc->vma_vm_mm->mm_users))
 		mm = alloc->vma_vm_mm;
->>>>>>> a0c2baaf81bd5 (android: binder: Don't get mm from task)
 
 	if (mm) {
 		down_read(&mm->mmap_sem);
@@ -997,17 +997,16 @@ enum lru_status binder_alloc_free_page(struct list_head *item,
 
 	index = page - alloc->pages;
 	page_addr = (uintptr_t)alloc->buffer + index * PAGE_SIZE;
-	vma = alloc->vma;
-	if (vma) {
-		mm = get_task_mm(alloc->tsk);
+
+	mm = alloc->vma_vm_mm;
 	/* Same as mmget_not_zero() in later kernel versions */
 	if (!atomic_inc_not_zero(&alloc->vma_vm_mm->mm_users))
 		goto err_mmget;
 	if (!down_read_trylock(&mm->mmap_sem))
 		goto err_down_read_mmap_sem_failed;
 	vma = binder_alloc_get_vma(alloc);
-	}
 
+	list_del_init(item);
 	spin_unlock(lock);
 
 	if (vma) {
