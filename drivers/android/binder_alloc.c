@@ -776,6 +776,7 @@ int binder_alloc_mmap_handler(struct binder_alloc *alloc,
 		failure_string = "alloc page array";
 		goto err_alloc_pages_failed;
 	}
+	alloc->buffer_size = vma->vm_end - vma->vm_start;
 
 	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer) {
